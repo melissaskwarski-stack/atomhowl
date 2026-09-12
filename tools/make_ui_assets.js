@@ -37,29 +37,58 @@ fs.mkdirSync(TMP, { recursive: true });
 const ff = args => execFileSync(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-y', ...args]);
 const uri = f => 'data:image/png;base64,' + fs.readFileSync(f).toString('base64');
 
-// The crop slices straight through the shoulders, which reads as a hard
-// rectangular cut once the bust sits over a scene. Ramping alpha off the
-// bottom and sides lets it dissolve instead. Purely geometric, so the
-// eyes-open and eyes-closed twins get an identical edge.
-function feather(file, botFrac, sideFrac) {
-  const png = PNG.sync.read(fs.readFileSync(file));
-  const W = png.width, H = png.height;
-  const bot = Math.max(1, Math.round(H * botFrac));
-  const side = Math.max(1, Math.round(W * sideFrac));
-  for (let y = 0; y < H; y++)
-    for (let x = 0; x < W; x++) {
-      const i = (y * W + x) * 4;
-      if (!png.data[i + 3]) continue;
-      let f = 1;
-      if (y > H - bot) f = Math.min(f, (H - y) / bot);
-      if (x < side) f = Math.min(f, x / side);
-      if (x > W - side) f = Math.min(f, (W - x) / side);
-      if (f < 1) {
-        f = Math.max(0, f);
-        png.data[i + 3] = Math.round(png.data[i + 3] * f * f * (3 - 2 * f));   // smoothstep
+// A cutout render still stores colour underneath its transparent pixels, and
+// some carry a wash of near-zero alpha left from the backdrop they were lifted
+// off. Neither is visible on its own, but the downscale and the linear filter
+// both average across those pixels, which is what puts a coloured halo around
+// the figure — and since one render was hand-cleaned and its twin was not, the
+// halo would even change colour on a blink.
+//
+// So: drop the wash, then flood the opaque colour outwards over the
+// transparent region. After that there is no foreign colour left to sample.
+function cleanCutout(png, floor) {
+  const W = png.width, H = png.height, d = png.data;
+  for (let i = 3; i < d.length; i += 4) if (d[i] <= floor) d[i] = 0;
+
+  let front = new Uint8Array(W * H);
+  for (let p = 0; p < W * H; p++) front[p] = d[p * 4 + 3] > 0 ? 1 : 0;
+
+  const NB = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  for (let pass = 0; pass < 12; pass++) {
+    const next = front.slice();
+    let grew = 0;
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        const p = y * W + x;
+        if (front[p]) continue;
+        let n = 0, r = 0, g = 0, b = 0;
+        for (const [dx, dy] of NB) {
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+          const q = ny * W + nx;
+          if (!front[q]) continue;
+          n++; r += d[q * 4]; g += d[q * 4 + 1]; b += d[q * 4 + 2];
+        }
+        if (!n) continue;
+        d[p * 4] = (r / n) | 0; d[p * 4 + 1] = (g / n) | 0; d[p * 4 + 2] = (b / n) | 0;
+        next[p] = 1; grew++;
       }
-    }
-  fs.writeFileSync(file, PNG.sync.write(png));
+    front = next;
+    if (!grew) break;
+  }
+  return png;
+}
+
+const cleanFile = (file, floor) =>
+  fs.writeFileSync(file, PNG.sync.write(cleanCutout(PNG.sync.read(fs.readFileSync(file)), floor)));
+
+// Alpha low enough to be invisible alone but numerous enough to haze the
+// figure once averaged — backdrop residue rather than drawn edge.
+const WASH = 15;
+function countWash(png) {
+  let n = 0;
+  for (let i = 3; i < png.data.length; i += 4) if (png.data[i] > 0 && png.data[i] <= WASH) n++;
+  return n;
 }
 
 function alphaBox(png, y0, y1) {
@@ -80,17 +109,32 @@ function alphaBox(png, y0, y1) {
 const portraits = {};
 for (const [name, pair] of Object.entries(PORTRAITS)) {
   if (!fs.existsSync(A(pair.open))) { console.log('MISSING', pair.open); continue; }
-  const png = PNG.sync.read(fs.readFileSync(A(pair.open)));
-  const b = alphaBox(png, 0, png.height);
+  // De-wash both renders BEFORE measuring or scaling: the residue would
+  // otherwise be resampled into the edge and be impossible to remove after.
+  const cleaned = {};
+  for (const state of ['open', 'closed']) {
+    const src = A(pair[state]);
+    if (!fs.existsSync(src)) { console.log('MISSING', pair[state]); continue; }
+    const tmp = path.join(TMP, `clean_${name}_${state}.png`);
+    const png = PNG.sync.read(fs.readFileSync(src));
+    const before = countWash(png);
+    fs.writeFileSync(tmp, PNG.sync.write(cleanCutout(png, WASH)));
+    cleaned[state] = tmp;
+    if (before) console.log(`  ${name} ${state}: dropped ${before} backdrop px`);
+  }
+  if (!cleaned.open) continue;
+
+  const ref = PNG.sync.read(fs.readFileSync(cleaned.open));
+  const b = alphaBox(ref, 0, ref.height);
   const cx = b.minX, cy = b.minY;
   const cw = b.maxX - b.minX + 1, ch = b.maxY - b.minY + 1;
 
   portraits[name] = {};
-  for (const state of ['open', 'closed']) {
-    const src = A(pair[state]);
-    if (!fs.existsSync(src)) { console.log('MISSING', pair[state]); continue; }
+  for (const state of Object.keys(cleaned)) {
     const dst = path.join(TMP, `fig_${name}_${state}.png`);
-    ff(['-i', src, '-vf', `crop=${cw}:${ch}:${cx}:${cy},scale=-1:${FIG_H}:flags=lanczos`, dst]);
+    ff(['-i', cleaned[state], '-vf',
+        `crop=${cw}:${ch}:${cx}:${cy},scale=-1:${FIG_H}:flags=lanczos`, dst]);
+    cleanFile(dst, 0);          // re-flood: the resampler leaves its own edge
     portraits[name][state] = uri(dst);
   }
   console.log(`figure ${name}: trim ${cw}x${ch} @${cx},${cy} -> ${FIG_H}px tall`);
@@ -143,7 +187,10 @@ for (const [name, file] of Object.entries(ROTATIONS)) {
         out.data[di] = f[si]; out.data[di + 1] = f[si + 1];
         out.data[di + 2] = f[si + 2]; out.data[di + 3] = f[si + 3];
       }
-    return 'data:image/png;base64,' + PNG.sync.write(out).toString('base64');
+    // These are shown larger than they are drawn, so the same flood is needed
+    // here or the linear upscale would drag black out of the empty pixels.
+    return 'data:image/png;base64,' +
+      PNG.sync.write(cleanCutout(out, 0)).toString('base64');
   });
   console.log(`turntable ${name}: ${d.frames.length} frames @ ${cw}x${ch}`);
 }
