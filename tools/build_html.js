@@ -16,13 +16,42 @@ const ROOT = path.resolve(__dirname, '..');
 const p = rel => path.join(ROOT, rel);
 const OUT = p('atomhowl.html');
 
+const { execFileSync } = require('child_process');
+const { PNG } = require('pngjs');
+const FFMPEG = require('ffmpeg-static');
+const TMP = p('build/.htmltmp');
+
 // ---------- data URIs (uploads are sometimes JPEGs named .png) ----------
-function toDataUri(file) {
+function toDataUri(file, mimeOverride) {
   const buf = fs.readFileSync(file);
-  const mime = buf[0] === 0xFF && buf[1] === 0xD8 ? 'image/jpeg'
-             : buf[0] === 0x47 && buf[1] === 0x49 ? 'image/gif'
-             : 'image/png';
+  const mime = mimeOverride
+            || (buf[0] === 0xFF && buf[1] === 0xD8 ? 'image/jpeg'
+              : buf[0] === 0x47 && buf[1] === 0x49 ? 'image/gif'
+              : 'image/png');
   return `data:${mime};base64,` + buf.toString('base64');
+}
+
+function isOpaque(buf) {
+  try {
+    const png = PNG.sync.read(buf);
+    for (let i = 3; i < png.data.length; i += 4) if (png.data[i] < 250) return false;
+    return true;
+  } catch (e) { return false; }
+}
+
+// A painted backdrop carries no transparency, so PNG is spending megabytes
+// storing a photograph losslessly. Every backdrop is inlined into the page, so
+// that cost is paid in the download: as JPEG they are visually identical and
+// roughly a tenth the size. Anything with real alpha stays PNG.
+function encodeScene(file) {
+  const buf = fs.readFileSync(file);
+  if (buf[0] === 0xFF && buf[1] === 0xD8) return toDataUri(file);      // already JPEG
+  if (!isOpaque(buf)) return toDataUri(file);                          // needs alpha
+  fs.mkdirSync(TMP, { recursive: true });
+  const dst = path.join(TMP, path.basename(file, path.extname(file)) + '.jpg');
+  execFileSync(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-y',
+    '-i', file, '-q:v', '3', dst]);
+  return toDataUri(dst, 'image/jpeg');
 }
 
 // first path that exists wins
@@ -51,8 +80,9 @@ const scenes = {};
 for (const [key, candidates] of Object.entries(SCENE_SRC)) {
   const hit = candidates.map(p).find(fs.existsSync);
   if (hit) {
-    scenes[key] = toDataUri(hit);
-    console.log(`scene "${key}" <- ${path.relative(ROOT, hit)}`);
+    scenes[key] = encodeScene(hit);
+    console.log(`scene "${key}" <- ${path.relative(ROOT, hit)}` +
+      ` (${Math.round(scenes[key].length / 1024)}KB inline)`);
   } else if (prev.SCENES[key]) {
     scenes[key] = prev.SCENES[key];
     console.log(`scene "${key}" (kept from previous build)`);
@@ -68,23 +98,32 @@ const sceneBlock =
   `window.SCENES = ${JSON.stringify(scenes)};`;
 fs.writeFileSync(p('build/scene_assets.js'), sceneBlock);
 
-// ---------- streamed media ----------
-// Video and music stay on disk next to the page instead of being inlined:
-// a <video>/<audio> src reads a local file directly, where the XHR that a
-// data-URI-free loader would use is blocked on file:// — and inlining ~6MB of
-// base64 would bloat the page for no gain. Ship atomhowl.html with public/.
-// Every format that exists is listed, best-supported first, and the browser
-// takes the first one it can decode: VP9/WebM covers Chromium builds shipped
-// without the patented decoders, H.264/MP4 covers Safari.
+// ---------- media ----------
+// Inlined, not referenced. The page is opened straight off disk as a single
+// downloaded file, so a relative src resolves against wherever that file
+// landed and fails — which silently drops the menu back to the still image
+// with no sound. A data: URI travels with the page and always resolves.
+//
+// Each entry lists every encode that exists, best-supported first, and the
+// browser keeps the first it can decode: VP9/WebM covers Chromium builds
+// shipped without the patented decoders, H.264/MP4 covers Safari.
 const MEDIA_SRC = {
-  menuVideo: ['public/assets/main_menu_video.webm', 'public/assets/main_menu_video.mp4'],
-  menuMusic: ['public/assets/Atom_howl_intro.mp3', 'public/assets/Atom_howl_intro.ogg']
+  menuVideo: [['public/assets/main_menu_video.webm', 'video/webm'],
+              ['public/assets/main_menu_video.mp4',  'video/mp4']],
+  menuMusic: [['public/assets/Atom_howl_intro_web.mp3', 'audio/mpeg'],
+              ['public/assets/Atom_howl_intro.mp3',     'audio/mpeg']]
 };
 const media = {};
 for (const [key, candidates] of Object.entries(MEDIA_SRC)) {
-  const hits = candidates.filter(rel => fs.existsSync(p(rel)));
-  if (hits.length) { media[key] = hits; console.log(`media "${key}" -> ${hits.join(', ')}`); }
-  else console.log(`media "${key}" MISSING — scene falls back`);
+  const hits = candidates.filter(([rel]) => fs.existsSync(p(rel)));
+  if (!hits.length) { console.log(`media "${key}" MISSING — scene falls back`); continue; }
+  // One encode per container is enough once inlined; a second costs megabytes
+  // in the page for a format the first already covers.
+  const seen = new Set();
+  media[key] = hits.filter(([, mime]) => !seen.has(mime) && seen.add(mime))
+                   .map(([rel, mime]) => toDataUri(p(rel), mime));
+  const kb = Math.round(media[key].reduce((n, u) => n + u.length, 0) / 1024);
+  console.log(`media "${key}" <- ${hits.map(h => path.basename(h[0])).join(', ')} (${kb}KB inline)`);
 }
 const mediaBlock = `/* Streamed media paths */ window.MEDIA = ${JSON.stringify(media)};`;
 

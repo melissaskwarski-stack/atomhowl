@@ -113,10 +113,17 @@ function mediaList(key) {
 
 const AUDIO_MIME = { mp3: 'audio/mpeg', ogg: 'audio/ogg', m4a: 'audio/mp4', wav: 'audio/wav' };
 
+// Entries are data: URIs in a built page and plain paths when running from
+// source, so the type is read from whichever the URL actually carries.
+function audioType(url) {
+  if (url.slice(0, 5) === 'data:') return url.slice(5, url.indexOf(';'));
+  return AUDIO_MIME[(url.split('.').pop() || '').toLowerCase()];
+}
+
 function pickAudio(list) {
   const probe = document.createElement('audio');
   for (const url of list) {
-    const type = AUDIO_MIME[(url.split('.').pop() || '').toLowerCase()];
+    const type = audioType(url);
     if (!type || probe.canPlayType(type)) return url;
   }
   return list[0];
