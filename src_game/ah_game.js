@@ -67,8 +67,93 @@ const Sfx = {
   wave()    { this.blip(392, 0.12, 'triangle', 0.35); setTimeout(() => this.blip(523, 0.2, 'triangle', 0.35), 130); },
   clear()   { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => this.blip(f, 0.16, 'triangle', 0.3), i * 110)); },
   roar()    { this.noise(0.5, 0.6, 300); this.blip(70, 0.55, 'sawtooth', 0.5, 38); },
-  swoop()   { this.blip(880, 0.22, 'sine', 0.2, 220); }
+  swoop()   { this.blip(880, 0.22, 'sine', 0.2, 220); },
+  // menu / dialogue UI
+  hover()   { this.blip(760, 0.045, 'sine', 0.14, 980); },
+  select()  { this.blip(520, 0.07, 'triangle', 0.22, 300); setTimeout(() => this.blip(880, 0.11, 'sine', 0.14, 1150), 55); },
+  deny()    { this.blip(200, 0.13, 'square', 0.2, 130); },
+  type()    { this.blip(1500, 0.011, 'square', 0.035); }
 };
+
+// ------------------------------------------------------------------ //
+//  UI TYPE — Orbitron is embedded by the build; the stacks fall back  //
+//  to a system sans so the shell still reads if the face is absent.   //
+//  Orbitron is wide, so it carries headings and labels only and the   //
+//  dialogue body uses a plain sans that stays readable in paragraphs. //
+// ------------------------------------------------------------------ //
+const F_UI  = 'Orbitron, "Segoe UI", Roboto, Helvetica, sans-serif';
+const F_TXT = '"Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+
+// Canvas cannot draw with a face the document has not finished loading, so
+// the boot sequence waits on it before the first scene paints any text.
+function whenFontsReady(cb) {
+  const d = document;
+  if (!d.fonts || !d.fonts.load) return cb();
+  const want = ['500 24px Orbitron', '700 24px Orbitron', '900 56px Orbitron'];
+  let left = want.length, fired = false;
+  const done = () => { if (!fired && --left <= 0) { fired = true; cb(); } };
+  setTimeout(() => { if (!fired) { fired = true; cb(); } }, 3000);   // never hang
+  want.forEach(f => d.fonts.load(f).then(done, done));
+}
+
+// ------------------------------------------------------------------ //
+//  MENU MUSIC — an <audio> element, not the Phaser loader             //
+//  Phaser fetches audio over XHR, which a file:// page is not allowed //
+//  to do; an <audio src> reads the local file directly. The track     //
+//  carries the menu, character select and intro, so it lives out here //
+//  rather than in any one scene.                                      //
+// ------------------------------------------------------------------ //
+let _music = null;
+
+// window.MEDIA lists every encode of a track that shipped, best first.
+function mediaList(key) {
+  const m = window.MEDIA && window.MEDIA[key];
+  return !m ? [] : (Array.isArray(m) ? m : [m]);
+}
+
+const AUDIO_MIME = { mp3: 'audio/mpeg', ogg: 'audio/ogg', m4a: 'audio/mp4', wav: 'audio/wav' };
+
+function pickAudio(list) {
+  const probe = document.createElement('audio');
+  for (const url of list) {
+    const type = AUDIO_MIME[(url.split('.').pop() || '').toLowerCase()];
+    if (!type || probe.canPlayType(type)) return url;
+  }
+  return list[0];
+}
+
+function startMusic() {
+  const list = mediaList('menuMusic');
+  if (!list.length || _music) return;
+  try {
+    _music = new Audio(pickAudio(list));
+    _music.loop = true;
+    _music.volume = 0.5;
+  } catch (e) { _music = null; return; }
+  // Autoplay is refused until the page has been interacted with; the retry
+  // covers a cold load where the player has not clicked yet.
+  _music.play().catch(() => {
+    const retry = () => {
+      if (_music) _music.play().catch(() => {});
+      window.removeEventListener('pointerdown', retry);
+      window.removeEventListener('keydown', retry);
+    };
+    window.addEventListener('pointerdown', retry);
+    window.addEventListener('keydown', retry);
+  });
+}
+
+// Fade out over `ms` so the cut into the bunker is not abrupt.
+function stopMusic(ms) {
+  if (!_music) return;
+  const a = _music;
+  _music = null;
+  const step = 50, fall = a.volume / Math.max(1, (ms || 0) / step);
+  const t = setInterval(() => {
+    a.volume = Math.max(0, a.volume - fall);
+    if (a.volume <= 0.001) { clearInterval(t); a.pause(); a.src = ''; }
+  }, step);
+}
 
 // ------------------------------------------------------------------ //
 //  NOIR PALETTE + PIXEL MAPS (hand-drawn placeholder sprites)         //
@@ -614,6 +699,20 @@ class BootScene extends Phaser.Scene {
         window.ZOMBS[S].frames.forEach((uri, i) => this.load.image('zomb_' + S + '_' + i, uri));
       }
     }
+    // Front-end art: dialogue frame, character busts (each with an eyes-shut
+    // twin the blink swaps to) and the 8-direction turntables.
+    if (window.UIART) {
+      for (const [s, uri] of Object.entries(window.UIART.panels || {})) {
+        this.load.image('ui_panel_' + s, uri);
+      }
+      for (const [n, p] of Object.entries(window.UIART.portraits || {})) {
+        if (p.open) this.load.image('portrait_' + n, p.open);
+        if (p.closed) this.load.image('portrait_' + n + '_closed', p.closed);
+      }
+      for (const [n, frames] of Object.entries(window.UIART.rotations || {})) {
+        frames.forEach((uri, i) => this.load.image(`rot_${n}_${i}`, uri));
+      }
+    }
   }
 
   create() {
@@ -679,6 +778,25 @@ class BootScene extends Phaser.Scene {
       }
     }
 
+    // Front-end art is rendered at high resolution and shown smaller, so like
+    // the hero frames it needs linear sampling rather than the game's nearest.
+    if (window.UIART) {
+      const keys = Object.keys(window.UIART.panels || {}).map(s => 'ui_panel_' + s);
+      for (const n of Object.keys(window.UIART.portraits || {})) keys.push('portrait_' + n, 'portrait_' + n + '_closed');
+      for (const [n, f] of Object.entries(window.UIART.rotations || {})) f.forEach((_, i) => keys.push(`rot_${n}_${i}`));
+      for (const k of keys) {
+        if (this.textures.exists(k)) this.textures.get(k).setFilter(Phaser.Textures.FilterMode.LINEAR);
+      }
+      // idle turntables for the character select
+      for (const [n, f] of Object.entries(window.UIART.rotations || {})) {
+        this.anims.create({
+          key: 'turn-' + n,
+          frames: f.map((_, i) => ({ key: `rot_${n}_${i}` })),
+          frameRate: 5, repeat: -1
+        });
+      }
+    }
+
     // zombie walk cycles: frames 1,2,3,4,5 then back 4,3,2 (pingpong)
     if (window.ZOMBS) {
       for (const S of Object.keys(window.ZOMBS)) {
@@ -691,7 +809,7 @@ class BootScene extends Phaser.Scene {
       }
     }
 
-    this.scene.start('MenuScene');
+    whenFontsReady(() => this.scene.start('MenuScene'));
   }
 
   _makeEffectTextures() {
@@ -1953,15 +2071,17 @@ class GameScene extends Phaser.Scene {
 //  SHARED: a walkable Eterwolf for the exploration scenes            //
 //  (no combat — just run / idle / jump and trigger exit zones)       //
 // ================================================================== //
-function makeWalker(scene, x, groundY) {
+// targetH is the on-screen height in pixels. Backdrops are painted at
+// different scales, so each scene states the height that reads life-size
+// against its own art rather than sharing one number.
+function makeWalker(scene, x, groundY, targetH) {
+  const H = targetH || 190;
   let p;
   if (window.EW) {
-    // sheet frames are ~245px tall — rendered at ~0.85 he reads life-size in interiors
     p = scene.physics.add.sprite(x, groundY - 140, 'ew_idle_0');
     const B = window.EW.body;
     p.body.setSize(B.w, B.h).setOffset(B.x, B.y);
-    // ~190px tall in walk scenes so he reads life-size in interiors
-    p.setScale(ewScale(190, 0.85));
+    p.setScale(ewScale(H, H / 224));
     p.play('ew-idle');
     p._real = true;
   } else {
@@ -2011,55 +2131,474 @@ class MenuScene extends Phaser.Scene {
 
   create() {
     const W = 1280, H = 720;
+    this.cameras.main.setBackgroundColor('#0a0807');
+
+    // Still art sits underneath the video: it covers the first frames while
+    // the video decodes, and stays put if the file is missing entirely.
     if (this.textures.exists('scene_menu')) {
-      const img = this.add.image(W / 2, H / 2, 'scene_menu');
-      const s = Math.max(W / img.width, H / img.height);   // cover
-      img.setScale(s);
-    } else {
-      // procedural title fallback
-      this.cameras.main.setBackgroundColor('#0a0807');
-      this.add.text(W / 2, 180, 'ATOMHOWL', {
-        fontFamily: 'Courier New, monospace', fontSize: '90px', color: '#d9c7a8',
-        stroke: '#0d0a08', strokeThickness: 10
-      }).setOrigin(0.5);
-      this.add.text(W / 2, 250, '1957 · the old world is gone', {
-        fontFamily: 'Courier New, monospace', fontSize: '20px', color: '#8a6f4a'
+      const img = this.add.image(W / 2, H / 2, 'scene_menu').setDepth(-20);
+      img.setScale(Math.max(W / img.width, H / img.height));
+    }
+    this._buildVideo(W, H);
+
+    // The type sits in the left third, so the plate is darkened as a gradient
+    // band on that side only — the city and the brothers stay clear.
+    const band = this.add.graphics().setDepth(-5);
+    for (let i = 0; i < 60; i++) {
+      band.fillStyle(0x070605, 0.80 * (1 - i / 60));
+      band.fillRect(i * 10, 0, 10, H);
+    }
+
+    startMusic();
+
+    const LX = 86;                                   // shared left margin
+    this.add.text(LX, 250, 'ATOMHOWL', {
+      fontFamily: F_UI, fontSize: '50px', fontStyle: '900', color: '#eadfcb',
+      stroke: '#070605', strokeThickness: 6
+    }).setOrigin(0, 0.5).setDepth(10);
+
+    this.add.rectangle(LX, 284, 232, 1, 0xf2b13c, 0.75).setOrigin(0, 0.5).setDepth(10);
+
+    this.add.text(LX, 308, '2076', {
+      fontFamily: F_UI, fontSize: '15px', fontStyle: '700', color: '#f2b13c',
+      stroke: '#070605', strokeThickness: 3
+    }).setOrigin(0, 0.5).setDepth(10);
+    this.add.text(LX, 332, "TWO BROTHERS. APPARENTLY WE'RE CHOSEN TO SAVE HUMANITY.", {
+      fontFamily: F_UI, fontSize: '11px', fontStyle: '500', color: '#c4b295',
+      stroke: '#070605', strokeThickness: 3
+    }).setOrigin(0, 0.5).setDepth(10);
+
+    const items = [
+      ['NEW GAME', () => this._newGame()],
+      ['CONTINUE', () => this._toast('No save file found.')],
+      ['SETTINGS', () => this._toast('Settings — coming soon.')],
+      ['CREDITS',  () => this._toast('Credits — coming soon.')]
+    ];
+    this._btns = items.map(([label, act], i) => this._button(LX, 404 + i * 46, label, act));
+    this._cursor = 0;
+    this._highlight(0);
+
+    const move = d => {
+      this._cursor = (this._cursor + d + this._btns.length) % this._btns.length;
+      Sfx.ensure(); Sfx.hover();
+      this._highlight(this._cursor);
+    };
+    this.input.keyboard.on('keydown-DOWN', () => move(1));
+    this.input.keyboard.on('keydown-UP', () => move(-1));
+    this.input.keyboard.on('keydown-ENTER', () => {
+      Sfx.ensure(); Sfx.select(); items[this._cursor][1]();
+    });
+    this.input.on('pointerdown', () => Sfx.ensure());
+
+    this._toastTxt = this.add.text(W / 2, 640, '', {
+      fontFamily: 'Courier New, monospace', fontSize: '16px', color: '#c93b2a',
+      stroke: '#0d0a08', strokeThickness: 4
+    }).setOrigin(0.5).setDepth(10).setAlpha(0);
+
+    this.cameras.main.fadeIn(500, 0, 0, 0);
+  }
+
+  // Phaser's video loader fetches over XHR, which file:// blocks — loadURL()
+  // assigns the element's src instead, so the same page works unserved.
+  _buildVideo(W, H) {
+    const list = mediaList('menuVideo');
+    if (!list.length || typeof this.add.video !== 'function') return;
+    try {
+      const vid = this.add.video(W / 2, H / 2).setDepth(-10);
+      vid.setMute(true);              // muted playback is what autoplay allows
+
+      // Size only once the texture carries the real frame: until then the
+      // object still reports Phaser's 256px placeholder and would scale wrong.
+      // The clip is wider than the canvas, and the brothers stand at its right
+      // edge, so the surplus is trimmed off the left instead of both sides —
+      // centring it would cut the far brother in half.
+      const fit = () => {
+        const w = vid.width, h = vid.height;
+        if (w <= 1 || h <= 1) return;
+        vid.setScale(Math.max(W / w, H / h));                       // cover
+        vid.x = W - vid.displayWidth / 2;                           // right-align
+      };
+      vid.on('textureready', fit);
+      vid.on('created', () => { fit(); vid.play(true); });
+
+      vid.loadURL(list, true);        // Phaser keeps the first decodable entry
+      vid.play(true);
+      this._video = vid;
+    } catch (e) { /* still art already covers this */ }
+  }
+
+  _button(x, y, label, act) {
+    const txt = this.add.text(x + 18, y, label, {
+      fontFamily: F_UI, fontSize: '20px', fontStyle: '700', color: '#f2b13c',
+      stroke: '#070605', strokeThickness: 4
+    }).setOrigin(0, 0.5).setDepth(10).setInteractive({ useHandCursor: true });
+    // a caret marks the row instead of a centred underline
+    const rule = this.add.text(x, y, '▸', {
+      fontFamily: F_UI, fontSize: '16px', color: '#f2b13c'
+    }).setOrigin(0, 0.5).setDepth(10).setAlpha(0);
+    const btn = { txt, rule, act };
+
+    txt.on('pointerover', () => {
+      this._cursor = this._btns.indexOf(btn);
+      Sfx.ensure(); Sfx.hover();
+      this._highlight(this._cursor);
+    });
+    txt.on('pointerdown', () => { Sfx.ensure(); Sfx.select(); act(); });
+    return btn;
+  }
+
+  _highlight(idx) {
+    this._btns.forEach((b, i) => {
+      const on = i === idx;
+      b.txt.setColor(on ? '#fff2c8' : '#f2b13c');
+      b.rule.setAlpha(on ? 1 : 0);
+    });
+  }
+
+  _newGame() {
+    this.cameras.main.fadeOut(600, 0, 0, 0);
+    this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('CharSelectScene'));
+  }
+
+  _toast(msg) {
+    this._toastTxt.setText(msg).setAlpha(1);
+    this.tweens.add({ targets: this._toastTxt, alpha: 0, duration: 500, delay: 1700 });
+  }
+
+  shutdown() {
+    if (this._video) { try { this._video.destroy(); } catch (e) {} this._video = null; }
+  }
+}
+
+// ================================================================== //
+//  CHARACTER SELECT                                                  //
+//  Eterwolf is shown as the live Idle_v3 loop — the same art the      //
+//  player controls — rather than a separate portrait that could drift //
+//  out of sync with the sprite.                                       //
+// ================================================================== //
+class CharSelectScene extends Phaser.Scene {
+  constructor() { super('CharSelectScene'); }
+
+  create() {
+    const W = 1280, H = 720;
+    this.cameras.main.setBackgroundColor('#0a0807');
+    this.cameras.main.fadeIn(600, 0, 0, 0);
+    startMusic();
+
+    if (this.textures.exists('scene_bunker')) {
+      const bg = this.add.image(W / 2, H / 2, 'scene_bunker').setDepth(-20);
+      bg.setScale(Math.max(W / bg.width, H / bg.height)).setTint(0x4a4038);
+    }
+    this.add.rectangle(W / 2, H / 2, W, H, 0x0a0807, 0.62).setDepth(-10);
+
+    this.add.text(W / 2, 62, 'SELECT YOUR CHARACTER', {
+      fontFamily: F_UI, fontSize: '30px', fontStyle: '900', color: '#eadfcb',
+      stroke: '#070605', strokeThickness: 6
+    }).setOrigin(0.5);
+
+    this.slots = [
+      this._slot(370, 390, 'PLAYER 1', 'ETERWOLF', 'eterwolf', true),
+      this._slot(910, 390, 'PLAYER 2', 'WOLFFEL', 'wolffel', false)
+    ];
+    this._cursor = 0;
+    this._paint();
+
+    this._hint = this.add.text(W / 2, 652, '◄  ►   CHOOSE        ENTER   CONFIRM', {
+      fontFamily: 'Courier New, monospace', fontSize: '19px', color: '#f2b13c',
+      stroke: '#0d0a08', strokeThickness: 5
+    }).setOrigin(0.5);
+    this.tweens.add({ targets: this._hint, alpha: 0.45, yoyo: true, repeat: -1, duration: 850 });
+
+    this._note = this.add.text(W / 2, 606, '', {
+      fontFamily: 'Courier New, monospace', fontSize: '17px', color: '#c93b2a',
+      stroke: '#0d0a08', strokeThickness: 4
+    }).setOrigin(0.5).setAlpha(0);
+
+    const move = d => {
+      this._cursor = (this._cursor + d + this.slots.length) % this.slots.length;
+      Sfx.ensure(); Sfx.hover(); this._paint();
+    };
+    this.input.keyboard.on('keydown-LEFT', () => move(-1));
+    this.input.keyboard.on('keydown-RIGHT', () => move(1));
+    this.input.keyboard.on('keydown-ENTER', () => this._confirm());
+    this.input.keyboard.on('keydown-SPACE', () => this._confirm());
+  }
+
+  _slot(x, y, role, name, id, unlocked) {
+    const BW = 330, BH = 430;
+    const panel = this.add.rectangle(x, y, BW, BH, 0x140f0b, 0.9).setStrokeStyle(2, 0x3a3028);
+    this.add.text(x, y - BH / 2 + 24, role, {
+      fontFamily: F_UI, fontSize: '13px', fontStyle: '700', color: '#8a6f4a'
+    }).setOrigin(0.5);
+
+    // The 8-direction turntable is the idle stance here: it reads as the
+    // character presenting themselves rather than standing in profile.
+    let art = null;
+    if (this.anims.exists('turn-' + id)) {
+      art = this.add.sprite(x, y + 150, `rot_${id}_0`).setOrigin(0.5, 1);
+      art.play('turn-' + id);
+      art.setScale(Math.min(250 / art.width, 320 / art.height));
+    }
+
+    const label = this.add.text(x, y + BH / 2 - 32, name, {
+      fontFamily: F_UI, fontSize: '21px', fontStyle: '700', color: '#f2b13c',
+      stroke: '#070605', strokeThickness: 5
+    }).setOrigin(0.5);
+
+    let lock = null;
+    if (!unlocked) {
+      lock = this.add.text(x, y - 24, 'LOCKED', {
+        fontFamily: F_UI, fontSize: '17px', fontStyle: '700', color: '#7d6a55',
+        stroke: '#070605', strokeThickness: 6
       }).setOrigin(0.5);
     }
 
-    // clickable button zones over the painted buttons (menu art at cover-scale)
-    const mkBtn = (y, label, onPick) => {
-      const zone = this.add.rectangle(W / 2, y, 320, 60, 0xffffff, 0.001)
-        .setInteractive({ useHandCursor: true });
-      const txt = this.add.text(W / 2, y, label, {
-        fontFamily: 'Courier New, monospace', fontSize: '30px', color: '#f2b13c',
-        stroke: '#0d0a08', strokeThickness: 6
-      }).setOrigin(0.5).setAlpha(this.textures.exists('scene_menu') ? 0.001 : 1);
-      const glow = this.add.rectangle(W / 2, y, 330, 64, 0xf2b13c, 0).setStrokeStyle(2, 0xf2b13c, 0);
-      zone.on('pointerover', () => { glow.setStrokeStyle(3, 0xf2b13c, 0.9); txt.setAlpha(1).setColor('#fff2c8'); });
-      zone.on('pointerout',  () => { glow.setStrokeStyle(2, 0xf2b13c, 0); if (this.textures.exists('scene_menu')) txt.setAlpha(0.001); txt.setColor('#f2b13c'); });
-      zone.on('pointerdown', () => { Sfx.ensure(); Sfx.wave(); onPick(); });
-      return zone;
-    };
-
-    // positions tuned to the menu art (1 PLAYER ≈ y343, 2 PLAYERS ≈ y435)
-    mkBtn(343, '1 PLAYER', () => this.scene.start('BunkerScene'));
-    mkBtn(435, '2 PLAYERS', () => this.flashSoon());
-
-    this.input.keyboard.on('keydown-ONE', () => { Sfx.ensure(); this.scene.start('BunkerScene'); });
-    this.input.keyboard.on('keydown-ENTER', () => { Sfx.ensure(); this.scene.start('BunkerScene'); });
-    this.input.keyboard.on('keydown-TWO', () => this.flashSoon());
-    this.input.on('pointerdown', () => Sfx.ensure());
-
-    this.soonText = this.add.text(W / 2, 520, '', {
-      fontFamily: 'Courier New, monospace', fontSize: '18px', color: '#c93b2a',
-      stroke: '#0d0a08', strokeThickness: 4
-    }).setOrigin(0.5).setAlpha(0);
+    const zone = this.add.zone(x, y, BW, BH).setInteractive({ useHandCursor: true });
+    const self = { panel, art, label, lock, unlocked, x, y };
+    zone.on('pointerover', () => {
+      this._cursor = this.slots.indexOf(self);
+      Sfx.ensure(); Sfx.hover(); this._paint();
+    });
+    zone.on('pointerdown', () => this._confirm());
+    return self;
   }
 
-  flashSoon() {
-    this.soonText.setText('2-PLAYER CO-OP — coming soon. Press 1 to play solo.').setAlpha(1);
-    this.tweens.add({ targets: this.soonText, alpha: 0, duration: 600, delay: 1600 });
+  _paint() {
+    this.slots.forEach((s, i) => {
+      const on = i === this._cursor;
+      s.panel.setStrokeStyle(on ? 3 : 2, on ? (s.unlocked ? 0xf2b13c : 0x8a5a3a) : 0x3a3028);
+      s.label.setColor(on ? '#fff2c8' : (s.unlocked ? '#f2b13c' : '#6b5a48'));
+      // A locked character is dimmed but still legible — you should be able to
+      // see who is coming, so the tint darkens instead of fading them out.
+      if (!s.art) return;
+      s.art.setAlpha(1);
+      s.art.setTint(s.unlocked ? 0xffffff : (on ? 0x9a8f82 : 0x6e6660));
+    });
+  }
+
+  _confirm() {
+    const slot = this.slots[this._cursor];
+    Sfx.ensure();
+    if (!slot.unlocked) {
+      Sfx.deny();
+      this._note.setText('WOLFFEL is not available yet — Player 2 is coming soon.').setAlpha(1);
+      this.tweens.add({ targets: this._note, alpha: 0, duration: 500, delay: 1900 });
+      return;
+    }
+    Sfx.select();
+    this.cameras.main.fadeOut(700, 0, 0, 0);
+    this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('IntroDialogueScene'));
+  }
+}
+
+// ================================================================== //
+//  INTRO DIALOGUE — bunker, Feli on the cot                          //
+//  Portraits sit either side of a framed panel, blink on their own    //
+//  random clocks, and the line types itself out one glyph at a time.  //
+// ================================================================== //
+const SPEAKER_SIDE = { FELI: 'left', ETERWOLF: 'right' };
+
+const INTRO_LINES = [
+  { who: 'FELI',     text: "Eterwolf. You came back." },
+  { who: 'ETERWOLF', text: "I said I would. How's the leg?" },
+  { who: 'FELI',     text: "Still attached. That's the most I'll say for it." },
+  { who: 'ETERWOLF', text: "Then stay down. I'll take the surface run alone." },
+  { who: 'FELI',     text: "The city's gone quiet. Quiet is worse than the howling." },
+  { who: 'ETERWOLF', text: "Quiet I can work with." },
+  { who: 'FELI',     text: "Take the rifle. And brother — don't stop moving." },
+  { who: 'ETERWOLF', text: "I never do." }
+];
+
+class IntroDialogueScene extends Phaser.Scene {
+  constructor() { super('IntroDialogueScene'); }
+
+  create() {
+    const W = 1280, H = 720;
+    this.cameras.main.setBackgroundColor('#0a0807');
+    this.cameras.main.fadeIn(900, 0, 0, 0);
+    startMusic();
+
+    if (this.textures.exists('scene_bunker')) {
+      const bg = this.add.image(W / 2, H / 2, 'scene_bunker').setDepth(-20);
+      bg.setScale(Math.max(W / bg.width, H / bg.height));
+    }
+    this.add.rectangle(W / 2, H / 2, W, H, 0x0a0807, 0.5).setDepth(-15);
+
+    this._ui = [];                       // bar + figures, faded in after the beat
+    this._buildPanel(W, H);
+
+    this.portraits = {
+      FELI:     this._portrait('FELI', 238),
+      ETERWOLF: this._portrait('ETERWOLF', 1042)
+    };
+    Object.keys(this.portraits).forEach(k => this._scheduleBlink(k));
+
+    // Hold on the bunker first so Feli on the bunk is actually seen — the
+    // frame covers that corner once it rises.
+    this._ui.forEach(o => o.setAlpha(0));
+    this._idx = 0;
+    this._started = false;
+    this.time.delayedCall(1500, () => this._begin());
+
+    const next = () => (this._started ? this._advance() : this._begin());
+    this.input.on('pointerdown', next);
+    this.input.keyboard.on('keydown-SPACE', next);
+    this.input.keyboard.on('keydown-ENTER', next);
+    this.input.keyboard.on('keydown-ESC', () => this._finish());
+  }
+
+  _begin() {
+    if (this._started) return;
+    this._started = true;
+    this._ui.forEach(o => this.tweens.add({ targets: o, alpha: 1, duration: 420 }));
+    this._show();
+  }
+
+
+  _buildPanel(W, H) {
+    // A narrow bar sits between the two figures rather than spanning the
+    // screen, so the scene and both characters stay visible around it.
+    const w = 720, h = Math.round(w * 724 / 2172);       // frame art is 3:1
+    const x = Math.round((W - w) / 2), y = H - h - 30;
+    this._panel = { x, y, w, h };
+
+    const first = this.textures.exists('ui_panel_l') ? 'ui_panel_l' : 'ui_panel_r';
+    if (this.textures.exists(first)) {
+      this._frame = this.add.image(x + w / 2, y + h / 2, first)
+        .setDisplaySize(w, h).setDepth(20);
+      this._ui.push(this._frame);
+    } else {
+      const g = this.add.graphics().setDepth(20);
+      g.fillStyle(0x0d0a08, 0.93); g.fillRoundedRect(x, y, w, h, 10);
+      g.lineStyle(3, 0xf2b13c, 0.75); g.strokeRoundedRect(x, y, w, h, 10);
+      this._ui.push(g);
+    }
+
+    // Name plate centres measured off each frame: left art 0.087–0.297,
+    // right art 0.620–0.921.
+    this._nameX = { l: x + w * 0.192, r: x + w * 0.771 };
+
+    this._name = this.add.text(this._nameX.l, y + h * 0.18, '', {
+      fontFamily: F_UI, fontSize: '15px', fontStyle: '700', color: '#f2b13c',
+      stroke: '#070605', strokeThickness: 4
+    }).setOrigin(0.5, 0.5).setDepth(22);
+
+    this._body = this.add.text(x + w / 2, y + h * 0.40, '', {
+      fontFamily: F_TXT, fontSize: '16px', color: '#ded2be', align: 'center',
+      wordWrap: { width: w * 0.66 }, lineSpacing: 5
+    }).setOrigin(0.5, 0).setDepth(22);
+
+    this._more = this.add.text(x + w * 0.5, y + h * 0.86, '▼', {
+      fontFamily: F_UI, fontSize: '13px', color: '#f2b13c'
+    }).setOrigin(0.5, 1).setDepth(22).setAlpha(0);
+    this.tweens.add({
+      targets: this._more, y: y + h * 0.86 - 5, yoyo: true, repeat: -1, duration: 620
+    });
+
+    this._hint = this.add.text(W / 2, H - 8, 'SPACE / CLICK — NEXT      ESC — SKIP', {
+      fontFamily: F_UI, fontSize: '9px', fontStyle: '500', color: '#6b5a48'
+    }).setOrigin(0.5, 1).setDepth(22);
+
+    this._ui.push(this._name, this._body, this._hint);
+  }
+
+  // Figures stand at the screen edges at full height and run off the bottom
+  // of the frame, like stage flats — the body is never cropped through. They
+  // sit in front of the bar so they overlap its ends.
+  _portrait(id, x) {
+    const openKey = 'portrait_' + id.toLowerCase();
+    const closedKey = openKey + '_closed';
+    let img = null;
+
+    if (this.textures.exists(openKey)) {
+      img = this.add.image(x, 232, openKey).setOrigin(0.5, 0).setDepth(25);
+      img.setScale(560 / img.height);
+      this._ui.push(img);
+    } else {
+      const g = this.add.graphics().setDepth(25);          // stand-in figure
+      g.fillStyle(0x2a2118); g.fillCircle(x, 300, 62);
+      g.fillStyle(0x3b3228); g.fillRoundedRect(x - 96, 370, 192, 350, 26);
+      this._ui.push(g);
+    }
+
+    return { img, x, openKey, closedKey };
+  }
+
+  // Every 3–6s a portrait shuts its eyes for ~0.15s. The closed art is a
+  // separate texture; until one is supplied the swap is skipped, but the clock
+  // keeps running so dropping the file in is the only change needed.
+  _scheduleBlink(id) {
+    const p = this.portraits[id];
+    if (!p) return;
+    this.time.delayedCall(3000 + Math.random() * 3000, () => {
+      if (!this.scene.isActive()) return;
+      if (p.img && this.textures.exists(p.closedKey)) {
+        p.img.setTexture(p.closedKey);
+        this.time.delayedCall(150, () => { if (p.img) p.img.setTexture(p.openKey); });
+      }
+      this._scheduleBlink(id);
+    });
+  }
+
+  _show() {
+    if (this._idx >= INTRO_LINES.length) return this._finish();
+    const line = INTRO_LINES[this._idx];
+    this._name.setText(line.who);
+
+    // The speaker takes the frame whose name plate is on the OPPOSITE side, so
+    // the plate is never behind the character doing the talking.
+    const side = SPEAKER_SIDE[line.who] === 'left' ? 'r' : 'l';
+    if (this._frame && this.textures.exists('ui_panel_' + side)) {
+      this._frame.setTexture('ui_panel_' + side).setDisplaySize(this._panel.w, this._panel.h);
+    }
+    this._name.setX(this._nameX[side]);
+
+    // The speaker is lit and steps forward; the listener darkens and drops
+    // back. Darkening uses tint rather than alpha so the idle character stays
+    // solid instead of turning into a ghost over the scene behind.
+    Object.keys(this.portraits).forEach(k => {
+      const p = this.portraits[k];
+      if (!p.img) return;
+      const on = k === line.who;
+      this.tweens.add({ targets: p.img, y: on ? 232 : 244, duration: 220, ease: 'Sine.easeOut' });
+      p.img.setTint(on ? 0xffffff : 0x6e6660);
+    });
+
+    this._more.setAlpha(0);
+    this._body.setText('');
+    this._typing = true;
+    let i = 0;
+    if (this._typeEv) this._typeEv.remove();
+    this._typeEv = this.time.addEvent({
+      delay: 26,
+      repeat: line.text.length - 1,
+      callback: () => {
+        this._body.setText(line.text.slice(0, ++i));
+        if (i % 3 === 0) Sfx.type();
+        if (i >= line.text.length) { this._typing = false; this._more.setAlpha(0.8); }
+      }
+    });
+  }
+
+  _advance() {
+    if (this._typing) {                       // first press completes the line
+      if (this._typeEv) this._typeEv.remove();
+      this._body.setText(INTRO_LINES[this._idx].text);
+      this._typing = false;
+      this._more.setAlpha(0.8);
+      return;
+    }
+    this._idx++;
+    this._show();
+  }
+
+  _finish() {
+    if (this._done) return;
+    this._done = true;
+    if (this._typeEv) this._typeEv.remove();
+    stopMusic(900);
+    this.cameras.main.fadeOut(900, 0, 0, 0);
+    this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('BunkerScene'));
   }
 }
 
@@ -2104,7 +2643,7 @@ class WalkScene extends Phaser.Scene {
     const data = this.sys.settings.data || {};
     const spawnFrac = data.spawnXFrac != null ? data.spawnXFrac : cfg.startXFrac;
     const startX = spawnFrac != null ? spawnFrac * WW : (cfg.startX || 160);
-    this.player = makeWalker(this, startX, groundY);
+    this.player = makeWalker(this, startX, groundY, cfg.charH);
     this.physics.add.collider(this.player, floor);
     this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
     this.cameras.main.setDeadzone(160, 100);
@@ -2147,13 +2686,14 @@ class WalkScene extends Phaser.Scene {
       this.pickGot = false;
     }
 
-    // title + controls hint
-    this.add.text(640, 36, cfg.title, {
-      fontFamily: 'Courier New, monospace', fontSize: '22px', color: '#d9c7a8',
-      stroke: '#0d0a08', strokeThickness: 5
+    // title + controls hint — same face as the menu shell so the hand-off
+    // from the intro into play does not change typeface mid-scene
+    this.add.text(640, 34, cfg.title, {
+      fontFamily: F_UI, fontSize: '15px', fontStyle: '700', color: '#d9c7a8',
+      stroke: '#070605', strokeThickness: 4
     }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(40);
-    this.add.text(640, 690, 'A/D walk · W jump · E / ▲ enter doorway · M mute',
-      { fontFamily: 'Courier New, monospace', fontSize: '14px', color: '#8a6f4a' })
+    this.add.text(640, 692, 'A/D WALK   ·   W JUMP   ·   E ENTER   ·   M MUTE',
+      { fontFamily: F_UI, fontSize: '10px', fontStyle: '500', color: '#8a6f4a' })
       .setOrigin(0.5, 1).setScrollFactor(0).setDepth(40).setAlpha(0.85);
 
     // film grain
@@ -2253,7 +2793,9 @@ class BunkerScene extends WalkScene {
     this.cameras.main.fadeIn(450, 0, 0, 0);
     this.buildWalk({
       bgKey: 'scene_bunker',
-      worldW: 'auto', groundY: 525, startXFrac: 0.07,   // bunker2.png walkway line
+      // bunker_wide.png is painted larger than the other backdrops — the bunk
+      // frame and blast door put a standing man at roughly 280px.
+      worldW: 'auto', groundY: 628, startXFrac: 0.06, charH: 280,
       title: 'THE BUNKER — quarantine shelter',
       exits: [
         { xFrac: 0.90, w: 180, label: 'UP TO THE CITY', target: 'CityScene' }   // the green door
@@ -2395,7 +2937,8 @@ window.__game = new Phaser.Game({
   backgroundColor: '#0a0807',
   scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
   physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
-  scene: [BootScene, MenuScene, BunkerScene, CityScene, ShopFrontScene, ShopScene, GameScene]
+  scene: [BootScene, MenuScene, CharSelectScene, IntroDialogueScene,
+          BunkerScene, CityScene, ShopFrontScene, ShopScene, GameScene]
 });
 
 })();
