@@ -5,14 +5,19 @@
 // side-specific animation instead of mirroring one side — mirroring would
 // flip the character's asymmetric hair and gear.
 //
-// There is no walk cycle: the character sprints whenever he moves, so ground
-// movement is the sprint clip in both scene types. Only east art exists for
-// it, so west is a mirrored copy baked at build time rather than a runtime
-// flipX — the directional player expects a real 'W' animation to exist.
+// The run clip is an acceleration, not a cycle: it opens standing upright and
+// leans further forward on every frame, never settling. Looping the whole
+// thing would make him stand up and lean in again several times a second, so
+// it is split — the full clip plays once as he sets off, and only the settled
+// tail loops after that. RUN_LOOP marks where the tail starts.
 //
-// Shoot / sword still reuse the sprint frames and are listed in EW.pending
-// until the real art lands. Image data is emitted once into EW.frames and
-// referenced by key, so those placeholders cost nothing in file size.
+// Run ships with real east AND west art. Walk and idle are east only, so their
+// west is a mirrored copy baked here rather than a runtime flipX — the
+// directional player expects a real 'W' animation to exist.
+//
+// Shoot / sword still reuse the run frames and are listed in EW.pending until
+// the real art lands. Image data is emitted once into EW.frames and referenced
+// by key, so those placeholders cost nothing in file size.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -23,8 +28,11 @@ const ROOT = path.resolve(__dirname, '..');
 const A = 'public/assets/';
 const SRC = {
   idle: A + 'Idle_v3_idle_breathing_east.gif',
-  run:  A + 'Idle_v3_full_sprinting_east.gif'
+  run:  A + 'Idle_v3_run_east.gif',
+  runW: A + 'Idle_v3_run_west.gif',
+  walk: A + 'Idle_v3_walk_east.gif'
 };
+const RUN_LOOP = 4;          // frames 0-3 are the stand-up; the tail cycles
 const OUT = path.join(ROOT, 'build/ew_assets.js');
 
 // ---------- GIF decode (disposal-aware) ----------
@@ -145,11 +153,17 @@ const pool = (poolName, clip, mirror) => {
   return keys;
 };
 const K = {
-  idle:  pool('idle',  'idle', false),
-  idleW: pool('idleW', 'idle', true),            // no west idle supplied — mirror east
-  run:   pool('run',   'run',  false),
-  runW:  pool('runW',  'run',  true)             // no west sprint supplied — mirror east
+  idle:   pool('idle',   'idle', false),
+  idleW:  pool('idleW',  'idle', true),          // no west idle supplied — mirror east
+  runin:  pool('runin',  'run',  false),         // real east run
+  runinW: pool('runinW', 'runW', false),         // real west run
+  walk:   pool('walk',   'walk', false),
+  walkW:  pool('walkW',  'walk', true)           // no west walk supplied — mirror east
 };
+// The looping part of the run reuses the tail frames already in the pool, so
+// splitting the clip costs no extra image data.
+K.run  = K.runin.slice(RUN_LOOP);
+K.runW = K.runinW.slice(RUN_LOOP);
 
 // ---------- body box + muzzle ----------
 const ib = clips.idle.boxes[0];
@@ -174,22 +188,26 @@ const mod = {
   hiRes: true,             // 3D render, not pixel art — scale fractionally
   directional: true,       // real per-side art — pick the anim, never flipX
   body, muzzle,
-  pending: ['idle west (mirrored east)', 'sprint west (mirrored east)', 'shoot', 'sword'],
+  pending: ['idle west (mirrored east)', 'walk west (mirrored east)', 'shoot', 'sword'],
   frames,
   anims: {
-    idle:      A_(K.idle,  8),
-    idleW:     A_(K.idleW, 8),
-    run:       A_(K.run,   14),
-    runW:      A_(K.runW,  14),
+    idle:      A_(K.idle,   8),
+    idleW:     A_(K.idleW,  8),
+    walk:      A_(K.walk,   12),
+    walkW:     A_(K.walkW,  12),
+    runin:     A_(K.runin,  16, 0),     // one-shot lean into the run
+    runinW:    A_(K.runinW, 16, 0),
+    run:       A_(K.run,    14),        // settled tail, loops
+    runW:      A_(K.runW,   14),
     jump:      A_(mid(K.run),  10, 0),
     jumpW:     A_(mid(K.runW), 10, 0),
-    // placeholders — the sprint cycle until the real art arrives
-    shoot:     A_(K.run,   12),
-    shootW:    A_(K.runW,  12),
-    runshoot:  A_(K.run,   14),
-    runshootW: A_(K.runW,  14),
-    sword:     A_(K.run,   14, 0),
-    swordW:    A_(K.runW,  14, 0)
+    // placeholders — the run cycle until the real art arrives
+    shoot:     A_(K.run,    12),
+    shootW:    A_(K.runW,   12),
+    runshoot:  A_(K.run,    14),
+    runshootW: A_(K.runW,   14),
+    sword:     A_(K.run,    14, 0),
+    swordW:    A_(K.runW,   14, 0)
   }
 };
 

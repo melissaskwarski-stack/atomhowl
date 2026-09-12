@@ -2104,6 +2104,22 @@ function makeWalker(scene, x, groundY, targetH) {
   return p;
 }
 
+// Starting to run plays the lean-in once and then hands over to the looping
+// tail, which is how the run art is cut. Turning around mid-run skips the
+// lean — he is already leaning — and every other animation plays straight.
+const RUN_LEAN = { 'ew-run': 'ew-runin', 'ew-runW': 'ew-runinW' };
+
+function playRun(p, want) {
+  const lean = RUN_LEAN[want];
+  const already = !!RUN_LEAN[p._curAnim];         // already running, just turning
+  if (lean && !already && p.scene.anims.exists(lean)) {
+    p.play(lean);
+    p.chain(want);
+  } else {
+    p.play(want);
+  }
+}
+
 function driveWalker(scene, p, keys, onGround) {
   let move = 0;
   if (keys.A.isDown || keys.LEFT.isDown)  move -= 1;
@@ -2121,7 +2137,7 @@ function driveWalker(scene, p, keys, onGround) {
   if (p._real) {
     let want = !onGround ? 'ew-jump' : (moving ? 'ew-run' : 'ew-idle');
     want = ewAnim(want, p._facing);
-    if (p._curAnim !== want) { p.play(want); p._curAnim = want; }
+    if (p._curAnim !== want) { playRun(p, want); p._curAnim = want; }
   } else {
     if (!onGround) p.play('hero-air', true);
     else if (moving) p.play('hero-run', true);
