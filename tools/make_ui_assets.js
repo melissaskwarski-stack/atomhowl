@@ -21,7 +21,7 @@ const FFMPEG = require('ffmpeg-static');
 
 const PORTRAITS = {
   eterwolf: { open: 'portrait_eterwolf_open.png', closed: 'portrait_eterwolf_closed.png' },
-  feli:     { open: 'portrait_feli_open.png',     closed: 'portrait_feli_closed.png' }
+  wolffel:  { open: 'portrait_wolffel_open.png',  closed: 'portrait_wolffel_closed.png' }
 };
 const ROTATIONS = { eterwolf: 'rotation_eterwolf.gif', wolffel: 'rotation_wolffel.gif' };
 // Two frames of the same bar: the name plate sits left on one and right on the

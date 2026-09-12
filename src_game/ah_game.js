@@ -613,10 +613,10 @@ const BANTER = {
   waveStart: ['¡Ágale!', 'La pelea es nuestra.', '¡Listo!', 'Come on then!'],
   kill:      ['Die! You son of a howl!', '¡Toma!', 'More power! ¡Más poder!', '¡Eso!'],
   streak:    ['¡MÁS PODER!', 'Can’t touch the Spark!', '¡Malparido!'],
-  hurt:      ['¡Ay! Cheap shot.', 'Okay. Now I’m mad.', 'Feli would laugh at that.'],
+  hurt:      ['¡Ay! Cheap shot.', 'Okay. Now I’m mad.', 'Wolffel would laugh at that.'],
   swordKill: ['¡Toma!', 'Up close and personal.', 'Sliced.'],
-  clear:     ['Halberd Bay breathes… for now.', 'Stage clear. Where’s Feli’s arepa?'],
-  down:      ['Not… like this…', 'Feli… avenge me, brother…']
+  clear:     ['Halberd Bay breathes… for now.', 'Stage clear. Where’s Wolffel’s arepa?'],
+  down:      ['Not… like this…', 'Wolffel… avenge me, brother…']
 };
 
 // ------------------------------------------------------------------ //
@@ -2458,20 +2458,20 @@ class CharSelectScene extends Phaser.Scene {
 }
 
 // ================================================================== //
-//  INTRO DIALOGUE — bunker, Feli on the cot                          //
+//  INTRO DIALOGUE — the two brothers in the bunker                   //
 //  Portraits sit either side of a framed panel, blink on their own    //
 //  random clocks, and the line types itself out one glyph at a time.  //
 // ================================================================== //
-const SPEAKER_SIDE = { FELI: 'left', ETERWOLF: 'right' };
+const SPEAKER_SIDE = { WOLFFEL: 'left', ETERWOLF: 'right' };
 
 const INTRO_LINES = [
-  { who: 'FELI',     text: "Eterwolf. You came back." },
+  { who: 'WOLFFEL',     text: "Eterwolf. You came back." },
   { who: 'ETERWOLF', text: "I said I would. How's the leg?" },
-  { who: 'FELI',     text: "Still attached. That's the most I'll say for it." },
+  { who: 'WOLFFEL',     text: "Still attached. That's the most I'll say for it." },
   { who: 'ETERWOLF', text: "Then stay down. I'll take the surface run alone." },
-  { who: 'FELI',     text: "The city's gone quiet. Quiet is worse than the howling." },
+  { who: 'WOLFFEL',     text: "The city's gone quiet. Quiet is worse than the howling." },
   { who: 'ETERWOLF', text: "Quiet I can work with." },
-  { who: 'FELI',     text: "Take the rifle. And brother — don't stop moving." },
+  { who: 'WOLFFEL',     text: "Take the rifle. And brother — don't stop moving." },
   { who: 'ETERWOLF', text: "I never do." }
 ];
 
@@ -2494,12 +2494,12 @@ class IntroDialogueScene extends Phaser.Scene {
     this._buildPanel(W, H);
 
     this.portraits = {
-      FELI:     this._portrait('FELI', 238),
+      WOLFFEL:     this._portrait('WOLFFEL', 238),
       ETERWOLF: this._portrait('ETERWOLF', 1042)
     };
     Object.keys(this.portraits).forEach(k => this._scheduleBlink(k));
 
-    // Hold on the bunker first so Feli on the bunk is actually seen — the
+    // Hold on the bunker first so the room is actually seen — the
     // frame covers that corner once it rises.
     this._ui.forEach(o => o.setAlpha(0));
     this._idx = 0;
