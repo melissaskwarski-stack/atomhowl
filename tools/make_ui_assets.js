@@ -79,6 +79,66 @@ function cleanCutout(png, floor) {
   return png;
 }
 
+// The eyes-open and eyes-closed renders are separate generations of the same
+// character: hair, shading and pose all differ slightly across the whole
+// figure. Swapping the entire texture therefore makes him shimmer from head to
+// boot rather than blink. Only the eyes should move, so the closed frame is
+// rebuilt here as the OPEN frame with a band across the eyes taken from the
+// closed render and feathered in — everything outside that band stays byte-
+// identical, which is what makes the swap read as a blink.
+//
+// The band is found, not hard-coded: mask to pixels that are skin in both
+// frames (excluding the hair, which is where the two renders disagree most),
+// then take the row whose difference is greatest down the middle of the face.
+function blinkFrame(openPng, closedPng) {
+  const W = openPng.width, H = openPng.height;
+  const O = openPng.data, C = closedPng.data;
+  const HEAD = Math.round(H * 0.30);
+  const skin = (d, i) => {
+    const R = d[i], G = d[i + 1], B = d[i + 2];
+    return d[i + 3] > 200 && R > 110 && R > G + 15 && G > B + 3 && B < 180;
+  };
+  const diff = i => Math.abs(O[i] - C[i]) + Math.abs(O[i + 1] - C[i + 1]) + Math.abs(O[i + 2] - C[i + 2]);
+
+  let mnX = W, mxX = -1;
+  for (let y = 0; y < HEAD; y++)
+    for (let x = 0; x < W; x++) if (skin(O, (y * W + x) * 4)) { if (x < mnX) mnX = x; if (x > mxX) mxX = x; }
+  if (mxX < 0) return null;
+
+  const q = (mxX - mnX) * 0.25;
+  const x0 = Math.round(mnX + q), x1 = Math.round(mxX - q);
+  let eyeRow = 0, best = -1;
+  for (let y = 0; y < HEAD; y++) {
+    let sum = 0;
+    for (let x = x0; x < x1; x++) {
+      const i = (y * W + x) * 4;
+      if (skin(O, i) || skin(C, i)) sum += diff(i);
+    }
+    if (sum > best) { best = sum; eyeRow = y; }
+  }
+
+  const halfH = 52, padX = 34;                       // covers brow to cheekbone
+  const bx0 = x0 - padX, bx1 = x1 + padX;
+  const by0 = eyeRow - halfH, by1 = eyeRow + halfH;
+  const ramp = t => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); };
+
+  const out = new PNG({ width: W, height: H });
+  out.data.set(O);
+  for (let y = by0; y < by1; y++) {
+    if (y < 0 || y >= H) continue;
+    const fy = ramp(Math.min(y - by0, by1 - y) / 26);
+    for (let x = bx0; x < bx1; x++) {
+      if (x < 0 || x >= W) continue;
+      const w = fy * ramp(Math.min(x - bx0, bx1 - x) / 26);
+      if (w <= 0) continue;
+      const i = (y * W + x) * 4;
+      for (let k = 0; k < 4; k++) out.data[i + k] = Math.round(O[i + k] * (1 - w) + C[i + k] * w);
+    }
+  }
+  out._eye = { row: eyeRow, x: [bx0, bx1], y: [by0, by1] };
+  return out;
+}
+
 const cleanFile = (file, floor) =>
   fs.writeFileSync(file, PNG.sync.write(cleanCutout(PNG.sync.read(fs.readFileSync(file)), floor)));
 
@@ -128,6 +188,17 @@ for (const [name, pair] of Object.entries(PORTRAITS)) {
   const b = alphaBox(ref, 0, ref.height);
   const cx = b.minX, cy = b.minY;
   const cw = b.maxX - b.minX + 1, ch = b.maxY - b.minY + 1;
+
+  // Rebuild the closed frame as the open one plus an eye band, so a blink
+  // moves nothing but the eyes.
+  if (cleaned.closed) {
+    const blink = blinkFrame(PNG.sync.read(fs.readFileSync(cleaned.open)),
+                             PNG.sync.read(fs.readFileSync(cleaned.closed)));
+    if (blink) {
+      fs.writeFileSync(cleaned.closed, PNG.sync.write(blink));
+      console.log(`  ${name} blink: eye row ${blink._eye.row}, band x${blink._eye.x} y${blink._eye.y}`);
+    } else console.log(`  ${name}: no face found — closed frame left whole`);
+  }
 
   portraits[name] = {};
   for (const state of Object.keys(cleaned)) {

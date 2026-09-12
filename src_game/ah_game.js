@@ -129,25 +129,40 @@ function pickAudio(list) {
   return list[0];
 }
 
-function startMusic() {
+// Built during boot rather than when the menu opens, so the track is fetched
+// and decoded while the page is still loading and playback can begin on the
+// first frame instead of buffering first.
+function primeMusic() {
+  if (_music) return _music;
   const list = mediaList('menuMusic');
-  if (!list.length || _music) return;
+  if (!list.length) return null;
   try {
     _music = new Audio(pickAudio(list));
     _music.loop = true;
     _music.volume = 0.5;
-  } catch (e) { _music = null; return; }
-  // Autoplay is refused until the page has been interacted with; the retry
-  // covers a cold load where the player has not clicked yet.
-  _music.play().catch(() => {
-    const retry = () => {
-      if (_music) _music.play().catch(() => {});
-      window.removeEventListener('pointerdown', retry);
-      window.removeEventListener('keydown', retry);
-    };
-    window.addEventListener('pointerdown', retry);
-    window.addEventListener('keydown', retry);
-  });
+    _music.preload = 'auto';
+    _music.load();
+  } catch (e) { _music = null; }
+  return _music;
+}
+
+// A browser will not let a page start audible sound before it has been
+// interacted with, so a cold load is refused however early it is attempted —
+// there is no way around that. What this does is take the very first moment
+// the policy allows: it tries immediately (which succeeds on a reload, or
+// where the site has playback permission), and otherwise starts on the first
+// input of any kind, including the click that opens the menu.
+let _musicArmed = false;
+const MUSIC_GESTURES = ['pointerdown', 'mousedown', 'touchstart', 'keydown', 'click'];
+
+function startMusic() {
+  const audio = primeMusic();
+  if (!audio || _musicArmed) return;
+  _musicArmed = true;
+  const disarm = () => MUSIC_GESTURES.forEach(e => window.removeEventListener(e, attempt, true));
+  const attempt = () => { if (_music) _music.play().then(disarm, () => {}); };
+  MUSIC_GESTURES.forEach(e => window.addEventListener(e, attempt, true));
+  attempt();
 }
 
 // Fade out over `ms` so the cut into the bunker is not abrupt.
@@ -155,6 +170,7 @@ function stopMusic(ms) {
   if (!_music) return;
   const a = _music;
   _music = null;
+  _musicArmed = false;
   const step = 50, fall = a.volume / Math.max(1, (ms || 0) / step);
   const t = setInterval(() => {
     a.volume = Math.max(0, a.volume - fall);
@@ -816,6 +832,7 @@ class BootScene extends Phaser.Scene {
       }
     }
 
+    primeMusic();                       // fetch and decode before the menu opens
     whenFontsReady(() => this.scene.start('MenuScene'));
   }
 
