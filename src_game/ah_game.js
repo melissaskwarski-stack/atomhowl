@@ -2699,7 +2699,7 @@ class WalkScene extends Phaser.Scene {
       fontFamily: F_UI, fontSize: '15px', fontStyle: '700', color: '#d9c7a8',
       stroke: '#070605', strokeThickness: 4
     }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(40);
-    this.add.text(640, 692, 'A/D WALK   ·   W JUMP   ·   E ENTER   ·   M MUTE',
+    this.add.text(640, 692, 'A/D RUN   ·   W JUMP   ·   E ENTER   ·   M MUTE',
       { fontFamily: F_UI, fontSize: '10px', fontStyle: '500', color: '#8a6f4a' })
       .setOrigin(0.5, 1).setScrollFactor(0).setDepth(40).setAlpha(0.85);
 

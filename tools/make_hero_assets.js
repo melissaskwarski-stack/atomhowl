@@ -5,10 +5,14 @@
 // side-specific animation instead of mirroring one side — mirroring would
 // flip the character's asymmetric hair and gear.
 //
-// Only idle-east, walk-east and walk-west exist so far. Run / shoot / sword
-// reuse the walk cycle and are listed in EW.pending until the real art lands.
-// Image data is emitted once into EW.frames and referenced by key, so the
-// placeholder animations cost nothing in file size.
+// There is no walk cycle: the character sprints whenever he moves, so ground
+// movement is the sprint clip in both scene types. Only east art exists for
+// it, so west is a mirrored copy baked at build time rather than a runtime
+// flipX — the directional player expects a real 'W' animation to exist.
+//
+// Shoot / sword still reuse the sprint frames and are listed in EW.pending
+// until the real art lands. Image data is emitted once into EW.frames and
+// referenced by key, so those placeholders cost nothing in file size.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -18,9 +22,8 @@ const { PNG } = require('pngjs');
 const ROOT = path.resolve(__dirname, '..');
 const A = 'public/assets/';
 const SRC = {
-  idle:  A + 'Idle_v3_idle_breathing_east.gif',
-  walk:  A + 'Idle_v3_walking_east.gif',
-  walkW: A + 'Idle_v3_walking_west.gif'
+  idle: A + 'Idle_v3_idle_breathing_east.gif',
+  run:  A + 'Idle_v3_full_sprinting_east.gif'
 };
 const OUT = path.join(ROOT, 'build/ew_assets.js');
 
@@ -100,7 +103,7 @@ for (const [name, rel] of Object.entries(SRC)) {
   console.log(`${name}: ${d.W}x${d.H} ${d.frames.length}f` +
     (stripped ? '  matte removed' : '  (alpha present)'));
 }
-if (!clips.idle || !clips.walk) { console.error('need idle + walk east'); process.exit(1); }
+if (!clips.idle || !clips.run) { console.error('need idle + sprint east'); process.exit(1); }
 
 // ---------- uniform, feet-anchored canvas ----------
 // One canvas for every clip so the sprite never jumps when the animation
@@ -142,10 +145,10 @@ const pool = (poolName, clip, mirror) => {
   return keys;
 };
 const K = {
-  idle:  pool('idle',  'idle',  false),
-  idleW: pool('idleW', 'idle',  true),           // no west idle supplied — mirror east
-  walk:  pool('walk',  'walk',  false),
-  walkW: pool('walkW', clips.walkW ? 'walkW' : 'walk', !clips.walkW)
+  idle:  pool('idle',  'idle', false),
+  idleW: pool('idleW', 'idle', true),            // no west idle supplied — mirror east
+  run:   pool('run',   'run',  false),
+  runW:  pool('runW',  'run',  true)             // no west sprint supplied — mirror east
 };
 
 // ---------- body box + muzzle ----------
@@ -171,24 +174,22 @@ const mod = {
   hiRes: true,             // 3D render, not pixel art — scale fractionally
   directional: true,       // real per-side art — pick the anim, never flipX
   body, muzzle,
-  pending: ['idle west (mirrored east)', 'run', 'shoot', 'sword'],
+  pending: ['idle west (mirrored east)', 'sprint west (mirrored east)', 'shoot', 'sword'],
   frames,
   anims: {
     idle:      A_(K.idle,  8),
     idleW:     A_(K.idleW, 8),
-    walk:      A_(K.walk,  12),
-    walkW:     A_(K.walkW, 12),
-    run:       A_(K.walk,  17),
-    runW:      A_(K.walkW, 17),
-    jump:      A_(mid(K.walk),  10, 0),
-    jumpW:     A_(mid(K.walkW), 10, 0),
-    // placeholders — same walk cycle until the real art arrives
-    shoot:     A_(K.walk,  12),
-    shootW:    A_(K.walkW, 12),
-    runshoot:  A_(K.walk,  17),
-    runshootW: A_(K.walkW, 17),
-    sword:     A_(K.walk,  14, 0),
-    swordW:    A_(K.walkW, 14, 0)
+    run:       A_(K.run,   14),
+    runW:      A_(K.runW,  14),
+    jump:      A_(mid(K.run),  10, 0),
+    jumpW:     A_(mid(K.runW), 10, 0),
+    // placeholders — the sprint cycle until the real art arrives
+    shoot:     A_(K.run,   12),
+    shootW:    A_(K.runW,  12),
+    runshoot:  A_(K.run,   14),
+    runshootW: A_(K.runW,  14),
+    sword:     A_(K.run,   14, 0),
+    swordW:    A_(K.runW,  14, 0)
   }
 };
 
