@@ -1969,12 +1969,13 @@ class GameScene extends Phaser.Scene {
       } else {
         let want;
         if (!onGround) want = 'ew-jump';            // freezes on the tucked frame
-        else if (firing) want = 'ew-runshoot';      // ONLY run-shoot gif, never the gun-lift one
+        else if (firing) want = 'ew-shoot';         // draws once, then holds the recoil loop
         else if (moving) want = 'ew-run';
         else want = 'ew-idle';
         want = ewAnim(want, this.facing);
         if (this.curAnim !== want) {
-          this.player.play(want);
+          this.player._curAnim = this.curAnim;      // playAction reads the previous action
+          playAction(this.player, want);
           this.curAnim = want;
         }
       }
@@ -2107,25 +2108,41 @@ function makeWalker(scene, x, groundY, targetH) {
 // Starting to run plays the lean-in once and then hands over to the looping
 // tail, which is how the run art is cut. Turning around mid-run skips the
 // lean — he is already leaning — and every other animation plays straight.
-const RUN_LEAN = { 'ew-run': 'ew-runin', 'ew-runW': 'ew-runinW' };
+// Several cycles are preceded by a one-shot: he leans into the run, pulls the
+// guitar off his back, draws the pistol. Playing that intro and chaining the
+// loop behind it is what makes the action read. Turning on the spot keeps the
+// action, so only a CHANGE of action replays the intro.
+const ACTION_INTRO = {
+  'ew-run':    'ew-runin',    'ew-runW':    'ew-runinW',
+  'ew-guitar': 'ew-guitarin', 'ew-guitarW': 'ew-guitarinW',
+  'ew-shoot':  'ew-shootin',  'ew-shootW':  'ew-shootinW'
+};
+const actionOf = key => (key || '').replace(/W$/, '').replace(/in$/, '');
 
-function playRun(p, want) {
-  const lean = RUN_LEAN[want];
-  const already = !!RUN_LEAN[p._curAnim];         // already running, just turning
-  if (lean && !already && p.scene.anims.exists(lean)) {
-    p.play(lean);
+function playAction(p, want) {
+  const intro = ACTION_INTRO[want];
+  if (intro && actionOf(p._curAnim) !== actionOf(want) && p.scene.anims.exists(intro)) {
+    p.play(intro);
     p.chain(want);
   } else {
     p.play(want);
   }
 }
 
+// Ground speeds. He walks by default and sprints on shift, which is also what
+// picks between the walk cycle and the run.
+const WALK_SPEED = 235;
+const RUN_SPEED  = 430;
+// How long he has to stand still before he gets bored and starts playing.
+const IDLE_GUITAR_MS = 5000;
+
 function driveWalker(scene, p, keys, onGround) {
   let move = 0;
   if (keys.A.isDown || keys.LEFT.isDown)  move -= 1;
   if (keys.D.isDown || keys.RIGHT.isDown) move += 1;
   if (move !== 0) p._facing = move;
-  p.setVelocityX(move * 330);
+  const sprint = !!(keys.SHIFT && keys.SHIFT.isDown);
+  p.setVelocityX(move * (sprint ? RUN_SPEED : WALK_SPEED));
 
   const wantJump = Phaser.Input.Keyboard.JustDown(keys.W)
                 || Phaser.Input.Keyboard.JustDown(keys.SPACE)
@@ -2134,10 +2151,19 @@ function driveWalker(scene, p, keys, onGround) {
 
   ewFlip(p, p._facing);
   const moving = Math.abs(p.body.velocity.x) > 20;
+
+  // Standing still long enough, he takes the guitar off his back and plays
+  // until you move again.
+  if (moving || !onGround) p._restSince = 0;
+  else if (!p._restSince) p._restSince = scene.time.now;
+  const bored = p._restSince && scene.time.now - p._restSince > IDLE_GUITAR_MS;
+
   if (p._real) {
-    let want = !onGround ? 'ew-jump' : (moving ? 'ew-run' : 'ew-idle');
+    let want = !onGround ? 'ew-jump'
+             : moving    ? (sprint ? 'ew-run' : 'ew-walk')
+             : bored     ? 'ew-guitar' : 'ew-idle';
     want = ewAnim(want, p._facing);
-    if (p._curAnim !== want) { playRun(p, want); p._curAnim = want; }
+    if (p._curAnim !== want) { playAction(p, want); p._curAnim = want; }
   } else {
     if (!onGround) p.play('hero-air', true);
     else if (moving) p.play('hero-run', true);
@@ -2672,7 +2698,7 @@ class WalkScene extends Phaser.Scene {
     this.cameras.main.setDeadzone(160, 100);
 
     // input
-    this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,M,E,ENTER');
+    this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,SHIFT,M,E,ENTER');
     this.input.keyboard.on('keydown-M', () => Sfx.toggleMute());
     const wake = () => Sfx.ensure();
     this.input.on('pointerdown', wake);
@@ -2715,7 +2741,7 @@ class WalkScene extends Phaser.Scene {
       fontFamily: F_UI, fontSize: '15px', fontStyle: '700', color: '#d9c7a8',
       stroke: '#070605', strokeThickness: 4
     }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(40);
-    this.add.text(640, 692, 'A/D RUN   ·   W JUMP   ·   E ENTER   ·   M MUTE',
+    this.add.text(640, 692, 'A/D WALK   ·   SHIFT RUN   ·   W JUMP   ·   E ENTER   ·   M MUTE',
       { fontFamily: F_UI, fontSize: '10px', fontStyle: '500', color: '#8a6f4a' })
       .setOrigin(0.5, 1).setScrollFactor(0).setDepth(40).setAlpha(0.85);
 

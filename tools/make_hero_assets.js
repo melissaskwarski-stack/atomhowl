@@ -9,7 +9,7 @@
 // leans further forward on every frame, never settling. Looping the whole
 // thing would make him stand up and lean in again several times a second, so
 // it is split — the full clip plays once as he sets off, and only the settled
-// tail loops after that. RUN_LOOP marks where the tail starts.
+// tail loops after that. LOOP_FROM marks where each tail starts.
 //
 // Run ships with real east AND west art. Walk and idle are east only, so their
 // west is a mirrored copy baked here rather than a runtime flipX — the
@@ -27,12 +27,21 @@ const { PNG } = require('pngjs');
 const ROOT = path.resolve(__dirname, '..');
 const A = 'public/assets/';
 const SRC = {
-  idle: A + 'Idle_v3_idle_breathing_east.gif',
-  run:  A + 'Idle_v3_run_east.gif',
-  runW: A + 'Idle_v3_run_west.gif',
-  walk: A + 'Idle_v3_walk_east.gif'
+  idle:   A + 'Idle_v3_idle_breathing_east.gif',
+  run:    A + 'Idle_v3_run_east.gif',
+  runW:   A + 'Idle_v3_run_west.gif',
+  walk:   A + 'Idle_v3_walk_east.gif',
+  guitar: A + 'Idle_v3_guitar_east.gif',
+  pistol: A + 'Idle_v3_pistol_east.gif'
 };
-const RUN_LOOP = 4;          // frames 0-3 are the stand-up; the tail cycles
+
+// Several clips open with a one-shot action and only then settle into
+// something repeatable — the run leans in, the guitar is pulled off his back,
+// the pistol is drawn. Each is emitted twice: '<name>in' plays the whole clip
+// once, '<name>' loops the settled tail. The index is where that tail starts,
+// chosen by comparing the wrap discontinuity against the in-loop motion
+// (tools note: run 4 scored 1.12, pistol 7 scored 1.00 — lower is smoother).
+const LOOP_FROM = { run: 4, runW: 4, guitar: 4, pistol: 7 };
 const OUT = path.join(ROOT, 'build/ew_assets.js');
 
 // ---------- GIF decode (disposal-aware) ----------
@@ -111,7 +120,7 @@ for (const [name, rel] of Object.entries(SRC)) {
   console.log(`${name}: ${d.W}x${d.H} ${d.frames.length}f` +
     (stripped ? '  matte removed' : '  (alpha present)'));
 }
-if (!clips.idle || !clips.run) { console.error('need idle + sprint east'); process.exit(1); }
+if (!clips.idle || !clips.run) { console.error('need idle + run east'); process.exit(1); }
 
 // ---------- uniform, feet-anchored canvas ----------
 // One canvas for every clip so the sprite never jumps when the animation
@@ -153,17 +162,24 @@ const pool = (poolName, clip, mirror) => {
   return keys;
 };
 const K = {
-  idle:   pool('idle',   'idle', false),
-  idleW:  pool('idleW',  'idle', true),          // no west idle supplied — mirror east
-  runin:  pool('runin',  'run',  false),         // real east run
-  runinW: pool('runinW', 'runW', false),         // real west run
-  walk:   pool('walk',   'walk', false),
-  walkW:  pool('walkW',  'walk', true)           // no west walk supplied — mirror east
+  idle:      pool('idle',      'idle',   false),
+  idleW:     pool('idleW',     'idle',   true),   // east only — mirror
+  walk:      pool('walk',      'walk',   false),
+  walkW:     pool('walkW',     'walk',   true),   // east only — mirror
+  runin:     pool('runin',     'run',    false),  // real east run
+  runinW:    pool('runinW',    'runW',   false),  // real west run
+  guitarin:  pool('guitarin',  'guitar', false),
+  guitarinW: pool('guitarinW', 'guitar', true),   // east only — mirror
+  pistolin:  pool('pistolin',  'pistol', false),
+  pistolinW: pool('pistolinW', 'pistol', true)    // east only — mirror
 };
-// The looping part of the run reuses the tail frames already in the pool, so
-// splitting the clip costs no extra image data.
-K.run  = K.runin.slice(RUN_LOOP);
-K.runW = K.runinW.slice(RUN_LOOP);
+// Each looping tail reuses frames already emitted for its intro, so splitting
+// a clip in two costs no extra image data.
+for (const [name, from] of Object.entries({ run: LOOP_FROM.run, guitar: LOOP_FROM.guitar,
+                                            pistol: LOOP_FROM.pistol })) {
+  K[name]        = K[name + 'in'].slice(from);
+  K[name + 'W']  = K[name + 'inW'].slice(from);
+}
 
 // ---------- body box + muzzle ----------
 const ib = clips.idle.boxes[0];
@@ -188,26 +204,35 @@ const mod = {
   hiRes: true,             // 3D render, not pixel art — scale fractionally
   directional: true,       // real per-side art — pick the anim, never flipX
   body, muzzle,
-  pending: ['idle west (mirrored east)', 'walk west (mirrored east)', 'shoot', 'sword'],
+  pending: ['idle west (mirrored east)', 'walk west (mirrored east)',
+            'guitar west (mirrored east)', 'pistol west (mirrored east)', 'sword'],
   frames,
   anims: {
-    idle:      A_(K.idle,   8),
-    idleW:     A_(K.idleW,  8),
-    walk:      A_(K.walk,   12),
-    walkW:     A_(K.walkW,  12),
-    runin:     A_(K.runin,  16, 0),     // one-shot lean into the run
-    runinW:    A_(K.runinW, 16, 0),
-    run:       A_(K.run,    14),        // settled tail, loops
-    runW:      A_(K.runW,   14),
-    jump:      A_(mid(K.run),  10, 0),
-    jumpW:     A_(mid(K.runW), 10, 0),
-    // placeholders — the run cycle until the real art arrives
-    shoot:     A_(K.run,    12),
-    shootW:    A_(K.runW,   12),
-    runshoot:  A_(K.run,    14),
-    runshootW: A_(K.runW,   14),
-    sword:     A_(K.run,    14, 0),
-    swordW:    A_(K.runW,   14, 0)
+    idle:       A_(K.idle,      5),     // slow breathing
+    idleW:      A_(K.idleW,     5),
+    walk:       A_(K.walk,      11),
+    walkW:      A_(K.walkW,     11),
+    // one-shot intros; each is chained into the matching loop below
+    runin:      A_(K.runin,     16, 0),
+    runinW:     A_(K.runinW,    16, 0),
+    guitarin:   A_(K.guitarin,  11, 0),
+    guitarinW:  A_(K.guitarinW, 11, 0),
+    shootin:    A_(K.pistolin,  14, 0),
+    shootinW:   A_(K.pistolinW, 14, 0),
+    // settled tails
+    run:        A_(K.run,       14),
+    runW:       A_(K.runW,      14),
+    guitar:     A_(K.guitar,    7),     // idle strumming
+    guitarW:    A_(K.guitarW,   7),
+    shoot:      A_(K.pistol,    10),    // arm out, recoil
+    shootW:     A_(K.pistolW,   10),
+    runshoot:   A_(K.pistol,    10),
+    runshootW:  A_(K.pistolW,   10),
+    jump:       A_(mid(K.run),  10, 0),
+    jumpW:      A_(mid(K.runW), 10, 0),
+    // placeholder — the run cycle until the real art arrives
+    sword:      A_(K.run,       14, 0),
+    swordW:     A_(K.runW,      14, 0)
   }
 };
 
