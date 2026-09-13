@@ -2153,6 +2153,34 @@ const RUN_SPEED  = 430;
 // How long he has to stand still before he gets bored and starts playing.
 const IDLE_GUITAR_MS = 5000;
 
+// Wolffel tags along behind his brother in the exploration scenes. Only a
+// single side-on pose exists for him so far, so he is a static sprite that
+// flips to face his travel direction rather than an animated walker — he
+// trails to a fixed gap and stops short rather than crowding.
+const FOLLOW_GAP = 78;      // how far behind he settles
+const FOLLOW_RUN = 300;     // his top speed closing the gap
+
+function makeFollower(scene, x, groundY, targetH) {
+  if (!scene.textures.exists('rot_wolffel_2')) return null;
+  const f = scene.add.sprite(x, groundY, 'rot_wolffel_2').setOrigin(0.5, 1).setDepth(9);
+  const src = scene.textures.get('rot_wolffel_2').getSourceImage();
+  f.setScale((targetH || 190) / src.height);
+  f._facing = 1;
+  return f;
+}
+
+function driveFollower(f, lead, dt) {
+  if (!f) return;
+  const behind = lead.x - lead._facing * FOLLOW_GAP;
+  const gap = behind - f.x;
+  if (Math.abs(gap) > 6) {
+    const step = Math.sign(gap) * Math.min(Math.abs(gap), FOLLOW_RUN * dt);
+    f.x += step;
+    f._facing = Math.sign(step);
+  }
+  f.setFlipX(f._facing < 0);
+}
+
 function driveWalker(scene, p, keys, onGround) {
   let move = 0;
   if (keys.A.isDown || keys.LEFT.isDown)  move -= 1;
@@ -2463,16 +2491,22 @@ class CharSelectScene extends Phaser.Scene {
 //  random clocks, and the line types itself out one glyph at a time.  //
 // ================================================================== //
 const SPEAKER_SIDE = { WOLFFEL: 'left', ETERWOLF: 'right' };
+const SLEEPER = 'WOLFFEL';        // out cold until the line that wakes him
 
+// The bunker wake-up. Eterwolf calls his brother "Feli"; the plate shows his
+// name, WOLFFEL. A line marked wake is where the brother comes round — until
+// then he is slumped and unlit.
 const INTRO_LINES = [
-  { who: 'WOLFFEL',     text: "Eterwolf. You came back." },
-  { who: 'ETERWOLF', text: "I said I would. How's the leg?" },
-  { who: 'WOLFFEL',     text: "Still attached. That's the most I'll say for it." },
-  { who: 'ETERWOLF', text: "Then stay down. I'll take the surface run alone." },
-  { who: 'WOLFFEL',     text: "The city's gone quiet. Quiet is worse than the howling." },
-  { who: 'ETERWOLF', text: "Quiet I can work with." },
-  { who: 'WOLFFEL',     text: "Take the rifle. And brother — don't stop moving." },
-  { who: 'ETERWOLF', text: "I never do." }
+  { who: 'ETERWOLF', text: "Mk, what happened? Where are we?" },
+  { who: 'ETERWOLF', text: "Wake up, Feli." },
+  { who: 'WOLFFEL',  text: "Hmm, what's going on? I'm hungry.", wake: true },
+  { who: 'ETERWOLF', text: "Do you remember how we got here?" },
+  { who: 'WOLFFEL',  text: "No..." },
+  { who: 'WOLFFEL',  text: "..." },
+  { who: 'WOLFFEL',  text: "..." },
+  { who: 'ETERWOLF', text: "Ok, let's get out." },
+  { who: 'ETERWOLF', text: "Looks like we're in some sort of bunker." },
+  { who: 'ETERWOLF', text: "Let's look around for a way to get out." }
 ];
 
 class IntroDialogueScene extends Phaser.Scene {
@@ -2499,6 +2533,14 @@ class IntroDialogueScene extends Phaser.Scene {
     };
     Object.keys(this.portraits).forEach(k => this._scheduleBlink(k));
 
+    // He is still out cold when the scene opens, so he holds his eyes shut and
+    // sits lower and unlit until the line that wakes him.
+    this._awake = false;
+    const sleeper = this.portraits[SLEEPER];
+    if (sleeper && sleeper.img && this.textures.exists(sleeper.closedKey)) {
+      sleeper.img.setTexture(sleeper.closedKey);
+    }
+
     // Hold on the bunker first so the room is actually seen — the
     // frame covers that corner once it rises.
     this._ui.forEach(o => o.setAlpha(0));
@@ -2524,8 +2566,8 @@ class IntroDialogueScene extends Phaser.Scene {
   _buildPanel(W, H) {
     // A narrow bar sits between the two figures rather than spanning the
     // screen, so the scene and both characters stay visible around it.
-    const w = 720, h = Math.round(w * 724 / 2172);       // frame art is 3:1
-    const x = Math.round((W - w) / 2), y = H - h - 30;
+    const w = 620, h = Math.round(w * 724 / 2172);       // frame art is 3:1
+    const x = Math.round((W - w) / 2), y = H - h - 26;
     this._panel = { x, y, w, h };
 
     const first = this.textures.exists('ui_panel_l') ? 'ui_panel_l' : 'ui_panel_r';
@@ -2545,14 +2587,18 @@ class IntroDialogueScene extends Phaser.Scene {
     this._nameX = { l: x + w * 0.192, r: x + w * 0.771 };
 
     this._name = this.add.text(this._nameX.l, y + h * 0.18, '', {
-      fontFamily: F_UI, fontSize: '15px', fontStyle: '700', color: '#f2b13c',
-      stroke: '#070605', strokeThickness: 4
+      fontFamily: F_UI, fontSize: '12px', fontStyle: '700', color: '#f5c169',
+      stroke: '#070605', strokeThickness: 3
     }).setOrigin(0.5, 0.5).setDepth(22);
+    if (this._name.setLetterSpacing) this._name.setLetterSpacing(1.5);
 
-    this._body = this.add.text(x + w / 2, y + h * 0.40, '', {
-      fontFamily: F_TXT, fontSize: '16px', color: '#ded2be', align: 'center',
-      wordWrap: { width: w * 0.66 }, lineSpacing: 5
+    // The line sits on dark scratched metal, so it gets a soft drop shadow to
+    // lift it off the plate — a stroke would thicken type this small.
+    this._body = this.add.text(x + w / 2, y + h * 0.42, '', {
+      fontFamily: F_TXT, fontSize: '17px', color: '#efe6d6', align: 'center',
+      wordWrap: { width: w * 0.72 }, lineSpacing: 7
     }).setOrigin(0.5, 0).setDepth(22);
+    this._body.setShadow(0, 2, '#000000', 4, false, true);
 
     this._more = this.add.text(x + w * 0.5, y + h * 0.86, '▼', {
       fontFamily: F_UI, fontSize: '13px', color: '#f2b13c'
@@ -2598,6 +2644,7 @@ class IntroDialogueScene extends Phaser.Scene {
     if (!p) return;
     this.time.delayedCall(3000 + Math.random() * 3000, () => {
       if (!this.scene.isActive()) return;
+      if (id === SLEEPER && !this._awake) { this._scheduleBlink(id); return; }   // still out
       if (p.img && this.textures.exists(p.closedKey)) {
         p.img.setTexture(p.closedKey);
         this.time.delayedCall(150, () => { if (p.img) p.img.setTexture(p.openKey); });
@@ -2619,15 +2666,23 @@ class IntroDialogueScene extends Phaser.Scene {
     }
     this._name.setX(this._nameX[side]);
 
+    if (line.wake) this._awake = true;
+
     // The speaker is lit and steps forward; the listener darkens and drops
     // back. Darkening uses tint rather than alpha so the idle character stays
-    // solid instead of turning into a ghost over the scene behind.
+    // solid instead of turning into a ghost over the scene behind. A sleeper
+    // sits lower still and stays dark until he is woken.
     Object.keys(this.portraits).forEach(k => {
       const p = this.portraits[k];
       if (!p.img) return;
-      const on = k === line.who;
-      this.tweens.add({ targets: p.img, y: on ? 232 : 244, duration: 220, ease: 'Sine.easeOut' });
-      p.img.setTint(on ? 0xffffff : 0x6e6660);
+      const asleep = k === SLEEPER && !this._awake;
+      const on = !asleep && k === line.who;
+      this.tweens.add({
+        targets: p.img, y: asleep ? 272 : (on ? 232 : 244),
+        duration: line.wake && k === SLEEPER ? 500 : 220, ease: 'Sine.easeOut'
+      });
+      p.img.setTint(asleep ? 0x4a443e : (on ? 0xffffff : 0x6e6660));
+      if (line.wake && k === SLEEPER && this.textures.exists(p.openKey)) p.img.setTexture(p.openKey);
     });
 
     this._more.setAlpha(0);
@@ -2710,6 +2765,9 @@ class WalkScene extends Phaser.Scene {
     const spawnFrac = data.spawnXFrac != null ? data.spawnXFrac : cfg.startXFrac;
     const startX = spawnFrac != null ? spawnFrac * WW : (cfg.startX || 160);
     this.player = makeWalker(this, startX, groundY, cfg.charH);
+    // Brother in tow — absent once the horde starts, which is a separate scene.
+    this.follower = makeFollower(this, startX - FOLLOW_GAP, groundY, cfg.charH);
+    this._buildBeats(cfg);
     this.physics.add.collider(this.player, floor);
     this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
     this.cameras.main.setDeadzone(160, 100);
@@ -2771,9 +2829,70 @@ class WalkScene extends Phaser.Scene {
     this._transitioning = false;
   }
 
+  // ---- scripted beats ----------------------------------------------------
+  // A beat fires once, when the player first reaches its point in the scene
+  // (as a fraction of world width; 0 means on arrival). It can post spoken
+  // lines, which queue and auto-advance, and a tutorial prompt.
+  _buildBeats(cfg) {
+    this._beats = (cfg.beats || []).map(b => Object.assign({ fired: false }, b));
+    this._sayQueue = [];
+    this._sayUntil = 0;
+
+    this._sayName = this.add.text(640, 604, '', {
+      fontFamily: F_UI, fontSize: '11px', fontStyle: '700', color: '#f5c169'
+    }).setOrigin(0.5, 1).setScrollFactor(0).setDepth(41).setAlpha(0);
+
+    this._sayText = this.add.text(640, 632, '', {
+      fontFamily: F_TXT, fontSize: '19px', color: '#efe6d6', align: 'center',
+      wordWrap: { width: 720 }, lineSpacing: 5
+    }).setOrigin(0.5, 1).setScrollFactor(0).setDepth(41).setAlpha(0);
+    this._sayText.setShadow(0, 2, '#000000', 5, false, true);
+
+    this._tip = this.add.text(640, 96, '', {
+      fontFamily: F_UI, fontSize: '13px', fontStyle: '700', color: '#0f0c09',
+      backgroundColor: '#f2b13c', padding: { x: 14, y: 7 }
+    }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(41).setAlpha(0);
+  }
+
+  _say(lines) { this._sayQueue.push.apply(this._sayQueue, lines); }
+
+  _showTip(text) {
+    if (!this._tip) return;
+    this._tip.setText(text).setAlpha(0);
+    this.tweens.killTweensOf(this._tip);
+    this.tweens.add({ targets: this._tip, alpha: 1, duration: 220 });
+    this.tweens.add({ targets: this._tip, alpha: 0, duration: 400, delay: 5200 });
+  }
+
+  _runBeats() {
+    if (!this._beats) return;
+    const frac = this.worldW ? this.player.x / this.worldW : 0;
+    for (const b of this._beats) {
+      if (b.fired || frac < (b.at || 0)) continue;
+      b.fired = true;
+      if (b.say) this._say(b.say);
+      if (b.tip) this._showTip(b.tip);
+    }
+
+    // spoken lines hold for long enough to read, then hand over to the next
+    const now = this.time.now;
+    if (now >= this._sayUntil) {
+      if (this._sayQueue.length) {
+        const [who, text] = this._sayQueue.shift();
+        this._sayName.setText(who).setAlpha(1);
+        this._sayText.setText(text).setAlpha(1);
+        this._sayUntil = now + 1600 + text.length * 45;
+      } else if (this._sayText.alpha > 0) {
+        this.tweens.add({ targets: [this._sayName, this._sayText], alpha: 0, duration: 300 });
+      }
+    }
+  }
+
   update() {
     const onGround = this.player.body.blocked.down || this.player.body.touching.down;
     if (!this._transitioning) driveWalker(this, this.player, this.keys, onGround);
+    driveFollower(this.follower, this.player, this.game.loop.delta / 1000);
+    this._runBeats();
 
     if (this.grain && this.game.loop.frame % 3 === 0) {
       this._gf = (this._gf + 1) % 3;
@@ -2863,6 +2982,11 @@ class BunkerScene extends WalkScene {
       // frame and blast door put a standing man at roughly 280px.
       worldW: 'auto', groundY: 628, startXFrac: 0.06, charH: 280,
       title: 'THE BUNKER — quarantine shelter',
+      beats: [
+        { at: 0,    tip: 'A / D  TO MOVE     SHIFT  TO RUN' },
+        { at: 0.72, say: [['ETERWOLF', 'Look, Feli, a door.']],
+                    tip: 'PRESS  E  AT THE DOOR' }
+      ],
       exits: [
         { xFrac: 0.90, w: 180, label: 'UP TO THE CITY', target: 'CityScene' }   // the green door
       ],
@@ -2899,6 +3023,11 @@ class CityScene extends WalkScene {
       bgKey: 'scene_city',
       worldW: 'auto', groundY: 570, startXFrac: 0.13,   // pavement line in city.png; start at the "02" door
       title: 'HALBERD BAY — the ruined row',
+      beats: [
+        { at: 0,    say: [['ETERWOLF', 'What the hell happened here!'],
+                          ['WOLFFEL',  'Idk.'],
+                          ['ETERWOLF', "Let's keep moving."]] }
+      ],
       exits: [
         { xFrac: 0.10, w: 80, arrow: '◀', label: 'BACK TO BUNKER', target: 'BunkerScene' },
         { xFrac: 0.97, w: 90, label: 'TO THE SHOP ▶', target: shopTarget, auto: true }   // just run through
@@ -2936,6 +3065,10 @@ class ShopFrontScene extends WalkScene {
       bgKey: 'scene_shopfront',
       worldW: 'auto', groundY: 520, startXFrac: 0.05,   // sidewalk line in shop.png
       title: 'SPORTING GOODS — the last shop standing',
+      beats: [
+        { at: 0, say: [['ETERWOLF', "What's that blinking over there?"]],
+                 tip: 'PRESS  E  TO ENTER THE SHOP' }
+      ],
       exits: [
         { xFrac: 0.02, w: 70, arrow: '◀', label: 'BACK TO THE CITY', target: 'CityScene' },
         { xFrac: 0.73, w: 110, label: 'ENTER THROUGH THE HOLE', target: 'ShopScene', spawnXFrac: 0.29 },  // land just inside the hole
@@ -2963,6 +3096,9 @@ class ShopScene extends WalkScene {
       bgKey: 'scene_shop',
       worldW: 'auto', groundY: 640, startXFrac: 0.10,   // shop tile floor measured from the art
       title: 'SPORTING GOODS — camp · hunt · survive',
+      beats: [
+        { at: 0.30, tip: 'WALK INTO THE WEAPON TO PICK IT UP' }
+      ],
       pickup: { xFrac: 0.60, name: 'M1 SCRAP CARBINE' },
       exits: hasFront ? [
         // ONE exit — the hole you came in by. Appears only after the weapon is collected.
