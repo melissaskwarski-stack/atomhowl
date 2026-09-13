@@ -2658,9 +2658,9 @@ class IntroDialogueScene extends Phaser.Scene {
     const line = INTRO_LINES[this._idx];
     this._name.setText(line.who);
 
-    // The speaker takes the frame whose name plate is on the OPPOSITE side, so
-    // the plate is never behind the character doing the talking.
-    const side = SPEAKER_SIDE[line.who] === 'left' ? 'r' : 'l';
+    // The plate goes on the SPEAKER'S side, so the bar points back at whoever
+    // is talking rather than at the brother listening to them.
+    const side = SPEAKER_SIDE[line.who] === 'left' ? 'l' : 'r';
     if (this._frame && this.textures.exists('ui_panel_' + side)) {
       this._frame.setTexture('ui_panel_' + side).setDisplaySize(this._panel.w, this._panel.h);
     }
