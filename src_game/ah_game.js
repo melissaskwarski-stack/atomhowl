@@ -2157,15 +2157,29 @@ const IDLE_GUITAR_MS = 5000;
 // single side-on pose exists for him so far, so he is a static sprite that
 // flips to face his travel direction rather than an animated walker — he
 // trails to a fixed gap and stops short rather than crowding.
-const FOLLOW_GAP = 78;      // how far behind he settles
-const FOLLOW_RUN = 300;     // his top speed closing the gap
+const FOLLOW_GAP   = 150;   // how far behind he settles
+const FOLLOW_RUN   = 320;   // his top speed closing the gap
+// He walks a lane further back than his brother, so he is staged for distance
+// rather than pasted at the same depth: slightly smaller, standing slightly
+// higher up the floor, and a shade less contrasty — the same cues the painted
+// backdrops use.
+const FOLLOW_SCALE = 0.86;
+const FOLLOW_LIFT  = 16;    // how far up the floor his lane sits
+// Radians of gait per pixel covered. Tuned so one stride lands about a leg
+// length apart, which is what keeps the cadence believable at any speed.
+const STEP_PER_PX  = 0.045;
 
 function makeFollower(scene, x, groundY, targetH) {
   if (!scene.textures.exists('rot_wolffel_2')) return null;
-  const f = scene.add.sprite(x, groundY, 'rot_wolffel_2').setOrigin(0.5, 1).setDepth(9);
+  const y = groundY - FOLLOW_LIFT;
+  const f = scene.add.sprite(x, y, 'rot_wolffel_2').setOrigin(0.5, 1).setDepth(8);
   const src = scene.textures.get('rot_wolffel_2').getSourceImage();
-  f.setScale((targetH || 190) / src.height);
+  f.setScale((targetH || 190) * FOLLOW_SCALE / src.height);
+  f.setTint(0xbfb7ad);
   f._facing = 1;
+  f._baseY = y;
+  f._phase = 0;
+  f._gait = 0;
   return f;
 }
 
@@ -2173,12 +2187,26 @@ function driveFollower(f, lead, dt) {
   if (!f) return;
   const behind = lead.x - lead._facing * FOLLOW_GAP;
   const gap = behind - f.x;
-  if (Math.abs(gap) > 6) {
-    const step = Math.sign(gap) * Math.min(Math.abs(gap), FOLLOW_RUN * dt);
-    f.x += step;
-    f._facing = Math.sign(step);
+  let moved = 0;
+  if (Math.abs(gap) > 8) {
+    moved = Math.sign(gap) * Math.min(Math.abs(gap), FOLLOW_RUN * dt);
+    f.x += moved;
+    f._facing = Math.sign(moved);
   }
   f.setFlipX(f._facing < 0);
+
+  // Only one mid-stride pose exists for him, so the walk has to be carried by
+  // the body rather than the legs. The gait phase advances with ground covered
+  // rather than with a clock, so cadence tracks speed instead of drifting out
+  // of step; he rises twice per cycle as a real gait does, leans into travel
+  // and rolls slightly with each step. The whole thing eases in and out so
+  // setting off and stopping are not a snap.
+  f._phase += Math.abs(moved) * STEP_PER_PX;
+  const target = Math.abs(moved) > 0.1 ? 1 : 0;
+  f._gait += (target - f._gait) * Math.min(1, dt * 9);
+
+  f.y = f._baseY - Math.abs(Math.sin(f._phase)) * 6 * f._gait;
+  f.setRotation((f._facing * 0.03 + Math.sin(f._phase * 0.5) * 0.015) * f._gait);
 }
 
 function driveWalker(scene, p, keys, onGround) {
