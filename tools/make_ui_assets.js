@@ -259,7 +259,10 @@ function cutClip(file) {
     return 'data:image/png;base64,' +
       PNG.sync.write(cleanCutout(png, 0)).toString('base64');
   });
-  return { frames: out, cw, ch };
+  // The figure height, not the canvas: two clips cut to different canvases
+  // scale to different on-screen sizes if the canvas is used as the divisor.
+  const figH = Math.max.apply(null, boxes.map(b => b.maxY - b.minY + 1));
+  return { frames: out, cw, ch, figH };
 }
 
 const rotations = {};
@@ -270,12 +273,13 @@ for (const [name, file] of Object.entries(ROTATIONS)) {
   console.log(`turntable ${name}: ${c.frames.length} frames @ ${c.cw}x${c.ch}`);
 }
 
-const walks = {};
+const walks = {}, walkMeta = {};
 for (const [name, file] of Object.entries(WALKS)) {
   if (!fs.existsSync(A(file))) { console.log('MISSING', file); continue; }
   const c = cutClip(A(file));
   walks[name] = c.frames;
-  console.log(`walk ${name}: ${c.frames.length} frames @ ${c.cw}x${c.ch}`);
+  walkMeta[name] = { figH: c.figH, canvasH: c.ch };
+  console.log(`walk ${name}: ${c.frames.length} frames @ ${c.cw}x${c.ch}, figure ${c.figH}px`);
 }
 
 // ---------- dialogue frames ----------
@@ -289,6 +293,6 @@ for (const [side, file] of Object.entries(PANELS)) {
 }
 
 fs.writeFileSync(OUT, '/* UI art */ window.UIART = ' +
-  JSON.stringify({ panels, portraits, rotations, walks }) + ';\n');
+  JSON.stringify({ panels, portraits, rotations, walks, walkMeta }) + ';\n');
 fs.rmSync(TMP, { recursive: true, force: true });
 console.log('wrote', OUT, Math.round(fs.statSync(OUT).size / 1024) + 'KB');

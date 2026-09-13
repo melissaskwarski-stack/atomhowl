@@ -76,12 +76,12 @@ const Sfx = {
 };
 
 // ------------------------------------------------------------------ //
-//  UI TYPE — Orbitron is embedded by the build; the stacks fall back  //
-//  to a system sans so the shell still reads if the face is absent.   //
-//  Orbitron is wide, so it carries headings and labels only and the   //
-//  dialogue body uses a plain sans that stays readable in paragraphs. //
+//  UI TYPE — the build embeds Chakra Petch as 'AtomUI'; the stacks    //
+//  fall back to a system sans so the shell still reads without it.    //
+//  It carries headings and labels; the dialogue body stays on a plain //
+//  sans, which is easier on the eye for whole sentences.              //
 // ------------------------------------------------------------------ //
-const F_UI  = 'Orbitron, "Segoe UI", Roboto, Helvetica, sans-serif';
+const F_UI  = 'AtomUI, "Segoe UI", Roboto, Helvetica, sans-serif';
 const F_TXT = '"Segoe UI", Roboto, Helvetica, Arial, sans-serif';
 
 // Canvas cannot draw with a face the document has not finished loading, so
@@ -89,7 +89,7 @@ const F_TXT = '"Segoe UI", Roboto, Helvetica, Arial, sans-serif';
 function whenFontsReady(cb) {
   const d = document;
   if (!d.fonts || !d.fonts.load) return cb();
-  const want = ['500 24px Orbitron', '700 24px Orbitron', '900 56px Orbitron'];
+  const want = ['500 24px AtomUI', '600 24px AtomUI', '700 64px AtomUI'];
   let left = want.length, fired = false;
   const done = () => { if (!fired && --left <= 0) { fired = true; cb(); } };
   setTimeout(() => { if (!fired) { fired = true; cb(); } }, 3000);   // never hang
@@ -2176,12 +2176,12 @@ const FOLLOW_GAP   = 200;   // how far behind he settles
 const FOLLOW_RUN   = 480;   // his top speed closing the gap, enough to keep up a sprint
 const FOLLOW_GAIN  = 8;     // how hard he chases the gap; sets how far he lags in motion
 const FOLLOW_DEAD  = 3;     // slack once stopped, so he does not jitter in place
-// He walks a lane further back than his brother, so he is staged for distance
-// rather than pasted at the same depth: slightly smaller, standing slightly
-// higher up the floor, and a shade less contrasty — the same cues the painted
-// backdrops use.
-const FOLLOW_SCALE = 0.86;
-const FOLLOW_LIFT  = 16;    // how far up the floor his lane sits
+// The brothers are the same build, so he is drawn at his brother's height and
+// stands on the same floor line. He still sits behind rather than pasted
+// alongside — he draws underneath and carries a touch less contrast, which
+// separates them without shrinking him.
+const FOLLOW_SCALE = 1;
+const FOLLOW_LIFT  = 0;     // shares his brother's floor line
 // Cadence is derived from the stride in the art rather than picked by eye. One
 // full cycle of his walk carries him a bit under his own height (measured off
 // the frames: a 127px step on a 222px figure), so the animation is played at
@@ -2200,8 +2200,13 @@ function makeFollower(scene, x, groundY, targetH) {
   if (!scene.textures.exists(standKey)) return null;
   const y = groundY - FOLLOW_LIFT;
   const f = scene.add.sprite(x, y, standKey).setOrigin(0.5, 1).setDepth(8);
-  f.setScale((targetH || 190) * FOLLOW_SCALE / scene.textures.get(standKey).getSourceImage().height);
-  f.setTint(0xbfb7ad);
+  // Scale against the FIGURE height rather than the canvas: his clip and his
+  // brother's are cut to different canvases, so dividing by the canvas left
+  // him a couple of percent short of matching him.
+  const meta = window.UIART && window.UIART.walkMeta && window.UIART.walkMeta.wolffel;
+  const figH = meta ? meta.figH : scene.textures.get(standKey).getSourceImage().height;
+  f.setScale((targetH || 190) * FOLLOW_SCALE / figH);
+  f.setTint(0xd8d2ca);
   // Driven by the physics step rather than by hand. Phaser clamps and smooths
   // the frame delta, so integrating his position against it made him crawl
   // whenever the frame rate dipped — he fell behind and stood still while his
@@ -2323,19 +2328,19 @@ class MenuScene extends Phaser.Scene {
     startMusic();
 
     const LX = 86;                                   // shared left margin
-    this.add.text(LX, 250, 'ATOMHOWL', {
-      fontFamily: F_UI, fontSize: '50px', fontStyle: '900', color: '#eadfcb',
-      stroke: '#070605', strokeThickness: 6
+    this.add.text(LX, 158, 'ATOMHOWL', {
+      fontFamily: F_UI, fontSize: '76px', fontStyle: '700', color: '#f0e6d4',
+      stroke: '#070605', strokeThickness: 7
     }).setOrigin(0, 0.5).setDepth(10);
 
-    this.add.rectangle(LX, 284, 232, 1, 0xf2b13c, 0.75).setOrigin(0, 0.5).setDepth(10);
+    this.add.rectangle(LX, 205, 330, 2, 0xf2b13c, 0.85).setOrigin(0, 0.5).setDepth(10);
 
-    this.add.text(LX, 308, '2076', {
-      fontFamily: F_UI, fontSize: '15px', fontStyle: '700', color: '#f2b13c',
+    this.add.text(LX, 233, '2076', {
+      fontFamily: F_UI, fontSize: '21px', fontStyle: '700', color: '#f2b13c',
       stroke: '#070605', strokeThickness: 3
     }).setOrigin(0, 0.5).setDepth(10);
-    this.add.text(LX, 332, "TWO BROTHERS. APPARENTLY WE'RE CHOSEN TO SAVE HUMANITY.", {
-      fontFamily: F_UI, fontSize: '11px', fontStyle: '500', color: '#c4b295',
+    this.add.text(LX, 262, "TWO BROTHERS. APPARENTLY WE'RE CHOSEN TO SAVE HUMANITY.", {
+      fontFamily: F_UI, fontSize: '15px', fontStyle: '600', color: '#cbbba1',
       stroke: '#070605', strokeThickness: 3
     }).setOrigin(0, 0.5).setDepth(10);
 
@@ -2345,7 +2350,7 @@ class MenuScene extends Phaser.Scene {
       ['SETTINGS', () => this._toast('Settings — coming soon.')],
       ['CREDITS',  () => this._toast('Credits — coming soon.')]
     ];
-    this._btns = items.map(([label, act], i) => this._button(LX, 404 + i * 46, label, act));
+    this._btns = items.map(([label, act], i) => this._button(LX, 348 + i * 56, label, act));
     this._cursor = 0;
     this._highlight(0);
 
@@ -2361,10 +2366,10 @@ class MenuScene extends Phaser.Scene {
     });
     this.input.on('pointerdown', () => Sfx.ensure());
 
-    this._toastTxt = this.add.text(W / 2, 640, '', {
-      fontFamily: 'Courier New, monospace', fontSize: '16px', color: '#c93b2a',
+    this._toastTxt = this.add.text(86, 604, '', {
+      fontFamily: F_UI, fontSize: '17px', fontStyle: '600', color: '#c93b2a',
       stroke: '#0d0a08', strokeThickness: 4
-    }).setOrigin(0.5).setDepth(10).setAlpha(0);
+    }).setOrigin(0, 0.5).setDepth(10).setAlpha(0);
 
     this.cameras.main.fadeIn(500, 0, 0, 0);
   }
@@ -2399,13 +2404,13 @@ class MenuScene extends Phaser.Scene {
   }
 
   _button(x, y, label, act) {
-    const txt = this.add.text(x + 18, y, label, {
-      fontFamily: F_UI, fontSize: '20px', fontStyle: '700', color: '#f2b13c',
-      stroke: '#070605', strokeThickness: 4
+    const txt = this.add.text(x + 26, y, label, {
+      fontFamily: F_UI, fontSize: '29px', fontStyle: '600', color: '#f2b13c',
+      stroke: '#070605', strokeThickness: 5
     }).setOrigin(0, 0.5).setDepth(10).setInteractive({ useHandCursor: true });
     // a caret marks the row instead of a centred underline
     const rule = this.add.text(x, y, '▸', {
-      fontFamily: F_UI, fontSize: '16px', color: '#f2b13c'
+      fontFamily: F_UI, fontSize: '22px', color: '#f2b13c'
     }).setOrigin(0, 0.5).setDepth(10).setAlpha(0);
     const btn = { txt, rule, act };
 
@@ -2460,12 +2465,27 @@ class CharSelectScene extends Phaser.Scene {
       const bg = this.add.image(W / 2, H / 2, 'scene_bunker').setDepth(-20);
       bg.setScale(Math.max(W / bg.width, H / bg.height)).setTint(0x4a4038);
     }
-    this.add.rectangle(W / 2, H / 2, W, H, 0x0a0807, 0.62).setDepth(-10);
+    this.add.rectangle(W / 2, H / 2, W, H, 0x0a0807, 0.5).setDepth(-10);
 
-    this.add.text(W / 2, 62, 'SELECT YOUR CHARACTER', {
-      fontFamily: F_UI, fontSize: '30px', fontStyle: '900', color: '#eadfcb',
+    const head = this.add.text(W / 2, 68, 'SELECT YOUR CHARACTER', {
+      fontFamily: F_UI, fontSize: '34px', fontStyle: '700', color: '#f0e6d4',
       stroke: '#070605', strokeThickness: 6
     }).setOrigin(0.5);
+
+    // HUD dressing: rules running out from the heading with end ticks, and a
+    // scanline wash over the whole screen to read as a readout rather than a
+    // menu sitting on a photograph.
+    const deco = this.add.graphics().setDepth(1);
+    const hw = head.width / 2 + 26;
+    [[-1, W / 2 - hw], [1, W / 2 + hw]].forEach(([dir, from]) => {
+      deco.lineStyle(2, 0xf2b13c, 0.55);
+      deco.beginPath(); deco.moveTo(from, 68); deco.lineTo(from + dir * 230, 68); deco.strokePath();
+      deco.lineStyle(2, 0xf2b13c, 0.85);
+      deco.beginPath(); deco.moveTo(from + dir * 230, 58); deco.lineTo(from + dir * 230, 78); deco.strokePath();
+    });
+    const scan = this.add.graphics().setDepth(1);
+    scan.fillStyle(0x000000, 0.22);
+    for (let y = 0; y < H; y += 3) scan.fillRect(0, y, W, 1);
 
     this.slots = [
       this._slot(370, 390, 'PLAYER 1', 'ETERWOLF', 'eterwolf', true),
@@ -2495,37 +2515,65 @@ class CharSelectScene extends Phaser.Scene {
     this.input.keyboard.on('keydown-SPACE', () => this._confirm());
   }
 
+  // An angular plate with the corners cut off, plus brackets that light up on
+  // the active slot — closer to a targeting readout than a picture frame.
+  _plate(g, x, y, w, h, colour, alpha, fill) {
+    const c = 26, L = x - w / 2, R = x + w / 2, T = y - h / 2, B = y + h / 2;
+    const pts = [
+      { x: L + c, y: T }, { x: R - c, y: T }, { x: R, y: T + c }, { x: R, y: B - c },
+      { x: R - c, y: B }, { x: L + c, y: B }, { x: L, y: B - c }, { x: L, y: T + c }
+    ];
+    if (fill != null) { g.fillStyle(fill, 0.9); g.fillPoints(pts, true); }
+    g.lineStyle(2, colour, alpha);
+    g.beginPath();
+    g.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) g.lineTo(pts[i].x, pts[i].y);
+    g.closePath();
+    g.strokePath();
+  }
+
+  _brackets(g, x, y, w, h, colour, alpha) {
+    const L = x - w / 2, R = x + w / 2, T = y - h / 2, B = y + h / 2, a = 34;
+    g.lineStyle(4, colour, alpha);
+    [[L, T, 1, 1], [R, T, -1, 1], [L, B, 1, -1], [R, B, -1, -1]].forEach(([px, py, dx, dy]) => {
+      g.beginPath(); g.moveTo(px + dx * a, py); g.lineTo(px, py);
+      g.lineTo(px, py + dy * a); g.strokePath();
+    });
+  }
+
   _slot(x, y, role, name, id, unlocked) {
     const BW = 330, BH = 430;
-    const panel = this.add.rectangle(x, y, BW, BH, 0x140f0b, 0.9).setStrokeStyle(2, 0x3a3028);
-    this.add.text(x, y - BH / 2 + 24, role, {
-      fontFamily: F_UI, fontSize: '13px', fontStyle: '700', color: '#8a6f4a'
-    }).setOrigin(0.5);
+    const panel = this.add.graphics().setDepth(2);
+    this.add.text(x, y - BH / 2 + 26, role, {
+      fontFamily: F_UI, fontSize: '15px', fontStyle: '700', color: '#8a6f4a'
+    }).setOrigin(0.5).setDepth(3);
 
     // The 8-direction turntable is the idle stance here: it reads as the
     // character presenting themselves rather than standing in profile.
+    // Above the plate: the plate is a filled shape, so anything left on the
+    // default layer ends up painted over and the character vanishes into it.
     let art = null;
     if (this.anims.exists('turn-' + id)) {
-      art = this.add.sprite(x, y + 150, `rot_${id}_0`).setOrigin(0.5, 1);
+      art = this.add.sprite(x, y + 150, `rot_${id}_0`).setOrigin(0.5, 1).setDepth(3);
       art.play('turn-' + id);
       art.setScale(Math.min(250 / art.width, 320 / art.height));
     }
 
-    const label = this.add.text(x, y + BH / 2 - 32, name, {
-      fontFamily: F_UI, fontSize: '21px', fontStyle: '700', color: '#f2b13c',
+    const label = this.add.text(x, y + BH / 2 - 34, name, {
+      fontFamily: F_UI, fontSize: '27px', fontStyle: '700', color: '#f2b13c',
       stroke: '#070605', strokeThickness: 5
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setDepth(4);
 
     let lock = null;
     if (!unlocked) {
-      lock = this.add.text(x, y - 24, 'LOCKED', {
-        fontFamily: F_UI, fontSize: '17px', fontStyle: '700', color: '#7d6a55',
+      lock = this.add.text(x, y - 24, '\u25A0 LOCKED', {
+        fontFamily: F_UI, fontSize: '19px', fontStyle: '700', color: '#8a7660',
         stroke: '#070605', strokeThickness: 6
-      }).setOrigin(0.5);
+      }).setOrigin(0.5).setDepth(4);
     }
 
     const zone = this.add.zone(x, y, BW, BH).setInteractive({ useHandCursor: true });
-    const self = { panel, art, label, lock, unlocked, x, y };
+    const self = { panel, art, label, lock, unlocked, x, y, w: BW, h: BH };
     zone.on('pointerover', () => {
       this._cursor = this.slots.indexOf(self);
       Sfx.ensure(); Sfx.hover(); this._paint();
@@ -2537,7 +2585,13 @@ class CharSelectScene extends Phaser.Scene {
   _paint() {
     this.slots.forEach((s, i) => {
       const on = i === this._cursor;
-      s.panel.setStrokeStyle(on ? 3 : 2, on ? (s.unlocked ? 0xf2b13c : 0x8a5a3a) : 0x3a3028);
+      const edge = on ? (s.unlocked ? 0xf2b13c : 0xa5673c) : 0x4a3d30;
+      s.panel.clear();
+      this._plate(s.panel, s.x, s.y, s.w, s.h, edge, on ? 1 : 0.7, 0x140f0b);
+      if (on) {
+        this._plate(s.panel, s.x, s.y, s.w - 10, s.h - 10, edge, 0.25);
+        this._brackets(s.panel, s.x, s.y, s.w + 12, s.h + 12, edge, 0.95);
+      }
       s.label.setColor(on ? '#fff2c8' : (s.unlocked ? '#f2b13c' : '#6b5a48'));
       // A locked character is dimmed but still legible — you should be able to
       // see who is coming, so the tint darkens instead of fading them out.

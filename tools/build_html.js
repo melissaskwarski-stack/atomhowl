@@ -128,19 +128,19 @@ for (const [key, candidates] of Object.entries(MEDIA_SRC)) {
 const mediaBlock = `/* Streamed media paths */ window.MEDIA = ${JSON.stringify(media)};`;
 
 // ---------- UI typeface ----------
-// Orbitron ships inline as base64: a canvas cannot draw with a face the
+// The UI face ships inline as base64: a canvas cannot draw with a face the
 // document has not loaded, and a webfont URL would not resolve on file://.
-// One variable woff2 (~12KB) covers every weight the UI asks for.
+// One variable woff2 covers every weight the UI asks for.
 let fontFace = '';
-const FONT = p('public/assets/fonts/orbitron.woff2');
+const FONT = p('public/assets/fonts/chakrapetch.woff2');
 if (fs.existsSync(FONT)) {
   const b64 = fs.readFileSync(FONT).toString('base64');
   fontFace =
-    `@font-face{font-family:'Orbitron';font-style:normal;font-weight:400 900;` +
+    `@font-face{font-family:'AtomUI';font-style:normal;font-weight:400 900;` +
     `font-display:block;src:url(data:font/woff2;base64,${b64}) format('woff2');}`;
-  console.log(`font "Orbitron" <- ${path.relative(ROOT, FONT)} (${Math.round(b64.length / 1024)}KB inline)`);
+  console.log(`font "AtomUI" <- ${path.relative(ROOT, FONT)} (${Math.round(b64.length / 1024)}KB inline)`);
 } else {
-  console.log('font "Orbitron" MISSING — UI falls back to a system sans');
+  console.log('font "AtomUI" MISSING — UI falls back to a system sans');
 }
 
 // ---------- assemble ----------
