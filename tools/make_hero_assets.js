@@ -42,6 +42,15 @@ const SRC = {
 // chosen by comparing the wrap discontinuity against the in-loop motion
 // (tools note: run 4 scored 1.12, pistol 7 scored 1.00 — lower is smoother).
 const LOOP_FROM = { run: 4, runW: 4, guitar: 4, pistol: 7 };
+
+// Playing the guitar is an upper-body action, but the render has him shifting
+// his weight foot to foot, which looks wrong once the clip is looping on the
+// spot. Everything below this fraction of his height is pinned to the first
+// frame of the loop, so only his torso, arms and the instrument move. The seam
+// sits at the waist, which the motion profile shows is the quietest band —
+// putting it anywhere busier would show as a shear.
+const FREEZE_BELOW = { guitar: 0.52 };
+const FREEZE_FEATHER = 12;
 const OUT = path.join(ROOT, 'build/ew_assets.js');
 
 // ---------- GIF decode (disposal-aware) ----------
@@ -121,6 +130,39 @@ for (const [name, rel] of Object.entries(SRC)) {
     (stripped ? '  matte removed' : '  (alpha present)'));
 }
 if (!clips.idle || !clips.run) { console.error('need idle + run east'); process.exit(1); }
+
+for (const [name, frac] of Object.entries(FREEZE_BELOW)) {
+  const d = clips[name];
+  if (!d) continue;
+  const from = LOOP_FROM[name] || 0;
+  const b = d.boxes[from];
+  const seam = Math.round(b.minY + (b.maxY - b.minY + 1) * frac);
+  const base = d.frames[from];
+  for (let i = from + 1; i < d.frames.length; i++) {
+    const f = d.frames[i];
+    for (let y = seam; y < d.H; y++) {
+      const w = Math.min(1, (y - seam) / FREEZE_FEATHER);
+      for (let x = 0; x < d.W; x++) {
+        const k = (y * d.W + x) * 4;
+        for (let c = 0; c < 4; c++) f[k + c] = Math.round(f[k + c] * (1 - w) + base[k + c] * w);
+      }
+    }
+  }
+  // Every frame is cut against its own bounds and re-centred, so a torso that
+  // changes width would slide the pinned legs anyway. The loop frames are
+  // given ONE shared box, which is what actually holds them still.
+  d.boxes = d.frames.map(fr => bbox(fr, d.W, d.H));   // silhouette changed
+  const loop = d.boxes.slice(from);
+  const shared = {
+    minX: Math.min.apply(null, loop.map(v => v.minX)),
+    maxX: Math.max.apply(null, loop.map(v => v.maxX)),
+    minY: Math.min.apply(null, loop.map(v => v.minY)),
+    maxY: Math.max.apply(null, loop.map(v => v.maxY))
+  };
+  for (let i = from; i < d.boxes.length; i++) d.boxes[i] = shared;
+  console.log(`${name}: legs pinned below y${seam} from frame ${from}, ` +
+    `loop shares box ${shared.maxX - shared.minX + 1}x${shared.maxY - shared.minY + 1}`);
+}
 
 // ---------- uniform, feet-anchored canvas ----------
 // One canvas for every clip so the sprite never jumps when the animation

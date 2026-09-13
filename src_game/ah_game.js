@@ -735,6 +735,9 @@ class BootScene extends Phaser.Scene {
       for (const [n, frames] of Object.entries(window.UIART.rotations || {})) {
         frames.forEach((uri, i) => this.load.image(`rot_${n}_${i}`, uri));
       }
+      for (const [n, frames] of Object.entries(window.UIART.walks || {})) {
+        frames.forEach((uri, i) => this.load.image(`cwalk_${n}_${i}`, uri));
+      }
     }
   }
 
@@ -807,6 +810,7 @@ class BootScene extends Phaser.Scene {
       const keys = Object.keys(window.UIART.panels || {}).map(s => 'ui_panel_' + s);
       for (const n of Object.keys(window.UIART.portraits || {})) keys.push('portrait_' + n, 'portrait_' + n + '_closed');
       for (const [n, f] of Object.entries(window.UIART.rotations || {})) f.forEach((_, i) => keys.push(`rot_${n}_${i}`));
+      for (const [n, f] of Object.entries(window.UIART.walks || {})) f.forEach((_, i) => keys.push(`cwalk_${n}_${i}`));
       for (const k of keys) {
         if (this.textures.exists(k)) this.textures.get(k).setFilter(Phaser.Textures.FilterMode.LINEAR);
       }
@@ -816,6 +820,14 @@ class BootScene extends Phaser.Scene {
           key: 'turn-' + n,
           frames: f.map((_, i) => ({ key: `rot_${n}_${i}` })),
           frameRate: 5, repeat: -1
+        });
+      }
+      // walk cycles for the AI companion
+      for (const [n, f] of Object.entries(window.UIART.walks || {})) {
+        this.anims.create({
+          key: 'cwalk-' + n,
+          frames: f.map((_, i) => ({ key: `cwalk_${n}_${i}` })),
+          frameRate: 10, repeat: -1
         });
       }
     }
@@ -2103,7 +2115,10 @@ function makeWalker(scene, x, groundY, targetH) {
   const H = targetH || 190;
   let p;
   if (window.EW) {
-    p = scene.physics.add.sprite(x, groundY - 140, 'ew_idle_0');
+    // Dropped in from a height that scales with him: a fixed offset put a
+    // taller character's feet inside the floor slab, and arcade separation
+    // then pushed him out through the BOTTOM and he fell out of the room.
+    p = scene.physics.add.sprite(x, groundY - H * 0.75, 'ew_idle_0');
     const B = window.EW.body;
     p.body.setSize(B.w, B.h).setOffset(B.x, B.y);
     p.setScale(ewScale(H, H / 224));
@@ -2157,35 +2172,41 @@ const IDLE_GUITAR_MS = 5000;
 // single side-on pose exists for him so far, so he is a static sprite that
 // flips to face his travel direction rather than an animated walker — he
 // trails to a fixed gap and stops short rather than crowding.
-const FOLLOW_GAP   = 150;   // how far behind he settles
-const FOLLOW_RUN   = 320;   // his top speed closing the gap
+const FOLLOW_GAP   = 230;   // how far behind he settles
+const FOLLOW_RUN   = 360;   // his top speed closing the gap
 // He walks a lane further back than his brother, so he is staged for distance
 // rather than pasted at the same depth: slightly smaller, standing slightly
 // higher up the floor, and a shade less contrasty — the same cues the painted
 // backdrops use.
 const FOLLOW_SCALE = 0.86;
 const FOLLOW_LIFT  = 16;    // how far up the floor his lane sits
-// Radians of gait per pixel covered. Tuned so one stride lands about a leg
-// length apart, which is what keeps the cadence believable at any speed.
-const STEP_PER_PX  = 0.045;
+// The walk art is drawn for this speed, so playback is scaled against it to
+// keep his feet planted rather than skating.
+const WALK_REF_SPEED = 235;
 
 function makeFollower(scene, x, groundY, targetH) {
-  if (!scene.textures.exists('rot_wolffel_2')) return null;
+  // The standing pose comes from the walk clip, not the turntable. The two are
+  // cut to different canvases, so mixing them made him grow ~8px the moment he
+  // stopped; taking both from the same clip keeps his height fixed.
+  const standKey = scene.textures.exists('cwalk_wolffel_0') ? 'cwalk_wolffel_0' : 'rot_wolffel_2';
+  if (!scene.textures.exists(standKey)) return null;
   const y = groundY - FOLLOW_LIFT;
-  const f = scene.add.sprite(x, y, 'rot_wolffel_2').setOrigin(0.5, 1).setDepth(8);
-  const src = scene.textures.get('rot_wolffel_2').getSourceImage();
-  f.setScale((targetH || 190) * FOLLOW_SCALE / src.height);
+  const f = scene.add.sprite(x, y, standKey).setOrigin(0.5, 1).setDepth(8);
+  f.setScale((targetH || 190) * FOLLOW_SCALE / scene.textures.get(standKey).getSourceImage().height);
   f.setTint(0xbfb7ad);
   f._facing = 1;
+  f._standKey = standKey;
   f._baseY = y;
-  f._phase = 0;
-  f._gait = 0;
   return f;
 }
 
 function driveFollower(f, lead, dt) {
   if (!f) return;
-  const behind = lead.x - lead._facing * FOLLOW_GAP;
+  // Kept inside the level: near either end the spot behind his brother falls
+  // outside the world, and he would trudge off into nothing trying to reach it.
+  const edge = lead.scene && lead.scene.worldW ? lead.scene.worldW : 0;
+  let behind = lead.x - lead._facing * FOLLOW_GAP;
+  if (edge) behind = Math.max(40, Math.min(edge - 40, behind));
   const gap = behind - f.x;
   let moved = 0;
   if (Math.abs(gap) > 8) {
@@ -2194,19 +2215,20 @@ function driveFollower(f, lead, dt) {
     f._facing = Math.sign(moved);
   }
   f.setFlipX(f._facing < 0);
+  f.y = f._baseY;
 
-  // Only one mid-stride pose exists for him, so the walk has to be carried by
-  // the body rather than the legs. The gait phase advances with ground covered
-  // rather than with a clock, so cadence tracks speed instead of drifting out
-  // of step; he rises twice per cycle as a real gait does, leans into travel
-  // and rolls slightly with each step. The whole thing eases in and out so
-  // setting off and stopping are not a snap.
-  f._phase += Math.abs(moved) * STEP_PER_PX;
-  const target = Math.abs(moved) > 0.1 ? 1 : 0;
-  f._gait += (target - f._gait) * Math.min(1, dt * 9);
-
-  f.y = f._baseY - Math.abs(Math.sin(f._phase)) * 6 * f._gait;
-  f.setRotation((f._facing * 0.03 + Math.sin(f._phase * 0.5) * 0.015) * f._gait);
+  // Real walk cycle when he is covering ground, standing frame when he is not.
+  // Playback is scaled by how fast he is actually moving, so closing a long gap
+  // steps quicker instead of skating, and settling in slows him down.
+  const speed = dt > 0 ? Math.abs(moved) / dt : 0;
+  const walking = speed > 12;
+  if (walking && f.scene.anims.exists('cwalk-wolffel')) {
+    if (f.anims.getName() !== 'cwalk-wolffel') f.play('cwalk-wolffel');
+    f.anims.timeScale = Math.max(0.65, Math.min(2.1, speed / WALK_REF_SPEED));
+  } else if (!walking) {
+    if (f.anims.isPlaying) f.anims.stop();
+    if (f.texture.key !== f._standKey) f.setTexture(f._standKey);
+  }
 }
 
 function driveWalker(scene, p, keys, onGround) {
@@ -2531,7 +2553,7 @@ const INTRO_LINES = [
   { who: 'ETERWOLF', text: "Do you remember how we got here?" },
   { who: 'WOLFFEL',  text: "No..." },
   { who: 'WOLFFEL',  text: "..." },
-  { who: 'WOLFFEL',  text: "..." },
+  { who: 'ETERWOLF', text: "..." },
   { who: 'ETERWOLF', text: "Ok, let's get out." },
   { who: 'ETERWOLF', text: "Looks like we're in some sort of bunker." },
   { who: 'ETERWOLF', text: "Let's look around for a way to get out." }
@@ -2622,9 +2644,9 @@ class IntroDialogueScene extends Phaser.Scene {
 
     // The line sits on dark scratched metal, so it gets a soft drop shadow to
     // lift it off the plate — a stroke would thicken type this small.
-    this._body = this.add.text(x + w / 2, y + h * 0.42, '', {
-      fontFamily: F_TXT, fontSize: '17px', color: '#efe6d6', align: 'center',
-      wordWrap: { width: w * 0.72 }, lineSpacing: 7
+    this._body = this.add.text(x + w / 2, y + h * 0.38, '', {
+      fontFamily: F_TXT, fontSize: '22px', color: '#f3ecdf', align: 'center',
+      wordWrap: { width: w * 0.76 }, lineSpacing: 6
     }).setOrigin(0.5, 0).setDepth(22);
     this._body.setShadow(0, 2, '#000000', 4, false, true);
 
@@ -2759,21 +2781,32 @@ class WalkScene extends Phaser.Scene {
   buildWalk(cfg) {
     this.cfg = cfg;
     const H = 720;
-    const groundY = cfg.groundY;
+    let groundY = cfg.groundY;
     let WW = cfg.worldW;
+    // Painting the backdrop larger than the view is what makes a room reveal
+    // itself as you walk instead of sitting there whole: the world grows with
+    // the art, so the camera has further to travel. The extra height is taken
+    // off the TOP, since the floor has to stay in frame and the ceiling is the
+    // part nobody needs to see.
+    const zoom = cfg.bgZoom || 1;
 
     this.cameras.main.setBackgroundColor('#0a0807');
 
     // background art scaled to fill 720 height; world width follows the art
     if (this.textures.exists(cfg.bgKey)) {
       const img = this.add.image(0, 0, cfg.bgKey).setOrigin(0, 0).setDepth(-20);
-      const s = H / img.height;
+      const s = (H / img.height) * zoom;
       img.setScale(s);
+      img.y = H - img.height * s;
       this.bgWidth = Math.round(img.width * s);
       if (cfg.worldW === 'auto') WW = this.bgWidth;
       if (this.bgWidth < WW) {
-        this.add.image(this.bgWidth, 0, cfg.bgKey).setOrigin(0, 0).setDepth(-20).setScale(s).setFlipX(true);
+        this.add.image(this.bgWidth, img.y, cfg.bgKey)
+          .setOrigin(0, 0).setDepth(-20).setScale(s).setFlipX(true);
       }
+      // The floor line is given as a fraction of the art so it follows the
+      // zoom instead of needing a new pixel value every time it changes.
+      if (cfg.groundFrac != null) groundY = Math.round(img.y + img.height * s * cfg.groundFrac);
     } else {
       if (cfg.worldW === 'auto') WW = 2200;
       if (cfg.drawFallback) cfg.drawFallback.call(this, WW);
@@ -2792,9 +2825,11 @@ class WalkScene extends Phaser.Scene {
     const data = this.sys.settings.data || {};
     const spawnFrac = data.spawnXFrac != null ? data.spawnXFrac : cfg.startXFrac;
     const startX = spawnFrac != null ? spawnFrac * WW : (cfg.startX || 160);
-    this.player = makeWalker(this, startX, groundY, cfg.charH);
+    // The cast scales with the room, or he would shrink as the art grows.
+    const charH = (cfg.charH || 190) * zoom;
+    this.player = makeWalker(this, startX, groundY, charH);
     // Brother in tow — absent once the horde starts, which is a separate scene.
-    this.follower = makeFollower(this, startX - FOLLOW_GAP, groundY, cfg.charH);
+    this.follower = makeFollower(this, Math.max(40, startX - FOLLOW_GAP), groundY, charH);
     this._buildBeats(cfg);
     this.physics.add.collider(this.player, floor);
     this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
@@ -3007,8 +3042,10 @@ class BunkerScene extends WalkScene {
     this.buildWalk({
       bgKey: 'scene_bunker',
       // bunker_wide.png is painted larger than the other backdrops — the bunk
-      // frame and blast door put a standing man at roughly 280px.
-      worldW: 'auto', groundY: 628, startXFrac: 0.06, charH: 280,
+      // frame and blast door put a standing man at roughly 280px. It is also
+      // shown zoomed in, so the room is walked through and revealed rather
+      // than taken in at a glance; the floor line follows the zoom by fraction.
+      worldW: 'auto', groundFrac: 0.872, startXFrac: 0.06, charH: 280, bgZoom: 1.35,
       title: 'THE BUNKER — quarantine shelter',
       beats: [
         { at: 0,    tip: 'A / D  TO MOVE     SHIFT  TO RUN' },

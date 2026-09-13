@@ -24,6 +24,9 @@ const PORTRAITS = {
   wolffel:  { open: 'portrait_wolffel_open.png',  closed: 'portrait_wolffel_closed.png' }
 };
 const ROTATIONS = { eterwolf: 'rotation_eterwolf.gif', wolffel: 'rotation_wolffel.gif' };
+// Walk cycles for the AI companion. Cut the same way as the turntables so the
+// two sets share a floor line and he does not hop when he starts moving.
+const WALKS = { wolffel: 'Idle_v3_wolffel_walk_east.gif' };
 // Two frames of the same bar: the name plate sits left on one and right on the
 // other, so the speaker can take the one whose plate is clear of them.
 const PANELS = { l: 'dialogue_panel.png', r: 'dialogue_panel_r.png' };
@@ -231,39 +234,48 @@ function decodeGif(file) {
   return { W, H, frames };
 }
 
-const rotations = {};
-for (const [name, file] of Object.entries(ROTATIONS)) {
-  if (!fs.existsSync(A(file))) { console.log('MISSING', file); continue; }
-  const d = decodeGif(A(file));
-
-  // One canvas across every angle, anchored at the feet, so the character
-  // turns in place instead of bobbing as the silhouette width changes.
-  const boxes = d.frames.map(f => {
-    const png = { width: d.W, height: d.H, data: f };
-    return alphaBox(png, 0, d.H);
-  });
+// One canvas across every frame of a clip, anchored at the feet, so the figure
+// turns or strides in place instead of bobbing as its silhouette changes.
+function cutClip(file) {
+  const d = decodeGif(file);
+  const boxes = d.frames.map(f => alphaBox({ width: d.W, height: d.H, data: f }, 0, d.H));
   const cw = Math.max(...boxes.map(b => b.maxX - b.minX + 1)) + 4;
   const ch = Math.max(...boxes.map(b => b.maxY - b.minY + 1)) + 4;
-
-  rotations[name] = d.frames.map((f, i) => {
+  const out = d.frames.map((f, i) => {
     const b = boxes[i];
     const w = b.maxX - b.minX + 1, h = b.maxY - b.minY + 1;
-    const out = new PNG({ width: cw, height: ch });
+    const png = new PNG({ width: cw, height: ch });
     const ox = Math.floor((cw - w) / 2), oy = ch - h - 2;
     for (let y = 0; y < h; y++)
       for (let x = 0; x < w; x++) {
         const si = ((b.minY + y) * d.W + (b.minX + x)) * 4;
         if (f[si + 3] <= 30) continue;
         const di = ((oy + y) * cw + (ox + x)) * 4;
-        out.data[di] = f[si]; out.data[di + 1] = f[si + 1];
-        out.data[di + 2] = f[si + 2]; out.data[di + 3] = f[si + 3];
+        png.data[di] = f[si]; png.data[di + 1] = f[si + 1];
+        png.data[di + 2] = f[si + 2]; png.data[di + 3] = f[si + 3];
       }
     // These are shown larger than they are drawn, so the same flood is needed
     // here or the linear upscale would drag black out of the empty pixels.
     return 'data:image/png;base64,' +
-      PNG.sync.write(cleanCutout(out, 0)).toString('base64');
+      PNG.sync.write(cleanCutout(png, 0)).toString('base64');
   });
-  console.log(`turntable ${name}: ${d.frames.length} frames @ ${cw}x${ch}`);
+  return { frames: out, cw, ch };
+}
+
+const rotations = {};
+for (const [name, file] of Object.entries(ROTATIONS)) {
+  if (!fs.existsSync(A(file))) { console.log('MISSING', file); continue; }
+  const c = cutClip(A(file));
+  rotations[name] = c.frames;
+  console.log(`turntable ${name}: ${c.frames.length} frames @ ${c.cw}x${c.ch}`);
+}
+
+const walks = {};
+for (const [name, file] of Object.entries(WALKS)) {
+  if (!fs.existsSync(A(file))) { console.log('MISSING', file); continue; }
+  const c = cutClip(A(file));
+  walks[name] = c.frames;
+  console.log(`walk ${name}: ${c.frames.length} frames @ ${c.cw}x${c.ch}`);
 }
 
 // ---------- dialogue frames ----------
@@ -277,6 +289,6 @@ for (const [side, file] of Object.entries(PANELS)) {
 }
 
 fs.writeFileSync(OUT, '/* UI art */ window.UIART = ' +
-  JSON.stringify({ panels, portraits, rotations }) + ';\n');
+  JSON.stringify({ panels, portraits, rotations, walks }) + ';\n');
 fs.rmSync(TMP, { recursive: true, force: true });
 console.log('wrote', OUT, Math.round(fs.statSync(OUT).size / 1024) + 'KB');
