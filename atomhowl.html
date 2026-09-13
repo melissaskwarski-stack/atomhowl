@@ -2210,9 +2210,15 @@ const FOLLOW_DEAD  = 3;     // slack once stopped, so he does not jitter in plac
 // backdrops use.
 const FOLLOW_SCALE = 0.86;
 const FOLLOW_LIFT  = 16;    // how far up the floor his lane sits
-// The walk art is drawn for this speed, so playback is scaled against it to
-// keep his feet planted rather than skating.
-const WALK_REF_SPEED = 235;
+// Cadence is derived from the stride in the art rather than picked by eye. One
+// full cycle of his walk carries him a bit under his own height (measured off
+// the frames: a 127px step on a 222px figure), so the animation is played at
+// whatever rate makes the cycle cover exactly that much ground at his current
+// speed. Get this wrong and his legs churn faster than the floor moves, which
+// is what makes a character look like he is shuffling rather than walking.
+const WALK_FRAMES   = 8;
+const WALK_BASE_FPS = 10;     // the rate the clip is registered at
+const WALK_STRIDE   = 0.85;   // ground per cycle, as a fraction of his height
 
 function makeFollower(scene, x, groundY, targetH) {
   // The standing pose comes from the walk clip, not the turntable. The two are
@@ -2267,10 +2273,16 @@ function driveFollower(f, lead) {
   const walking = speed > 18;
   if (walking && f.scene.anims.exists('cwalk-wolffel')) {
     if (f.anims.getName() !== 'cwalk-wolffel') f.play('cwalk-wolffel');
-    f.anims.timeScale = Math.max(0.65, Math.min(2.1, speed / WALK_REF_SPEED));
+    const cycleGround = WALK_STRIDE * f.displayHeight;          // px he should cover per cycle
+    const wantFps = (speed / cycleGround) * WALK_FRAMES;
+    f.anims.timeScale = Math.max(0.4, Math.min(2.4, wantFps / WALK_BASE_FPS));
   } else if (!walking) {
     if (f.anims.isPlaying) f.anims.stop();
     if (f.texture.key !== f._standKey) f.setTexture(f._standKey);
+    // Caught up: turn and face his brother instead of staring off the way he
+    // happened to arrive.
+    f._facing = lead.x >= f.x ? 1 : -1;
+    f.setFlipX(f._facing < 0);
   }
 }
 
