@@ -2200,8 +2200,10 @@ const IDLE_GUITAR_MS = 5000;
 // single side-on pose exists for him so far, so he is a static sprite that
 // flips to face his travel direction rather than an animated walker — he
 // trails to a fixed gap and stops short rather than crowding.
-const FOLLOW_GAP   = 230;   // how far behind he settles
-const FOLLOW_RUN   = 360;   // his top speed closing the gap
+const FOLLOW_GAP   = 200;   // how far behind he settles
+const FOLLOW_RUN   = 480;   // his top speed closing the gap, enough to keep up a sprint
+const FOLLOW_GAIN  = 8;     // how hard he chases the gap; sets how far he lags in motion
+const FOLLOW_DEAD  = 3;     // slack once stopped, so he does not jitter in place
 // He walks a lane further back than his brother, so he is staged for distance
 // rather than pasted at the same depth: slightly smaller, standing slightly
 // higher up the floor, and a shade less contrasty — the same cues the painted
@@ -2222,34 +2224,47 @@ function makeFollower(scene, x, groundY, targetH) {
   const f = scene.add.sprite(x, y, standKey).setOrigin(0.5, 1).setDepth(8);
   f.setScale((targetH || 190) * FOLLOW_SCALE / scene.textures.get(standKey).getSourceImage().height);
   f.setTint(0xbfb7ad);
+  // Driven by the physics step rather than by hand. Phaser clamps and smooths
+  // the frame delta, so integrating his position against it made him crawl
+  // whenever the frame rate dipped — he fell behind and stood still while his
+  // brother walked off. On the physics step he moves in real time, exactly as
+  // the player does. He collides with nothing; gravity is off and y is fixed.
+  scene.physics.add.existing(f);
+  f.body.setAllowGravity(false);
+  f.body.setImmovable(true);
   f._facing = 1;
   f._standKey = standKey;
   f._baseY = y;
   return f;
 }
 
-function driveFollower(f, lead, dt) {
-  if (!f) return;
+function driveFollower(f, lead) {
+  if (!f || !f.body) return;
   // Kept inside the level: near either end the spot behind his brother falls
   // outside the world, and he would trudge off into nothing trying to reach it.
   const edge = lead.scene && lead.scene.worldW ? lead.scene.worldW : 0;
   let behind = lead.x - lead._facing * FOLLOW_GAP;
   if (edge) behind = Math.max(40, Math.min(edge - 40, behind));
   const gap = behind - f.x;
-  let moved = 0;
-  if (Math.abs(gap) > 8) {
-    moved = Math.sign(gap) * Math.min(Math.abs(gap), FOLLOW_RUN * dt);
-    f.x += moved;
-    f._facing = Math.sign(moved);
-  }
+
+  // Chase the gap proportionally rather than snapping onto the target. Snapping
+  // meant that while his brother walked he sat inside the slack, jerked forward
+  // the moment he fell out of it, then sat still again — so his walk cycle was
+  // starting and stopping several times a second and read as no animation at
+  // all. Easing gives him a small steady lag and one continuous stride.
+  const v = Math.abs(gap) > FOLLOW_DEAD
+    ? Math.max(-FOLLOW_RUN, Math.min(FOLLOW_RUN, gap * FOLLOW_GAIN))
+    : 0;
+  f.body.setVelocityX(v);
+  if (Math.abs(v) > 1) f._facing = Math.sign(v);
   f.setFlipX(f._facing < 0);
   f.y = f._baseY;
 
   // Real walk cycle when he is covering ground, standing frame when he is not.
   // Playback is scaled by how fast he is actually moving, so closing a long gap
   // steps quicker instead of skating, and settling in slows him down.
-  const speed = dt > 0 ? Math.abs(moved) / dt : 0;
-  const walking = speed > 12;
+  const speed = Math.abs(v);
+  const walking = speed > 18;
   if (walking && f.scene.anims.exists('cwalk-wolffel')) {
     if (f.anims.getName() !== 'cwalk-wolffel') f.play('cwalk-wolffel');
     f.anims.timeScale = Math.max(0.65, Math.min(2.1, speed / WALK_REF_SPEED));
@@ -2982,7 +2997,7 @@ class WalkScene extends Phaser.Scene {
   update() {
     const onGround = this.player.body.blocked.down || this.player.body.touching.down;
     if (!this._transitioning) driveWalker(this, this.player, this.keys, onGround);
-    driveFollower(this.follower, this.player, this.game.loop.delta / 1000);
+    driveFollower(this.follower, this.player);
     this._runBeats();
 
     if (this.grain && this.game.loop.frame % 3 === 0) {
