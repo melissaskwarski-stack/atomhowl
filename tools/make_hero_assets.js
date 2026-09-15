@@ -78,6 +78,18 @@ const FREEZE_BELOW = { guitar: 0.52 };
 // silhouette, so both would slide if each frame were centred on its own bounds.
 const SHARE_X = ['jump', 'katana', 'katanaW', 'katanaF', 'esword', 'eswordF',
                  'crouch', 'crouchwalk'];
+
+// Bursts: the physics launches the instant the key goes down, so a clip that
+// opens on two or three frames of the character still standing reads as him
+// sliding upright before the animation catches up. Those frames are found by
+// measurement and dropped — the run's lean-in and the dash both spend a third
+// of their length standing there.
+// The value is how far into the clip's own peak movement a frame has to be
+// before it counts as committed; the run gets a harder gate than the dash
+// because its lean-in carries on accelerating for several frames after it
+// starts, and only the first couple are genuinely dead.
+const TRIM_LEADIN = { runin: 0.4, runinW: 0.4, dash: 0.25 };
+
 const FREEZE_FEATHER = 12;
 const OUT = path.join(ROOT, 'build/ew_assets.js');
 
@@ -119,6 +131,16 @@ for (const [name, frac] of Object.entries(FREEZE_BELOW)) {
     `loop shares box ${shared.maxX - shared.minX + 1}x${shared.maxY - shared.minY + 1}`);
 }
 
+for (const [name, gate] of Object.entries(TRIM_LEADIN)) {
+  const d = clips[name];
+  if (!d) continue;
+  const n = L.leadIn(d, gate);
+  if (!n) continue;
+  d.frames = d.frames.slice(n);
+  d.boxes = d.boxes.slice(n);
+  console.log(`${name}: dropped ${n} standing frame(s) off the front`);
+}
+
 L.shareX(clips, SHARE_X);
 
 // ---------- uniform, feet-anchored canvas ----------
@@ -132,12 +154,12 @@ const cut = L.makeCutter(CW, CH);
 // texture the game constructs the player sprite with — still resolves.
 const frames = {};
 const pool = (poolName, clip, mirror) => {
-  const keys = clips[clip].frames.map((_, i) => {
+  const d = clips[clip];
+  return d.frames.map((_, i) => {
     const k = `${poolName}_${i}`;
-    frames[k] = cut(clips[clip], i, mirror);
+    frames[k] = cut(d, i, mirror);
     return k;
   });
-  return keys;
 };
 const K = {
   idle:      pool('idle',      'idle',   false),
@@ -216,8 +238,10 @@ const mod = {
     walk:       A_(K.walk,      11),
     walkW:      A_(K.walkW,     11),
     // one-shot intros; each is chained into the matching loop below
-    runin:      A_(K.runin,     16, 0),
-    runinW:     A_(K.runinW,    16, 0),
+    // Lean-in, with the standing frames gone: it now covers the first stride
+    // instead of holding him upright for a third of a second.
+    runin:      A_(K.runin,     22, 0),
+    runinW:     A_(K.runinW,    22, 0),
     guitarin:   A_(K.guitarin,  11, 0),
     guitarinW:  A_(K.guitarinW, 11, 0),
     shootin:    A_(K.pistolin,  26, 0),   // snap the pistol out, not a slow draw
@@ -233,8 +257,10 @@ const mod = {
     runshootinW: A_(K.runshootinW, 15, 0),
     runshoot:   A_(K.runshoot,  15),   // settled run-and-fire cycle
     runshootW:  A_(K.runshootW, 15),
-    dash:       A_(K.dash,      16, 0),      // one burst, never loops
-    dashW:      A_(K.dashW,     16, 0),
+    // Six frames over the 290ms the dash actually lasts, so the clip ends as
+    // control comes back rather than playing on over a normal run.
+    dash:       A_(K.dash,      21, 0),
+    dashW:      A_(K.dashW,     21, 0),
 
     // ---- melee ----------------------------------------------------------
     // The katana clip is draw (0-5), slash with the arc (6-8), then a guard

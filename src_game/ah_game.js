@@ -2152,11 +2152,15 @@ class GameScene extends Phaser.Scene {
   dash() {
     const time = this.time.now;
     if (time < this.nextDashAt || this.dead) return;
-    this.nextDashAt = time + 900;
-    this.dashUntil = time + 260;       // invulnerability window
-    // The clip runs longer than the i-frames, so the animation gets its own
-    // window: tying it to dashUntil cut the dash off a third of the way in.
-    this.dashAnimUntil = time + 560;
+    // The dash lasts exactly as long as its own clip, so the burst ends on the
+    // frame the art ends on instead of playing over a normal run afterwards.
+    // Taking the length from the animation means the two cannot drift apart
+    // when the clip is recut.
+    const da = this.realHero && this.anims.get(heroAnim(this.hero, 'dash', this.facing));
+    const ms = da ? da.duration : 280;
+    this.nextDashAt = time + ms + 560;
+    this.dashUntil = time + ms;        // invulnerable for the whole burst
+    this.dashAnimUntil = time + ms;
     Sfx.ensure(); Sfx.dash();
 
     let dir = 0;

@@ -109,25 +109,76 @@ function shareX(clips, names, log) {
   }
 }
 
-// The canvas every frame of every clip is cut onto: wide and tall enough for
-// the largest silhouette, with a little margin.
+// The canvas every frame of every clip is cut onto.
+//
+// Height is not just the tallest silhouette. A frame sits `groundRow - maxY`
+// higher than the floor line (that is the whole point of anchoring per clip),
+// so the room it needs is its own height PLUS that lift — which comes out as
+// the distance from the clip's floor up to this frame's head. Sizing on height
+// alone would push a jump's apex off the top of the canvas and cut his head
+// off.
 function canvasFor(clips) {
   let CW = 0, CH = 0;
-  Object.values(clips).forEach(d => d.boxes.forEach(b => {
-    CW = Math.max(CW, b.maxX - b.minX + 1 + 6);
-    CH = Math.max(CH, b.maxY - b.minY + 1 + 4);
-  }));
+  Object.values(clips).forEach(d => {
+    const groundRow = Math.max.apply(null, d.boxes.map(v => v.maxY));
+    d._groundRow = groundRow;
+    d.boxes.forEach(b => {
+      CW = Math.max(CW, b.maxX - b.minX + 1 + 6);
+      CH = Math.max(CH, groundRow - b.minY + 1 + 4);
+    });
+  });
   return { CW, CH };
 }
 
-// Cut one frame onto the shared canvas: centred horizontally, feet on CH-2.
-// `mirror` bakes a west-facing copy, for characters with east-only art.
+// How many frames at the head of a clip are still the standing pose.
+//
+// The renders open on the character at rest and take two or three frames to
+// commit to the action. On screen the physics has already launched him, so
+// those frames read as sliding upright before the animation catches up. This
+// finds where the silhouette actually departs from frame 0 — measured, so it
+// still holds if the art is regenerated with a different lead-in.
+function leadIn(d, frac) {
+  const f0 = d.frames[0];
+  const diff = f => {
+    let s = 0;
+    for (let i = 3; i < f.length; i += 4) if (f[i] > 30 !== f0[i] > 30) s++;
+    return s;
+  };
+  const d0 = d.frames.map(diff);
+  const peak = Math.max.apply(null, d0);
+  if (!peak) return 0;
+  const gate = peak * (frac || 0.25);
+  for (let i = 0; i < d0.length; i++) if (d0[i] >= gate) return i;
+  return 0;
+}
+
+// Cut one frame onto the shared canvas: centred horizontally, and vertically
+// placed so the clip's own lowest point — its deepest ground contact — sits on
+// CH-2. `mirror` bakes a west-facing copy, for characters with east-only art.
+//
+// The vertical rule matters more than it looks. Pinning EVERY FRAME's lowest
+// pixel to that line, which is the obvious reading of "feet on the floor",
+// silently destroys any pose where the feet are not on the floor. A run has a
+// flight phase with both feet up; pinning the trailing boot to the ground
+// hauls the whole body down on those frames, and the head ends up bobbing 17px
+// frame to frame — a sewing machine, not a gait. A jump is worse: this art
+// draws it as a TUCK, the head holding still while the knees come up forty
+// pixels, and pinning the feet turns that into a mid-air squat.
+//
+// So the anchor is per CLIP, not per frame: one offset, taken from the frame
+// that reaches deepest, applied to all of them. Inside a clip the drawing keeps
+// exactly the vertical relationships the artist gave it — bob, tuck, lunge —
+// and between clips every ground contact still lands on the same line.
 function makeCutter(CW, CH) {
   return function cut(d, i, mirror) {
     const b = d.boxes[i];
     const w = b.maxX - b.minX + 1, h = b.maxY - b.minY + 1;
+    if (d._groundRow === undefined) {
+      d._groundRow = Math.max.apply(null, d.boxes.map(v => v.maxY));
+    }
     const out = new PNG({ width: CW, height: CH });
-    const ox = Math.floor((CW - w) / 2), oy = CH - h - 2;
+    const ox = Math.floor((CW - w) / 2);
+    const oy = (CH - h - 2) - (d._groundRow - b.maxY);
     for (let y = 0; y < h; y++)
       for (let x = 0; x < w; x++) {
         const si = ((b.minY + y) * d.W + (b.minX + x)) * 4;
@@ -142,4 +193,4 @@ function makeCutter(CW, CH) {
   };
 }
 
-module.exports = { decodeGif, stripMatte, bbox, loadClips, shareX, canvasFor, makeCutter, PNG };
+module.exports = { decodeGif, stripMatte, bbox, loadClips, shareX, canvasFor, makeCutter, leadIn, PNG };
