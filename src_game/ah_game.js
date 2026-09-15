@@ -716,7 +716,21 @@ const ACTION_FALLBACK = {
   guitar:   ['guitar', 'idle'],
   burger:   ['burger', 'idle'],
   walk:     ['walk', 'run', 'idle'],
-  run:      ['run', 'walk', 'idle']
+  run:      ['run', 'walk', 'idle'],
+  // the chain degrades to whatever swings the character does have
+  sword2:     ['sword2', 'sword', 'shoot', 'idle'],
+  sword3:     ['sword3', 'sword2', 'sword', 'idle'],
+  swordguard: ['swordguard', 'idle'],
+  deathblow:  ['deathblow', 'sword3', 'sword2', 'sword', 'idle'],
+  crouch:      ['crouch', 'idle'],
+  crouchwalk:  ['crouchwalk', 'crouch', 'walk', 'idle'],
+  akshoot:     ['akshoot', 'shoot', 'idle'],
+  akrunshoot:  ['akrunshoot', 'runshoot', 'akshoot', 'shoot', 'run', 'idle'],
+  // the draws, so a character without one simply skips straight to firing
+  shootin:     ['shootin', 'shoot', 'idle'],
+  akshootin:   ['akshootin', 'shootin', 'akshoot', 'shoot', 'idle'],
+  runshootin:  ['runshootin', 'runshoot', 'shootin', 'shoot', 'idle'],
+  akrunshootin: ['akrunshootin', 'akshootin', 'runshootin', 'akrunshoot', 'shoot', 'idle']
 };
 function heroHas(hero, action) { return !!(hero && hero.art.anims[action]); }
 function heroAction(hero, action) {
@@ -1238,6 +1252,12 @@ class GameScene extends Phaser.Scene {
     this.airSince = 0;
     this.landUntil = 0;
     this.restSince = 0;
+    this.weapon = 'pistol';
+    this.weaponOutUntil = 0;     // while now < this, it is already in his hand
+    this.weaponReadyAt = 0;      // the draw has to finish before the first shot
+    this.swordCombo = 0;
+    this.comboUntil = 0;
+    this.crouching = false;
     this._executing = false;     // scene instances are reused across restart()
     this.walkMode = false;       // X toggles; combat runs by default
     this.dropThrough = false;
@@ -1261,7 +1281,7 @@ class GameScene extends Phaser.Scene {
     this.physics.add.collider(this.pickups, this.solids);
 
     // ---------- input ----------
-    this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,SHIFT,F,R,M,J,K,Q');
+    this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,SHIFT,F,R,M,J,K,Q,E,X');
     this.input.mouse.disableContextMenu();
     const wake = () => Sfx.ensure();
     this.input.on('pointerdown', wake);
@@ -1276,6 +1296,7 @@ class GameScene extends Phaser.Scene {
     this.input.keyboard.on('keydown-J', () => this.swordAttack());
     this.input.keyboard.on('keydown-SHIFT', () => this.dash());
     this.input.keyboard.on('keydown-X', () => this.toggleWalk());
+    this.input.keyboard.on('keydown-E', () => this.swapWeapon());
     // --- test keys (for tuning, harmless to ship) ---
     this.input.keyboard.on('keydown-V', () => {   // V = spawn one of each enemy
       if (this.dead) return;
@@ -1323,6 +1344,8 @@ class GameScene extends Phaser.Scene {
     this.killText = this.add.text(1250, 44, '', tstyle).setOrigin(1, 0).setScrollFactor(0).setDepth(60);
     this.modeText = this.add.text(1250, 70, '', tstyle).setOrigin(1, 0).setScrollFactor(0).setDepth(60)
       .setColor('#9fc3d9').setAlpha(0);
+    this.weaponText = this.add.text(1250, 96, '', tstyle).setOrigin(1, 0).setScrollFactor(0).setDepth(60)
+      .setColor('#e0a24a').setAlpha(0.45);
 
     // Power-up HUD row: icons + count under the hearts
     const powDefs = [
@@ -1339,7 +1362,7 @@ class GameScene extends Phaser.Scene {
       this.powHudIcons[d.key] = { ic, lbl };
     });
     this.add.text(640, 702,
-      'A/D · W/Space jump ×2 · Shift dash · X walk · LMB fire · RMB/F sword · Q nuke · H horde · B boss · M mute',
+      'A/D · W jump ×2 · S crouch · Shift dash · X walk · LMB fire · E weapon · RMB/F sword · Q nuke · M mute',
       { fontFamily: 'Courier New, monospace', fontSize: '14px', color: '#8a6f4a' })
       .setOrigin(0.5, 1).setScrollFactor(0).setDepth(60).setAlpha(0.85);
 
@@ -1724,14 +1747,26 @@ class GameScene extends Phaser.Scene {
 
   // ================= COMBAT =================
   fireBullet(time, straight, surge) {
-    const cd = surge ? 55 : 150;
+    const W = WEAPONS[this.weapon] || WEAPONS.pistol;
+    // Drawing takes as long as the draw animation and no longer. The first
+    // shot waits for the weapon to actually be in his hand; after that it
+    // stays out, so holding fire is not a stutter of re-draws.
+    if (time > this.weaponOutUntil) {
+      const drawKey = heroAnim(this.hero, this.gunAction(false) + 'in', this.facing);
+      const da = this.anims.get(drawKey);
+      this.weaponReadyAt = time + (da ? da.duration : 0);
+    }
+    this.weaponOutUntil = time + WEAPON_HOLSTER_MS;
+    if (time < this.weaponReadyAt) return;        // still clearing the holster
+
+    const cd = surge ? Math.round(W.cd * 0.4) : W.cd;
     if (time < this.nextFireAt || this.dead) return;
     this.nextFireAt = time + cd;
     Sfx.ensure(); Sfx.shoot();
 
     // keyboard fire (K) shoots straight ahead in facing dir; mouse aims freely
     const base = straight ? (this.facing > 0 ? 0 : Math.PI) : this.aimAngle;
-    const angle = base + (Math.random() - 0.5) * 0.05;
+    const angle = base + (Math.random() - 0.5) * W.spread;
     let muzzleX, muzzleY;
     if (this.realHero) {
       muzzleX = this.player.x + this.facing * this.hero.art.muzzle.dx * this.player.scaleX;
@@ -1766,17 +1801,34 @@ class GameScene extends Phaser.Scene {
   swordAttack() {
     const time = this.time.now;
     if (time < this.nextSwordAt || this.dead) return;
-    this.nextSwordAt = time + (this.realHero ? 620 : 420);
+
+    // Keep swinging and the chain advances; let it lapse and the next swing
+    // opens from the draw again. The blade is only out during the chain, so
+    // hit one is the unsheathing cut and the rest are already-drawn swings.
+    // The chain wraps rather than sticking on its heaviest swing, so holding
+    // the attack reads as a rhythm — cut, cut, flourish — and the finisher
+    // always lands on the beat the chain was built towards.
+    if (time > this.comboUntil) this.swordCombo = 0;
+    else this.swordCombo = (this.swordCombo + 1) % COMBO_ACTIONS.length;
+    this.comboUntil = time + COMBO_WINDOW_MS;
+    const action = COMBO_ACTIONS[this.swordCombo];
+
     Sfx.ensure(); Sfx.sword();
 
-    // play the swing animation for its actual duration (asset-agnostic)
+    // the swing owns the sprite for exactly as long as its own clip runs
+    let swingMs = 340;
     if (this.realHero) {
-      const swordKey = heroAnim(this.hero, 'sword', this.facing);
+      const swordKey = heroAnim(this.hero, action, this.facing);
       this.player.play(swordKey);
       this.curAnim = swordKey;
       const sa = this.anims.get(swordKey);
-      this.swordAnimUntil = time + (sa ? sa.duration : 340) + 40;
+      if (sa) swingMs = sa.duration;
+      this.swordAnimUntil = time + swingMs + 40;
+      this.weaponOutUntil = 0;      // the gun goes away while the blade is out
     }
+    // A heavier swing leaves you open for longer, which is what makes the
+    // third beat of the chain a commitment rather than a free hit.
+    this.nextSwordAt = time + Math.max(260, swingMs * 0.72);
 
     const dir = this.facing;
     const sl = this.add.image(this.player.x + dir * 42, this.player.y - 6, 'slash')
@@ -1785,17 +1837,20 @@ class GameScene extends Phaser.Scene {
     sl.setScale(0.7);
     this.tweens.add({ targets: sl, alpha: 0, scaleX: 1.15, scaleY: 1.15, duration: 140, onComplete: () => sl.destroy() });
 
+    // the chain builds: later swings are wider and hit harder
+    const reach = 95 + this.swordCombo * 22;
+    const dmg = 3 + this.swordCombo;
     let hitAny = false;
     this.zombies.getChildren().forEach(z => {
       if (!z.active || !z.getData('alive')) return;
       const dx = z.x - this.player.x;
       const dy = Math.abs(z.y - this.player.y);
-      if (dy < 70 && dx * dir > -12 && Math.abs(dx) < 95) {
+      if (dy < 70 && dx * dir > -12 && Math.abs(dx) < reach) {
         hitAny = true;
-        this.damageZombie(z, 3, dir * 320, true);
+        this.damageZombie(z, dmg, dir * 320, true);
       }
     });
-    if (hitAny) this.cameras.main.shake(70, 0.004);
+    if (hitAny) this.cameras.main.shake(this.swordCombo >= 2 ? 140 : 70, 0.004 + this.swordCombo * 0.002);
   }
 
   damageZombie(z, dmg, knockX, fromSword) {
@@ -1832,7 +1887,8 @@ class GameScene extends Phaser.Scene {
     }
 
     if (hp <= 0) {
-      if (this.finisherEnabled !== false && this._isLastEnemy(z)) this.executeKill(z, fromSword);
+      if (this.finisherEnabled !== false && this._finisherEarned(fromSword) && this._isLastEnemy(z))
+        this.executeKill(z, fromSword);
       else this.killZombie(z, fromSword);
     }
   }
@@ -1840,6 +1896,16 @@ class GameScene extends Phaser.Scene {
   // True when this is the only one left standing and nothing more is queued —
   // the game had no notion of a final enemy before, only a zero/non-zero count
   // checked after a kill.
+  // A finisher is a sword flourish, so it is only offered when the sword set
+  // the kill up: the killing blow is a swing AND the chain is already going.
+  // Shooting something to its last hit and then poking it once plays a
+  // flourish the fight never earned, which is exactly what this rules out.
+  _finisherEarned(fromSword) {
+    if (!fromSword) return false;
+    return this.swordCombo >= COMBO_FOR_DEATHBLOW &&
+           this.time.now <= this.comboUntil;
+  }
+
   _isLastEnemy(z) {
     if (this._executing || this.dead) return false;
     if (this.spawnQueue && this.spawnQueue.length > 0) return false;
@@ -1862,11 +1928,21 @@ class GameScene extends Phaser.Scene {
     z.setTintFill(0xffe9b0);
     this.tweens.killTweensOf(z);
 
+    // The finisher is its own animation where a character has one — Eterwolf's
+    // is drawn facing the camera, which is where the pan and zoom put him.
+    if (this.realHero && heroHas(this.hero, 'deathblow')) {
+      const key = heroAnim(this.hero, 'deathblow', this.facing);
+      this.player.play(key);
+      this.curAnim = key;
+      const da = this.anims.get(key);
+      this.swordAnimUntil = this.time.now + (da ? da.duration : 600) + 60;
+    }
+
     cam.stopFollow();
     cam.pan(z.x, z.y - 30, 420, 'Sine.easeInOut');
     cam.zoomTo(1.4, 420, 'Sine.easeInOut');
     Sfx.ensure(); Sfx.roar();
-    this.showBanner('EXECUTION', '', 900);
+    this.showBanner('DEATH BLOW', '', 900);
 
     this.time.delayedCall(560, () => {
       // The camera, the physics clock and the flag are handed back whatever
@@ -2034,6 +2110,45 @@ class GameScene extends Phaser.Scene {
     Sfx.ensure(); Sfx.blip(this.walkMode ? 520 : 760, 0.06, 'square', 0.18, this.walkMode ? 380 : 900);
   }
 
+  // Ducking shortens the body so shots pass over, and the sprite's feet have
+  // to stay on the ground while it does — a shorter box measured from the same
+  // top would leave him hovering, so the offset moves down by what was cut.
+  setCrouch(on) {
+    if (!this.realHero || !this.player.body) return;
+    this.crouching = on;
+    const B = this.hero.art.body;
+    const h = on ? Math.round(B.h * CROUCH_BODY) : B.h;
+    this.player.body.setSize(B.w, h).setOffset(B.x, B.y + (B.h - h));
+    this.curAnim = '';                  // let the state machine pick the stance
+  }
+
+  // E cycles the guns he is carrying. Swapping puts the new one away, so the
+  // next shot draws it — which is the point of the animation.
+  swapWeapon() {
+    if (this.dead || !this.realHero) return;
+    const usable = WEAPON_IDS.filter(w => heroHas(this.hero, WEAPONS[w].shootAction));
+    if (usable.length < 2) return;
+    const n = usable.indexOf(this.weapon);
+    this.weapon = usable[(n + 1) % usable.length];
+    this.weaponOutUntil = 0;     // holster it; the next shot draws the new one
+    this.weaponReadyAt = 0;
+    this.curAnim = '';
+    if (this.weaponText) {
+      this.weaponText.setText(WEAPONS[this.weapon].name).setAlpha(1);
+      this.tweens.killTweensOf(this.weaponText);
+      this.tweens.add({ targets: this.weaponText, alpha: 0.45, delay: 1100, duration: 400 });
+    }
+    Sfx.ensure(); Sfx.blip(300, 0.05, 'square', 0.2, 520);
+  }
+
+  // The weapon action for the gun in his hand, falling back to the pistol's
+  // when a character has no art for the rifle.
+  gunAction(moving) {
+    const w = WEAPONS[this.weapon] || WEAPONS.pistol;
+    const want = moving ? w.runAction : w.shootAction;
+    return heroHas(this.hero, want) ? want : (moving ? 'runshoot' : 'shoot');
+  }
+
   dash() {
     const time = this.time.now;
     if (time < this.nextDashAt || this.dead) return;
@@ -2178,15 +2293,22 @@ class GameScene extends Phaser.Scene {
     else if (firing && pointer.isDown) this.facing = (Math.abs(this.aimAngle) <= Math.PI / 2) ? 1 : -1;
 
     // ----- horizontal movement -----
+    // Down is both crouch and the drop-through modifier: held on its own he
+    // ducks, held with jump he falls through the ledge he is standing on.
+    // Crouching is a ground stance, so leaving it airborne stands him up.
+    this.dropThrough = (this.keys.S.isDown || this.keys.DOWN.isDown);
+    const wantCrouch = this.dropThrough && onGround && heroHas(this.hero, 'crouch');
+    if (wantCrouch !== this.crouching) this.setCrouch(wantCrouch);
+
     const dashing = time < this.dashUntil;
     if (!dashing) {
-      this.player.setVelocityX(move * (boostActive ? 580 : this.walkMode ? WALK_SPEED : COMBAT_SPEED));
-
-      // drop through one-way ledges with S/Down + jump press
-      this.dropThrough = (this.keys.S.isDown || this.keys.DOWN.isDown);
+      const ground = this.crouching ? CROUCH_SPEED
+                   : boostActive    ? 580
+                   : this.walkMode  ? WALK_SPEED : COMBAT_SPEED;
+      this.player.setVelocityX(move * ground);
 
       // ----- jump: buffered + coyote time + DOUBLE JUMP -----
-      const wantsJump = time - this.jumpBufferedAt < 130;
+      const wantsJump = time - this.jumpBufferedAt < 130 && !this.crouching;
       const coyoteOk = time - this.lastGrounded < 100;
       const canGroundJump = coyoteOk && this.jumpsUsed === 0;
       const canAirJump = !coyoteOk && this.jumpsUsed < 2;
@@ -2214,7 +2336,7 @@ class GameScene extends Phaser.Scene {
       // Standing about with nothing left to shoot, he finds something to do
       // with his hands. Only with the street clear — strumming or eating in
       // the middle of a wave would read as a bug, not a flourish.
-      if (moving || !onGround || firing || this.dead) this.restSince = 0;
+      if (moving || !onGround || firing || this.dead || this.crouching) this.restSince = 0;
       else if (!this.restSince) this.restSince = time;
       const bored = this.restSince && this.aliveEnemies() === 0 &&
                     time - this.restSince > ((this.hero.longIdleMs) || IDLE_LONG_MS);
@@ -2227,7 +2349,11 @@ class GameScene extends Phaser.Scene {
         if (time < this.dashAnimUntil) want = 'dash';   // the burst owns the sprite
         else if (!onGround) want = airAction(this.hero, this.player.body.velocity.y);
         else if (time < this.landUntil) want = 'land';
-        else if (firing) want = moving ? 'runshoot' : 'shoot';
+        else if (this.crouching) want = moving && heroHas(this.hero, 'crouchwalk') ? 'crouchwalk' : 'crouch';
+        else if (firing) want = this.gunAction(moving);
+        // The blade stays out for the length of the chain rather than snapping
+        // back to an empty-handed idle between swings.
+        else if (time < this.comboUntil && heroHas(this.hero, 'swordguard')) want = 'swordguard';
         else if (moving) want = this.walkMode ? 'walk' : 'run';
         else if (bored) want = this.hero.longIdle || 'idle';
         else want = 'idle';
@@ -2235,7 +2361,8 @@ class GameScene extends Phaser.Scene {
         // There is no armed walk in the art, so walking and firing borrows the
         // run-and-gun cycle slowed to the ground speed, which keeps the feet
         // landing where they should instead of skating.
-        const slowFire = this.walkMode && firing && moving && onGround && time >= this.dashAnimUntil;
+        const slowFire = this.walkMode && firing && moving && onGround &&
+                         time >= this.dashAnimUntil && want === 'runshoot';
         this.player.anims.timeScale = slowFire ? WALK_SPEED / COMBAT_SPEED : 1;
         if (this.curAnim !== key) {
           playAction(this.player, this.hero, want, this.facing);
@@ -2421,6 +2548,31 @@ function airAction(hero, vy) {
 }
 // How long the landing squash holds before he stands or runs.
 const LAND_MS = 110;
+
+// ---- guns ----------------------------------------------------------------
+// Two weapons, same bullet, different feel: the pistol is quick and precise,
+// the rifle faster still and heavier but it sprays.
+const WEAPONS = {
+  pistol: { name: 'PISTOL', cd: 150, dmg: 1, spread: 0.05, shootAction: 'shoot',   runAction: 'runshoot' },
+  ak:     { name: 'AK47',   cd: 85,  dmg: 1, spread: 0.11, shootAction: 'akshoot', runAction: 'akrunshoot' }
+};
+const WEAPON_IDS = ['pistol', 'ak'];
+// Once it is out it stays out; the draw only replays after this much quiet.
+const WEAPON_HOLSTER_MS = 2600;
+
+// ---- melee ---------------------------------------------------------------
+// Swinging again before this expires carries the combo on; letting it lapse
+// drops you back to the opening cut.
+const COMBO_WINDOW_MS = 1400;
+const COMBO_ACTIONS = ['sword', 'sword2', 'sword3'];
+// The execution is a sword flourish, so it has to be earned with the sword.
+// Shooting something down to its last hit and then poking it once would play
+// a finisher the fight never set up, which is exactly what it should not do.
+const COMBO_FOR_DEATHBLOW = 2;
+
+// Crouching drops him low: slower, and a shorter body so shots go over.
+const CROUCH_SPEED = 120;
+const CROUCH_BODY  = 0.58;
 
 // Plays `action` on `hero`, chaining through its intro when the action is
 // changing. Returns the key actually playing, which is what callers cache to
@@ -3513,6 +3665,7 @@ class DebugScene extends GameScene {
     this.subBannerText.setText('').setAlpha(0);
     this.tweens.killTweensOf([this.bannerText, this.subBannerText]);
 
+    if (this.weaponText) this.weaponText.setText(WEAPONS[this.weapon].name);
     this._buildDebugPanel();
     this._bindDebugKeys();
   }
@@ -3526,15 +3679,16 @@ class DebugScene extends GameScene {
       '1 walker   2 runner   3 brute   4 flyer',
       '5 zomba    6 archer   7 kingo   8 boss    9 ALIEN',
       'C clear    P character    O finisher    R reset',
-      'A/D move · X walk/run · W jump ×2 · Shift dash · LMB fire · F sword · Q nuke'
+      'A/D move · S crouch · X walk/run · W jump ×2 · Shift dash',
+      'LMB/K fire · E swap weapon · F/RMB sword (3-hit chain) · Q nuke'
     ];
-    this.add.rectangle(14, 96, 540, 148, 0x0a0807, 0.72)
+    this.add.rectangle(14, 96, 560, 166, 0x0a0807, 0.72)
       .setOrigin(0, 0).setScrollFactor(0).setDepth(70);
     this._dbgText = this.add.text(26, 104, lines.join('\n'), {
       fontFamily: F_UI, fontSize: '13px', fontStyle: '600', color: '#f2b13c', lineSpacing: 4
     }).setScrollFactor(0).setDepth(71);
 
-    this._dbgStatus = this.add.text(26, 214, '', {
+    this._dbgStatus = this.add.text(26, 232, '', {
       fontFamily: F_UI, fontSize: '13px', fontStyle: '600', color: '#cbbba1'
     }).setScrollFactor(0).setDepth(71);
 
@@ -3542,15 +3696,15 @@ class DebugScene extends GameScene {
     // as that character; P still cycles them from the keyboard.
     this._castBtns = [];
     let x = 26;
-    this.add.text(x, 236, 'PLAY', {
+    this.add.text(x, 254, 'PLAY', {
       fontFamily: F_UI, fontSize: '12px', fontStyle: '700', color: '#7d6c55'
     }).setScrollFactor(0).setDepth(71);
     x += 42;
     CAST.forEach(c => {
-      const t = this.add.text(x + 10, 234, c.name, {
+      const t = this.add.text(x + 10, 252, c.name, {
         fontFamily: F_UI, fontSize: '14px', fontStyle: '700', color: '#cbbba1'
       }).setScrollFactor(0).setDepth(72);
-      const box = this.add.rectangle(x, 231, t.width + 20, 24, 0x1b1611, 0.95)
+      const box = this.add.rectangle(x, 249, t.width + 20, 24, 0x1b1611, 0.95)
         .setOrigin(0, 0).setScrollFactor(0).setDepth(71)
         .setStrokeStyle(1, 0x4a3b2a).setInteractive({ useHandCursor: true });
       box.on('pointerover', () => { if (c.id !== this.castId) t.setColor('#f2b13c'); });
@@ -3579,6 +3733,8 @@ class DebugScene extends GameScene {
       '  (' + (n + 1) + '/' + CAST.length + ')' +
       '     FINISHER ' + (this.finisherEnabled ? 'ON' : 'OFF') +
       '     MOVE ' + (this.walkMode ? 'WALK' : 'RUN') +
+      '     GUN ' + WEAPONS[this.weapon].name +
+      '     COMBO ' + (this.time.now <= this.comboUntil ? this.swordCombo + 1 : 0) +
       '     ENEMIES ' + this.zombies.countActive(true));
   }
 

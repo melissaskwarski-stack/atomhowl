@@ -39,7 +39,18 @@ const SRC = {
   pistol:    A + 'Idle_v3_pistol_east.gif',
   dash:      A + 'Idle_v3_dash_east.gif',
   runshootW: A + 'Idle_v3_runshoot_west.gif',  // drawn facing west; east is mirrored
-  jump:      A + 'Idle_v3_jump_east.gif'
+  jump:      A + 'Idle_v3_jump_east.gif',
+  // --- melee: a katana with real art on three sides, and an energy blade ---
+  katana:     A + 'Idle_v3_katana_east.gif',
+  katanaW:    A + 'Idle_v3_katana_west.gif',
+  katanaF:    A + 'Idle_v3_katana_front.gif',
+  esword:     A + 'Idle_v3_esword_east.gif',
+  eswordF:    A + 'Idle_v3_esword_front.gif',
+  // --- low stance ---
+  crouch:     A + 'Idle_v3_crouch_east.gif',
+  crouchwalk: A + 'Idle_v3_crouchwalk_east.gif',
+  // --- the second gun ---
+  akwalk:     A + 'Idle_v3_akwalk_east.gif'
 };
 
 // Several clips open with a one-shot action and only then settle into
@@ -63,7 +74,10 @@ const FREEZE_BELOW = { guitar: 0.52 };
 // range holds him still; the feet still anchor frame by frame, which is what
 // strips the rise the artist baked into the airborne frames — the physics
 // supplies that.
-const SHARE_X = ['jump'];
+// The swords throw an arc far wider than the body and the crouch drops the
+// silhouette, so both would slide if each frame were centred on its own bounds.
+const SHARE_X = ['jump', 'katana', 'katanaW', 'katanaF', 'esword', 'eswordF',
+                 'crouch', 'crouchwalk'];
 const FREEZE_FEATHER = 12;
 const OUT = path.join(ROOT, 'build/ew_assets.js');
 
@@ -143,7 +157,19 @@ const K = {
   runshootinW: pool('runshootinW', 'runshootW', false),  // real west art
   runshootin:  pool('runshootin',  'runshootW', true),   // west only — mirror
   jump:      clips.jump ? pool('jump',  'jump', false) : null,
-  jumpW:     clips.jump ? pool('jumpW', 'jump', true)  : null   // east only — mirror
+  jumpW:     clips.jump ? pool('jumpW', 'jump', true)  : null,  // east only — mirror
+  katana:    clips.katana  ? pool('katana',  'katana',  false) : null,
+  katanaW:   clips.katanaW ? pool('katanaW', 'katanaW', false) : null,  // real west art
+  katanaF:   clips.katanaF ? pool('katanaF', 'katanaF', false) : null,
+  esword:    clips.esword  ? pool('esword',  'esword',  false) : null,
+  eswordW:   clips.esword  ? pool('eswordW', 'esword',  true)  : null,
+  eswordF:   clips.eswordF ? pool('eswordF', 'eswordF', false) : null,
+  crouch:    clips.crouch  ? pool('crouch',  'crouch',  false) : null,
+  crouchW:   clips.crouch  ? pool('crouchW', 'crouch',  true)  : null,
+  cwalk:     clips.crouchwalk ? pool('cwalk',  'crouchwalk', false) : null,
+  cwalkW:    clips.crouchwalk ? pool('cwalkW', 'crouchwalk', true)  : null,
+  akwalk:    clips.akwalk  ? pool('akwalk',  'akwalk',  false) : null,
+  akwalkW:   clips.akwalk  ? pool('akwalkW', 'akwalk',  true)  : null
 };
 // Each looping tail reuses frames already emitted for its intro, so splitting
 // a clip in two costs no extra image data.
@@ -181,7 +207,8 @@ const mod = {
   pending: ['idle west (mirrored east)', 'walk west (mirrored east)',
             'guitar west (mirrored east)', 'pistol west (mirrored east)',
             'dash west (mirrored east)', 'run-shoot east (mirrored west)',
-            'jump west (mirrored east)', 'sword'],
+            'jump west (mirrored east)', 'energy-blade west (mirrored east)',
+            'crouch west (mirrored east)', 'AK west (mirrored east)'],
   frames,
   anims: {
     idle:       A_(K.idle,      5),     // slow breathing
@@ -193,8 +220,8 @@ const mod = {
     runinW:     A_(K.runinW,    16, 0),
     guitarin:   A_(K.guitarin,  11, 0),
     guitarinW:  A_(K.guitarinW, 11, 0),
-    shootin:    A_(K.pistolin,  14, 0),
-    shootinW:   A_(K.pistolinW, 14, 0),
+    shootin:    A_(K.pistolin,  26, 0),   // snap the pistol out, not a slow draw
+    shootinW:   A_(K.pistolinW, 26, 0),
     // settled tails
     run:        A_(K.run,       14),
     runW:       A_(K.runW,      14),
@@ -208,6 +235,54 @@ const mod = {
     runshootW:  A_(K.runshootW, 15),
     dash:       A_(K.dash,      16, 0),      // one burst, never loops
     dashW:      A_(K.dashW,     16, 0),
+
+    // ---- melee ----------------------------------------------------------
+    // The katana clip is draw (0-5), slash with the arc (6-8), then a guard
+    // that settles (9-15). A combo swings the whole thing once to get the
+    // blade out, then replays only the slash while it stays out, and finishes
+    // on the energy blade's wider flurry. Frame rates are high on purpose:
+    // the draw reads as a snap rather than a careful unsheathing.
+    ...(K.katana ? {
+      sword:       A_(K.katana.slice(0, 12),  20, 0),   // hit 1: draw and cut
+      swordW:      A_(K.katanaW.slice(0, 12), 20, 0),
+      sword2:      A_(K.katana.slice(5, 12),  22, 0),   // hit 2: blade already out
+      sword2W:     A_(K.katanaW.slice(5, 12), 22, 0),
+      swordguard:  A_(K.katana.slice(11),      6),      // blade out, waiting
+      swordguardW: A_(K.katanaW.slice(11),     6)
+    } : {}),
+    ...(K.esword ? {
+      sword3:  A_(K.esword.slice(0, 13),  20, 0),       // hit 3: the energy flurry
+      sword3W: A_(K.eswordW.slice(0, 13), 20, 0)
+    } : {}),
+    // The finisher is drawn facing the camera, which is exactly where the
+    // execution's pan and zoom puts it.
+    ...(K.eswordF ? { deathblow: A_(K.eswordF, 16, 0) } : {}),
+    ...(K.katanaF ? { deathblow2: A_(K.katanaF, 18, 0) } : {}),
+
+    // ---- low stance -----------------------------------------------------
+    ...(K.crouch ? {
+      crouchin:  A_(K.crouch,           18, 0),
+      crouchinW: A_(K.crouchW,          18, 0),
+      crouch:    A_(K.crouch.slice(4),   5),
+      crouchW:   A_(K.crouchW.slice(4),  5)
+    } : {}),
+    ...(K.cwalk ? {
+      crouchwalk:  A_(K.cwalk,  10),
+      crouchwalkW: A_(K.cwalkW, 10)
+    } : {}),
+
+    // ---- the AK ---------------------------------------------------------
+    // 21 frames: he brings the rifle up over the first three, and the legs
+    // repeat on a 12-frame stride after that (measured, not guessed), so the
+    // loop is exactly frames 9-20 and the walk does not limp.
+    ...(K.akwalk ? {
+      akshootin:   A_(K.akwalk.slice(0, 9),   24, 0),
+      akshootinW:  A_(K.akwalkW.slice(0, 9),  24, 0),
+      akrunshoot:  A_(K.akwalk.slice(9),      14),
+      akrunshootW: A_(K.akwalkW.slice(9),     14),
+      akshoot:     A_(K.akwalk.slice(9, 11),  10),
+      akshootW:    A_(K.akwalkW.slice(9, 11), 10)
+    } : {}),
     // The jump clip is one vertical hop: four frames of crouch, lift-off,
     // rise, a tucked apex, the fall and a landing squash. The crouch is not
     // played — the physics leaves the ground the instant the key goes down,
@@ -226,10 +301,7 @@ const mod = {
     } : {
       jump:       A_(mid(K.run),  10, 0),
       jumpW:      A_(mid(K.runW), 10, 0)
-    }),
-    // placeholder — the run cycle until the real art arrives
-    sword:      A_(K.run,       14, 0),
-    swordW:     A_(K.runW,      14, 0)
+    })
   }
 };
 

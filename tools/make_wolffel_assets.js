@@ -31,7 +31,15 @@ const SRC = {
   walk:   A('wf_walk_east.gif'),
   run:    A('wf_sprint_east.gif'),
   burger: A('wf_burger_se.gif'),    // reaches into his side and eats
-  aim:    A('wf_aim_east.gif')      // extends the arm; stands in for shooting
+  aim:    A('wf_aim_east.gif'),     // extends the arm; stands in for shooting
+  // A slab of a greatsword he hauls off his back, swings through a full arc
+  // and drags back down: 21 frames that open and close on the same standing
+  // pose (f20 -> f0 differs by 8, against 149 inside), so the two halves cut
+  // cleanly into two swings.
+  sword:  A('wf_greatsword_east.gif'),
+  crouch: A('wf_crouch_east.gif'),
+  akwalk: A('wf_akwalk_east.gif'),        // walking and firing the rifle
+  pwalk:  A('wf_pistolwalk_east.gif')     // walking with the pistol up
 };
 
 // Where each one-shot settles into something repeatable.
@@ -41,7 +49,7 @@ const LOOP_FROM = { aim: 7 };
 const CHEW = [4, 5, 6, 5];
 // The arm swings wide in the aim and the burger comes up across the body, so
 // both would shimmy if each frame were centred on its own silhouette.
-const SHARE_X = ['aim', 'burger'];
+const SHARE_X = ['aim', 'burger', 'sword', 'crouch'];
 
 const clips = L.loadClips(SRC);
 if (!clips.idle) { console.error('need the idle clip'); process.exit(1); }
@@ -74,7 +82,15 @@ const K = {
   burgerin: pool('burgerin', 'burger', false),
   burgerinW: pool('burgerinW', 'burger', true),
   shootin:  pool('shootin',  'aim',    false),
-  shootinW: pool('shootinW', 'aim',    true)
+  shootinW: pool('shootinW', 'aim',    true),
+  gs:       pool('gs',       'sword',  false),
+  gsW:      pool('gsW',      'sword',  true),
+  crouch:   pool('crouch',   'crouch', false),
+  crouchW:  pool('crouchW',  'crouch', true),
+  ak:       pool('ak',       'akwalk', false),
+  akW:      pool('akW',      'akwalk', true),
+  pw:       pool('pw',       'pwalk',  false),
+  pwW:      pool('pwW',      'pwalk',  true)
 };
 // The looping tails reuse frames the intros already emitted.
 if (K.burgerin) {
@@ -122,6 +138,52 @@ add('shootinW',  K.shootinW,  14, 0);
 add('shoot',     K.shoot,     10);
 add('shootW',    K.shootW,    10);
 
+// ---- the greatsword -------------------------------------------------------
+// It is too heavy for a fast three-hit chain, so the combo is the two halves
+// of the clip: he hauls it up and sweeps (2-14), then drags it back down
+// (14-20), and the third beat is the whole thing swung both ways.
+if (K.gs) {
+  add('sword',   K.gs.slice(2, 15),   16, 0);
+  add('swordW',  K.gsW.slice(2, 15),  16, 0);
+  add('sword2',  K.gs.slice(14),      16, 0);
+  add('sword2W', K.gsW.slice(14),     16, 0);
+  add('sword3',  K.gs.slice(2),       17, 0);
+  add('sword3W', K.gsW.slice(2),      17, 0);
+  // the quiet band mid-swing, where he holds it out
+  add('swordguard',  K.gs.slice(11, 15),  4);
+  add('swordguardW', K.gsW.slice(11, 15), 4);
+  // no front-facing art, so the finisher is the full two-way swing
+  add('deathblow',  K.gs.slice(2),  15, 0);
+}
+
+// ---- low stance -----------------------------------------------------------
+if (K.crouch) {
+  add('crouchin',  K.crouch,          18, 0);
+  add('crouchinW', K.crouchW,         18, 0);
+  add('crouch',    K.crouch.slice(2),  5);
+  add('crouchW',   K.crouchW.slice(2), 5);
+}
+
+// ---- the AK ---------------------------------------------------------------
+// He raises it over the first three frames and his legs repeat on a 10-frame
+// stride after that (measured), so the loop is frames 11-20.
+if (K.ak) {
+  add('akshootin',   K.ak.slice(0, 11),   24, 0);
+  add('akshootinW',  K.akW.slice(0, 11),  24, 0);
+  add('akrunshoot',  K.ak.slice(11),      14);
+  add('akrunshootW', K.akW.slice(11),     14);
+  add('akshoot',     K.ak.slice(11, 13),  10);
+  add('akshootW',    K.akW.slice(11, 13), 10);
+}
+
+// ---- walking with the pistol up ------------------------------------------
+if (K.pw) {
+  add('runshootin',  K.pw,           20, 0);
+  add('runshootinW', K.pwW,          20, 0);
+  add('runshoot',    K.pw.slice(2),  11);
+  add('runshootW',   K.pwW.slice(2), 11);
+}
+
 const mod = {
   charH: ih,
   hiRes: true,             // 3D render, not pixel art — scale fractionally
@@ -130,7 +192,7 @@ const mod = {
   longIdleMs: 8000,
   body, muzzle,
   pending: ['west art (all mirrored east)', 'dash', 'jump', 'land',
-            'run-and-gun', 'sword', 'a real firing clip (the arm-extend stands in)'],
+            'a front-facing finisher', 'a real standing firing clip'],
   frames,
   anims
 };
