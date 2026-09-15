@@ -130,8 +130,11 @@ add('runW',      K.runW,      14);
 // long idle: he digs the burger out, then chews on a loop
 add('burgerin',  K.burgerin,  10, 0);
 add('burgerinW', K.burgerinW, 10, 0);
-add('burger',    K.burger,    6);
-add('burgerW',   K.burgerW,   6);
+// He takes two bites and is done, rather than chewing on forever: the chew
+// band plays twice (repeat 1) and the game drops him back to the plain idle
+// when it finishes — see longIdleOnce.
+add('burger',    K.burger,    6, 1);
+add('burgerW',   K.burgerW,   6, 1);
 // the arm-extend, standing in for a draw-and-fire
 add('shootin',   K.shootin,   14, 0);
 add('shootinW',  K.shootinW,  14, 0);
@@ -143,12 +146,12 @@ add('shootW',    K.shootW,    10);
 // of the clip: he hauls it up and sweeps (2-14), then drags it back down
 // (14-20), and the third beat is the whole thing swung both ways.
 if (K.gs) {
-  add('sword',   K.gs.slice(2, 15),   16, 0);
-  add('swordW',  K.gsW.slice(2, 15),  16, 0);
-  add('sword2',  K.gs.slice(14),      16, 0);
-  add('sword2W', K.gsW.slice(14),     16, 0);
-  add('sword3',  K.gs.slice(2),       17, 0);
-  add('sword3W', K.gsW.slice(2),      17, 0);
+  add('sword',   K.gs.slice(2, 15),   26, 0);
+  add('swordW',  K.gsW.slice(2, 15),  26, 0);
+  add('sword2',  K.gs.slice(14),      26, 0);
+  add('sword2W', K.gsW.slice(14),     26, 0);
+  add('sword3',  K.gs.slice(2),       28, 0);
+  add('sword3W', K.gsW.slice(2),      28, 0);
   // the quiet band mid-swing, where he holds it out
   add('swordguard',  K.gs.slice(11, 15),  4);
   add('swordguardW', K.gsW.slice(11, 15), 4);
@@ -190,6 +193,7 @@ const mod = {
   directional: true,       // every side has a real key; never flipX
   longIdle: 'burger',      // what he does when left alone
   longIdleMs: 8000,
+  longIdleOnce: true,      // two bites, then back to standing
   body, muzzle,
   pending: ['west art (all mirrored east)', 'dash', 'jump', 'land',
             'a front-facing finisher', 'a real standing firing clip'],

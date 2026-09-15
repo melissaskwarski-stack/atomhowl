@@ -271,22 +271,30 @@ const mod = {
     // blade out, then replays only the slash while it stays out, and finishes
     // on the energy blade's wider flurry. Frame rates are high on purpose:
     // the draw reads as a snap rather than a careful unsheathing.
+    // Frame rates are high: a swing wants to land, and at 20fps the katana
+    // took two fifths of a second just to reach the target.
     ...(K.katana ? {
-      sword:       A_(K.katana.slice(0, 12),  20, 0),   // hit 1: draw and cut
-      swordW:      A_(K.katanaW.slice(0, 12), 20, 0),
-      sword2:      A_(K.katana.slice(5, 12),  22, 0),   // hit 2: blade already out
-      sword2W:     A_(K.katanaW.slice(5, 12), 22, 0),
+      sword:       A_(K.katana.slice(0, 12),  34, 0),   // hit 1: draw and cut
+      swordW:      A_(K.katanaW.slice(0, 12), 34, 0),
+      sword2:      A_(K.katana.slice(5, 12),  36, 0),   // hit 2: blade already out
+      sword2W:     A_(K.katanaW.slice(5, 12), 36, 0),
       swordguard:  A_(K.katana.slice(11),      6),      // blade out, waiting
       swordguardW: A_(K.katanaW.slice(11),     6)
     } : {}),
     ...(K.esword ? {
-      sword3:  A_(K.esword.slice(0, 13),  20, 0),       // hit 3: the energy flurry
-      sword3W: A_(K.eswordW.slice(0, 13), 20, 0)
+      sword3:  A_(K.esword.slice(0, 13),  34, 0),       // hit 3: the energy flurry
+      sword3W: A_(K.eswordW.slice(0, 13), 34, 0)
+    } : {}),
+    // Hit 4 turns him to face the camera. There is one front-facing katana, so
+    // it serves both sides — mirroring a front view would only swap his hands.
+    ...(K.katanaF ? {
+      sword4:  A_(K.katanaF.slice(0, 12), 32, 0),
+      sword4W: A_(K.katanaF.slice(0, 12), 32, 0)
     } : {}),
     // The finisher is drawn facing the camera, which is exactly where the
     // execution's pan and zoom puts it.
     ...(K.eswordF ? { deathblow: A_(K.eswordF, 16, 0) } : {}),
-    ...(K.katanaF ? { deathblow2: A_(K.katanaF, 18, 0) } : {}),
+
 
     // ---- low stance -----------------------------------------------------
     ...(K.crouch ? {

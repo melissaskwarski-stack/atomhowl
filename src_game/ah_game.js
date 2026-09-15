@@ -707,6 +707,9 @@ const CAST = [];
     if (!d.art || !d.art.anims) return;      // art not built — leave them out
     if (d.art.longIdle) d.longIdle = d.art.longIdle;
     if (d.art.longIdleMs) d.longIdleMs = d.art.longIdleMs;
+    // some long idles are a one-off (two bites of a burger), others carry on
+    // until you move (strumming a guitar)
+    d.longIdleOnce = !!d.art.longIdleOnce;
     d.dir = !!d.art.directional;
     CAST.push(d);
   });
@@ -731,8 +734,9 @@ const ACTION_FALLBACK = {
   // the chain degrades to whatever swings the character does have
   sword2:     ['sword2', 'sword', 'shoot', 'idle'],
   sword3:     ['sword3', 'sword2', 'sword', 'idle'],
+  sword4:     ['sword4', 'sword3', 'sword2', 'sword', 'idle'],
   swordguard: ['swordguard', 'idle'],
-  deathblow:  ['deathblow', 'sword3', 'sword2', 'sword', 'idle'],
+  deathblow:  ['deathblow', 'sword4', 'sword3', 'sword2', 'sword', 'idle'],
   crouch:      ['crouch', 'idle'],
   crouchwalk:  ['crouchwalk', 'crouch', 'walk', 'idle'],
   akshoot:     ['akshoot', 'shoot', 'idle'],
@@ -1292,6 +1296,7 @@ class GameScene extends Phaser.Scene {
     this.swordCombo = 0;
     this.comboUntil = 0;
     this.crouching = false;
+    this.longIdleDone = false;
     this.aimTilt = 0;
     this._executing = false;     // scene instances are reused across restart()
     this.walkMode = false;       // X toggles; combat runs by default
@@ -1951,13 +1956,9 @@ class GameScene extends Phaser.Scene {
     // third beat of the chain a commitment rather than a free hit.
     this.nextSwordAt = time + Math.max(260, swingMs * 0.72);
 
+    // No drawn-on slash: the clips carry their own arc, and a second one
+    // painted over the top only fought it.
     const dir = this.facing;
-    const sl = this.add.image(this.player.x + dir * 42, this.player.y - 6, 'slash')
-      .setDepth(13).setBlendMode(Phaser.BlendModes.ADD);
-    sl.setFlipX(dir < 0);
-    sl.setScale(0.7);
-    this.tweens.add({ targets: sl, alpha: 0, scaleX: 1.15, scaleY: 1.15, duration: 140, onComplete: () => sl.destroy() });
-
     // the chain builds: later swings are wider and hit harder
     const reach = 95 + this.swordCombo * 22;
     const dmg = 3 + this.swordCombo;
@@ -2505,8 +2506,17 @@ class GameScene extends Phaser.Scene {
       // Standing about with nothing left to shoot, he finds something to do
       // with his hands. Only with the street clear — strumming or eating in
       // the middle of a wave would read as a bug, not a flourish.
-      if (moving || !onGround || firing || this.dead || this.crouching) this.restSince = 0;
-      else if (!this.restSince) this.restSince = time;
+      if (moving || !onGround || firing || this.dead || this.crouching) {
+        this.restSince = 0;
+        this.longIdleDone = false;
+      } else if (!this.restSince) this.restSince = time;
+      // A one-off long idle is finished when its clip stops; after that he
+      // just stands there until something moves him again.
+      if (this.hero.longIdleOnce && this.curAnim &&
+          this.curAnim.indexOf('-' + this.hero.longIdle) === 2 &&
+          !this.player.anims.isPlaying) {
+        this.longIdleDone = true;
+      }
       const bored = this.restSince && this.aliveEnemies() === 0 &&
                     time - this.restSince > ((this.hero.longIdleMs) || IDLE_LONG_MS);
 
@@ -2518,13 +2528,13 @@ class GameScene extends Phaser.Scene {
         if (time < this.dashAnimUntil) want = 'dash';   // the burst owns the sprite
         else if (!onGround) want = airAction(this.hero, this.player.body.velocity.y);
         else if (time < this.landUntil) want = 'land';
-        else if (this.crouching) want = moving && heroHas(this.hero, 'crouchwalk') ? 'crouchwalk' : 'crouch';
+        else if (this.crouching) want = 'crouch';
         else if (firing) want = this.gunAction(moving);
         // The blade stays out for the length of the chain rather than snapping
         // back to an empty-handed idle between swings.
         else if (time < this.comboUntil && heroHas(this.hero, 'swordguard')) want = 'swordguard';
         else if (moving) want = this.walkMode ? 'walk' : 'run';
-        else if (bored) want = this.hero.longIdle || 'idle';
+        else if (bored && !this.longIdleDone) want = this.hero.longIdle || 'idle';
         else want = 'idle';
         const key = heroAnim(this.hero, want, this.facing);
         // There is no armed walk in the art, so walking and firing borrows the
@@ -2767,11 +2777,15 @@ const WEAPON_HOLSTER_MS = 2600;
 // Swinging again before this expires carries the combo on; letting it lapse
 // drops you back to the opening cut.
 const COMBO_WINDOW_MS = 1400;
-const COMBO_ACTIONS = ['sword', 'sword2', 'sword3'];
+// Four beats where the art allows: the katana comes out and cuts, cuts again
+// with the blade already drawn, the energy blade opens up, and the last turns
+// him to face the camera. A character with fewer clips falls back down the
+// chain and simply repeats what it has.
+const COMBO_ACTIONS = ['sword', 'sword2', 'sword3', 'sword4'];
 // The execution is a sword flourish, so it has to be earned with the sword.
 // Shooting something down to its last hit and then poking it once would play
 // a finisher the fight never set up, which is exactly what it should not do.
-const COMBO_FOR_DEATHBLOW = 2;
+const COMBO_FOR_DEATHBLOW = COMBO_ACTIONS.length - 1;
 
 // ---- aiming above the horizontal ------------------------------------------
 // There is one firing pose per weapon and it points straight ahead, so aiming
@@ -2787,8 +2801,13 @@ const AIM_TILT_LERP = 0.22;       // eased, or it snaps as the pointer crosses
 // same shift — see heroBodyOffsetY().
 const AIM_PIVOT_Y = 0.86;
 
-// Crouching drops him low: slower, and a shorter body so shots go over.
-const CROUCH_SPEED = 120;
+// Going down is a stance, not a way to travel: he plants on his hands and
+// stays there, and standing up is how you move again. The crouch-walk clip
+// that was here covered only HALF a stride — one foot contact against the
+// walk's two — so looping it stepped the same leg every time, which is
+// exactly what it looked like. A real crouch-walk needs a clip with both
+// legs in it; until there is one, prone holds still.
+const CROUCH_SPEED = 0;
 const CROUCH_BODY  = 0.51;   // measured: prone is 114px against a 222px stand
 
 // Plays `action` on `hero`, chaining through its intro when the action is
@@ -2846,10 +2865,14 @@ function driveWalker(scene, p, keys, onGround) {
   // Left standing long enough he finds something to do with his hands —
   // Eterwolf the guitar off his back, Wolffel a burger out of his side pocket.
   // Each character names its own and how long it takes to get bored.
-  if (moving || !onGround) p._restSince = 0;
+  if (moving || !onGround) { p._restSince = 0; p._longIdleDone = false; }
   else if (!p._restSince) p._restSince = now;
   const boredAt = (hero && hero.longIdleMs) || IDLE_LONG_MS;
-  const bored = p._restSince && now - p._restSince > boredAt;
+  if (hero && hero.longIdleOnce && p._curAnim &&
+      p._curAnim.indexOf('-' + hero.longIdle) === 2 && !p.anims.isPlaying) {
+    p._longIdleDone = true;
+  }
+  const bored = p._restSince && !p._longIdleDone && now - p._restSince > boredAt;
 
   if (p._real) {
     const want = !onGround ? airAction(hero, p.body.velocity.y)
@@ -3506,6 +3529,14 @@ class WalkScene extends Phaser.Scene {
       return { m, lbl, ex };
     });
 
+    // Phaser reuses a scene instance, so these survive a restart and leave
+    // `this.pickup` pointing at a destroyed sprite — which reads as truthy and
+    // makes the room look like it still has a weapon in it.
+    this.pickup = null;
+    this.pickupGlow = null;
+    this.pickupHint = null;
+    this.pickGot = false;
+
     // optional weapon pickup
     if (cfg.pickup && !GameState.hasWeapon) {
       const px = cfg.pickup.xFrac * WW;
@@ -3580,6 +3611,11 @@ class WalkScene extends Phaser.Scene {
     const frac = this.worldW ? this.player.x / this.worldW : 0;
     for (const b of this._beats) {
       if (b.fired || frac < (b.at || 0)) continue;
+      // A beat can name something that has to still be true when the player
+      // gets there. The weapon prompt is the reason: the pickup only exists
+      // while he has no weapon, so once he has one the beat would otherwise
+      // tell him to collect something that is not in the room.
+      if (b.needs === 'pickup' && !this.pickup) { b.fired = true; continue; }
       b.fired = true;
       if (b.say) this._say(b.say);
       if (b.tip) this._showTip(b.tip);
@@ -3610,13 +3646,18 @@ class WalkScene extends Phaser.Scene {
       this.grain.tilePositionX = Math.random() * 256;
     }
 
-    // weapon pickup on contact
-    if (this.pickup && !this.pickGot && Math.abs(this.player.x - this.pickup.x) < 60) {
+    // Weapon pickup on contact — and contact means contact. Testing the
+    // horizontal gap alone collected it from a ledge overhead or mid-jump, so
+    // it wanted walking into rather than merely passing above.
+    if (this.pickup && !this.pickGot &&
+        Math.abs(this.player.x - this.pickup.x) < 46 &&
+        Math.abs(this.player.y - this.pickup.y) < 84) {
       this.pickGot = true;
       GameState.hasWeapon = true;
       this.tweens.killTweensOf(this.pickup);
       this.tweens.killTweensOf(this.pickupGlow);
       this.pickup.destroy(); this.pickupGlow.destroy(); this.pickupHint.destroy();
+      this.pickup = null; this.pickupGlow = null; this.pickupHint = null;
       this.acquireWeapon(this.cfg.pickup.name);
     }
 
@@ -3809,7 +3850,7 @@ class ShopScene extends WalkScene {
       worldW: 'auto', groundY: 640, startXFrac: 0.10,   // shop tile floor measured from the art
       title: 'SPORTING GOODS — camp · hunt · survive',
       beats: [
-        { at: 0.30, tip: 'WALK INTO THE WEAPON TO PICK IT UP' }
+        { at: 0.30, tip: 'WALK INTO THE WEAPON TO PICK IT UP', needs: 'pickup' }
       ],
       pickup: { xFrac: 0.60, name: 'M1 SCRAP CARBINE' },
       exits: hasFront ? [
