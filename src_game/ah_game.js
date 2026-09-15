@@ -1248,9 +1248,6 @@ class GameScene extends Phaser.Scene {
       // ~132px tall in combat, whatever the source art measures — level with
       // the alien's head, which is the tallest thing he fights on foot
       this.player.setScale(heroScale(this.hero, 132, 0.55));
-      // Pivot at the boots so the aim lean swings the muzzle, not the feet.
-      this.player.setOrigin(0.5, AIM_PIVOT_Y);
-      this.player.body.setOffset(B.x, this.heroBodyOffsetY(0));
       this.player.play(this.hero.pre + '-idle');
     } else {
       this.player = this.physics.add.sprite(SPAWN_X, GROUND_Y - 80, 'hero_idle_0');
@@ -1297,7 +1294,6 @@ class GameScene extends Phaser.Scene {
     this.comboUntil = 0;
     this.crouching = false;
     this.longIdleDone = false;
-    this.aimTilt = 0;
     this._executing = false;     // scene instances are reused across restart()
     this.walkMode = false;       // X toggles; combat runs by default
     this.dropThrough = false;
@@ -1884,19 +1880,28 @@ class GameScene extends Phaser.Scene {
     this.nextFireAt = time + cd;
     Sfx.ensure(); Sfx.shoot();
 
-    // keyboard fire (K) shoots straight ahead in facing dir; mouse aims freely
-    const base = straight ? (this.facing > 0 ? 0 : Math.PI) : this.aimAngle;
+    // Left and right only. The pointer still picks which way he turns, but the
+    // shot leaves flat — there is one firing pose per weapon and it points
+    // straight ahead, so a bullet on any other line left a barrel that was not
+    // pointing there.
+    const base = this.facing > 0 ? 0 : Math.PI;
     const angle = base + (Math.random() - 0.5) * W.spread;
     let muzzleX, muzzleY;
     if (this.realHero) {
-      // The muzzle offset is measured on an upright sprite, so it rotates with
-      // the lean — otherwise the bullet leaves his chest while the barrel is
-      // pointing somewhere else.
-      const mx = this.facing * this.hero.art.muzzle.dx * this.player.scaleX;
-      const my = this.hero.art.muzzle.dy * this.player.scaleY;
-      const t = this.aimTilt || 0, ct = Math.cos(t), st = Math.sin(t);
-      muzzleX = this.player.x + mx * ct - my * st;
-      muzzleY = this.player.y + mx * st + my * ct;
+      // The barrel itself, measured off the frame this weapon fires on and
+      // stored in canvas pixels. Turning it into a world position against the
+      // sprite's own origin keeps it right whatever the origin is set to.
+      const art = this.hero.art;
+      const mp = art.muzzles && art.muzzles[this.weapon];
+      if (mp && art.canvasW) {
+        muzzleX = this.player.x +
+          this.facing * (mp.x - art.canvasW / 2) * this.player.scaleX;
+        muzzleY = this.player.y +
+          (mp.y - this.player.originY * art.canvasH) * this.player.scaleY;
+      } else {
+        muzzleX = this.player.x + this.facing * art.muzzle.dx * this.player.scaleX;
+        muzzleY = this.player.y + art.muzzle.dy * this.player.scaleY;
+      }
     } else {
       muzzleX = this.arm.x + Math.cos(angle) * 38;
       muzzleY = this.arm.y + Math.sin(angle) * 38;
@@ -2247,15 +2252,6 @@ class GameScene extends Phaser.Scene {
     Sfx.ensure(); Sfx.blip(this.walkMode ? 520 : 760, 0.06, 'square', 0.18, this.walkMode ? 380 : 900);
   }
 
-  // The body offset is measured from the frame's top-left corner, and Phaser
-  // already places that corner from the origin — so moving the origin to the
-  // boots carries the body along with the image and needs no correction here.
-  // Adding one "to compensate" pushes the body 49px below his feet and leaves
-  // him floating, which is what it did.
-  heroBodyOffsetY(extra) {
-    return this.hero.art.body.y + (extra || 0);
-  }
-
   // Ducking shortens the body so shots pass over, and the sprite's feet have
   // to stay on the ground while it does — a shorter box measured from the same
   // top would leave him hovering, so the offset moves down by what was cut.
@@ -2264,16 +2260,10 @@ class GameScene extends Phaser.Scene {
     this.crouching = on;
     const B = this.hero.art.body;
     const h = on ? Math.round(B.h * CROUCH_BODY) : B.h;
-    this.player.body.setSize(B.w, h).setOffset(B.x, this.heroBodyOffsetY(B.h - h));
+    this.player.body.setSize(B.w, h).setOffset(B.x, B.y + (B.h - h));
     this.curAnim = '';                  // let the state machine pick the stance
   }
 
-  // How far above the horizontal he is aiming, 0 (level or below) to 1
-  // (straight up), in his own facing.
-  aimLift() {
-    let a = Phaser.Math.Angle.Wrap(this.facing < 0 ? Math.PI - this.aimAngle : this.aimAngle);
-    return Phaser.Math.Clamp(-a / (Math.PI / 2), 0, 1);
-  }
 
   // E cycles the guns he is carrying. Swapping puts the new one away, so the
   // next shot draws it — which is the point of the animation.
@@ -2489,19 +2479,6 @@ class GameScene extends Phaser.Scene {
     // ----- animation state -----
     heroFlip(this.player, this.hero, this.facing);
     const moving = Math.abs(this.player.body.velocity.x) > 20;
-
-    // Lean back to aim up, but only with a gun in his hand and only on his
-    // feet: mid-swing, mid-dash or in the air the sprite is already saying
-    // something and a tilt on top of it just reads as a glitch.
-    if (this.realHero) {
-      const armed = time < this.weaponOutUntil || firing;
-      const canLean = armed && onGround && time >= this.swordAnimUntil &&
-                      time >= this.dashAnimUntil && !this.dead;
-      const target = canLean ? -this.facing * AIM_TILT_MAX * this.aimLift() : 0;
-      this.aimTilt = Phaser.Math.Linear(this.aimTilt || 0, target, AIM_TILT_LERP);
-      if (Math.abs(this.aimTilt) < 0.002) this.aimTilt = 0;
-      this.player.setRotation(this.aimTilt);
-    }
     if (this.realHero) {
       // Standing about with nothing left to shoot, he finds something to do
       // with his hands. Only with the street clear — strumming or eating in
@@ -2786,20 +2763,6 @@ const COMBO_ACTIONS = ['sword', 'sword2', 'sword3', 'sword4'];
 // Shooting something down to its last hit and then poking it once would play
 // a finisher the fight never set up, which is exactly what it should not do.
 const COMBO_FOR_DEATHBLOW = COMBO_ACTIONS.length - 1;
-
-// ---- aiming above the horizontal ------------------------------------------
-// There is one firing pose per weapon and it points straight ahead, so aiming
-// up has nothing to show. Until there is art for it, the whole sprite leans
-// back by up to this much — which is what a person actually does to fire
-// upward, and the eye follows the gun line rather than auditing his knees.
-// Downward aim is left alone: leaning forward over a gun reads as falling.
-const AIM_TILT_MAX = 0.20;        // ~11.5 degrees at a vertical aim
-const AIM_TILT_LERP = 0.22;       // eased, or it snaps as the pointer crosses
-// The pivot sits at his boots rather than his middle, so the lean swings the
-// muzzle and leaves the feet planted. Moving the origin moves where the physics
-// body hangs off the sprite, so the body offset is compensated by exactly the
-// same shift — see heroBodyOffsetY().
-const AIM_PIVOT_Y = 0.86;
 
 // Going down is a stance, not a way to travel: he plants on his hands and
 // stays there, and standing up is how you move again. The crouch-walk clip

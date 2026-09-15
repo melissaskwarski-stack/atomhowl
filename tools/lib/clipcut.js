@@ -193,4 +193,50 @@ function makeCutter(CW, CH) {
   };
 }
 
-module.exports = { decodeGif, stripMatte, bbox, loadClips, shareX, canvasFor, makeCutter, leadIn, PNG };
+// Where the barrel ends, in the coordinates of the cut canvas.
+//
+// Bullets used to leave from an offset guessed off the idle silhouette, which
+// put them somewhere around his chest. Aiming a weapon puts its barrel further
+// forward than any part of the body, so the tip is the forward-most column
+// above the waist — but only a column that is part of the gun. Two things
+// masquerade as one otherwise: single specks of ejected brass or spark drifting
+// ahead of the barrel, and, if you go looking for a bright warm muzzle flash,
+// the character's own skin, which in these renders is exactly that bright and
+// that warm. So no colour test at all; just continuity. A real barrel is
+// several columns deep, a speck is not.
+function muzzleTip(d, i, CW, CH) {
+  const b = d.boxes[i], f = d.frames[i], W = d.W;
+  const waist = Math.round(b.minY + (b.maxY - b.minY) * 0.6);
+
+  // opaque pixels per column, above the waist only (legs stride further
+  // forward than the gun on a walk cycle)
+  const col = new Int32Array(W);
+  for (let y = b.minY; y < waist; y++)
+    for (let x = 0; x < W; x++)
+      if (f[(y * W + x) * 4 + 3] > 30) col[x]++;
+
+  // the forward-most column that is the END OF SOMETHING SOLID: it and the
+  // three behind it all carry pixels
+  let mx = -1;
+  for (let x = W - 1; x >= 3; x--) {
+    if (col[x] >= 2 && col[x - 1] >= 2 && col[x - 2] >= 2 && col[x - 3] >= 2) { mx = x; break; }
+  }
+  if (mx < 0) return null;
+
+  // the bore is the middle of what the barrel draws in its last few columns
+  let lo = 1e9, hi = -1;
+  for (let y = b.minY; y < waist; y++)
+    for (let x = Math.max(0, mx - 4); x <= mx; x++)
+      if (f[(y * W + x) * 4 + 3] > 30) { if (y < lo) lo = y; if (y > hi) hi = y; }
+  const my = Math.round((lo + hi) / 2);
+
+  // through the same placement cut() uses, so it lands on the drawn frame
+  const w = b.maxX - b.minX + 1, h = b.maxY - b.minY + 1;
+  const ground = d._groundRow !== undefined ? d._groundRow
+               : Math.max.apply(null, d.boxes.map(v => v.maxY));
+  const ox = Math.floor((CW - w) / 2);
+  const oy = (CH - h - 2) - (ground - b.maxY);
+  return { x: ox + (mx - b.minX), y: oy + (my - b.minY) };
+}
+
+module.exports = { decodeGif, stripMatte, bbox, loadClips, shareX, canvasFor, makeCutter, leadIn, muzzleTip, PNG };

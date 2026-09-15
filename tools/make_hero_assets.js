@@ -220,6 +220,17 @@ const muzzle = {
   dx: Math.round(iw * 0.5 + 4),
   dy: Math.round((FEET_Y - ih * 0.72) - CH / 2)
 };
+// Per-weapon muzzles, in canvas pixels, measured off the frame each gun
+// actually fires on. The game turns these into a world position against the
+// sprite's own origin, so they stay right whatever the origin is set to.
+const muzzles = {};
+const mz = (name, clip, frame) => {
+  if (!clips[clip]) return;
+  const m = L.muzzleTip(clips[clip], frame, CW, CH);
+  if (m) { muzzles[name] = m; console.log(`muzzle ${name}: canvas ${m.x},${m.y}`); }
+};
+mz('pistol', 'pistol', 7 + (LOOP_FROM.pistol ? 0 : 0));
+mz('ak', 'akwalk', 9);
 
 const A_ = (keys, fps, repeat) => ({ fps, repeat: repeat === undefined ? -1 : repeat, keys });
 const mid = a => [a[Math.min(2, a.length - 1)]];
@@ -228,7 +239,8 @@ const mod = {
   charH: ih,
   hiRes: true,             // 3D render, not pixel art — scale fractionally
   directional: true,       // real per-side art — pick the anim, never flipX
-  body, muzzle,
+  body, muzzle, muzzles,
+  canvasW: CW, canvasH: CH,
   pending: ['idle west (mirrored east)', 'walk west (mirrored east)',
             'guitar west (mirrored east)', 'pistol west (mirrored east)',
             'dash west (mirrored east)', 'run-shoot east (mirrored west)',

@@ -116,6 +116,15 @@ const muzzle = {
   dx: Math.round((armed ? (armed.maxX - armed.minX + 1) : iw) * 0.5 + 4),
   dy: Math.round((FEET_Y - ih * 0.72) - CH / 2)
 };
+// Per-weapon muzzles in canvas pixels — see the note in lib/clipcut.js.
+const muzzles = {};
+const mz = (name, clip, frame) => {
+  if (!clips[clip]) return;
+  const m = L.muzzleTip(clips[clip], frame, CW, CH);
+  if (m) { muzzles[name] = m; console.log(`muzzle ${name}: canvas ${m.x},${m.y}`); }
+};
+mz('pistol', 'aim', 7);
+mz('ak', 'akwalk', 11);
 
 const A_ = (keys, fps, repeat) => ({ fps, repeat: repeat === undefined ? -1 : repeat, keys });
 const anims = {};
@@ -194,7 +203,8 @@ const mod = {
   longIdle: 'burger',      // what he does when left alone
   longIdleMs: 8000,
   longIdleOnce: true,      // two bites, then back to standing
-  body, muzzle,
+  body, muzzle, muzzles,
+  canvasW: CW, canvasH: CH,
   pending: ['west art (all mirrored east)', 'dash', 'jump', 'land',
             'a front-facing finisher', 'a real standing firing clip'],
   frames,
