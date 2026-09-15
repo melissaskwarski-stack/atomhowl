@@ -38,7 +38,8 @@ const SRC = {
   guitar:    A + 'Idle_v3_guitar_east.gif',
   pistol:    A + 'Idle_v3_pistol_east.gif',
   dash:      A + 'Idle_v3_dash_east.gif',
-  runshootW: A + 'Idle_v3_runshoot_west.gif'   // drawn facing west; east is mirrored
+  runshootW: A + 'Idle_v3_runshoot_west.gif',  // drawn facing west; east is mirrored
+  jump:      A + 'Idle_v3_jump_east.gif'
 };
 
 // Several clips open with a one-shot action and only then settle into
@@ -56,6 +57,13 @@ const LOOP_FROM = { guitar: 4, pistol: 7, runshoot: 8, runshootW: 8 };
 // sits at the waist, which the motion profile shows is the quietest band —
 // putting it anywhere busier would show as a shear.
 const FREEZE_BELOW = { guitar: 0.52 };
+// Clips whose frames keep one horizontal extent. Every frame is centred on
+// its own silhouette, so a clip that throws its arms out (the jump swings
+// from 47 to 115 wide) would shimmy the torso side to side. Sharing the X
+// range holds him still; the feet still anchor frame by frame, which is what
+// strips the rise the artist baked into the airborne frames — the physics
+// supplies that.
+const SHARE_X = ['jump'];
 const FREEZE_FEATHER = 12;
 const OUT = path.join(ROOT, 'build/ew_assets.js');
 
@@ -170,6 +178,15 @@ for (const [name, frac] of Object.entries(FREEZE_BELOW)) {
     `loop shares box ${shared.maxX - shared.minX + 1}x${shared.maxY - shared.minY + 1}`);
 }
 
+for (const name of SHARE_X) {
+  const d = clips[name];
+  if (!d) continue;
+  const minX = Math.min.apply(null, d.boxes.map(b => b.minX));
+  const maxX = Math.max.apply(null, d.boxes.map(b => b.maxX));
+  d.boxes = d.boxes.map(b => ({ minX, maxX, minY: b.minY, maxY: b.maxY }));
+  console.log(`${name}: frames share x${minX}-${maxX}, feet anchored per frame`);
+}
+
 // ---------- uniform, feet-anchored canvas ----------
 // One canvas for every clip so the sprite never jumps when the animation
 // changes, and every frame sits on the same floor line.
@@ -225,7 +242,9 @@ const K = {
   dash:      pool('dash',      'dash',   false),
   dashW:     pool('dashW',     'dash',   true),   // east only — mirror
   runshootinW: pool('runshootinW', 'runshootW', false),  // real west art
-  runshootin:  pool('runshootin',  'runshootW', true)    // west only — mirror
+  runshootin:  pool('runshootin',  'runshootW', true),   // west only — mirror
+  jump:      clips.jump ? pool('jump',  'jump', false) : null,
+  jumpW:     clips.jump ? pool('jumpW', 'jump', true)  : null   // east only — mirror
 };
 // Each looping tail reuses frames already emitted for its intro, so splitting
 // a clip in two costs no extra image data.
@@ -262,7 +281,8 @@ const mod = {
   body, muzzle,
   pending: ['idle west (mirrored east)', 'walk west (mirrored east)',
             'guitar west (mirrored east)', 'pistol west (mirrored east)',
-            'dash west (mirrored east)', 'run-shoot east (mirrored west)', 'sword'],
+            'dash west (mirrored east)', 'run-shoot east (mirrored west)',
+            'jump west (mirrored east)', 'sword'],
   frames,
   anims: {
     idle:       A_(K.idle,      5),     // slow breathing
@@ -289,8 +309,25 @@ const mod = {
     runshootW:  A_(K.runshootW, 15),
     dash:       A_(K.dash,      16, 0),      // one burst, never loops
     dashW:      A_(K.dashW,     16, 0),
-    jump:       A_(mid(K.run),  10, 0),
-    jumpW:      A_(mid(K.runW), 10, 0),
+    // The jump clip is one vertical hop: four frames of crouch, lift-off,
+    // rise, a tucked apex, the fall and a landing squash. The crouch is not
+    // played — the physics leaves the ground the instant the key goes down,
+    // and a squat drawn 50px in the air reads as a glitch. The rest is cut
+    // into phases the game picks by vertical speed, so a jump of any height
+    // and the second jump both look right.
+    ...(K.jump ? {
+      jump:       A_([K.jump[4], K.jump[5]],   14, 0),  // lift-off, then holds the rise
+      jumpW:      A_([K.jumpW[4], K.jumpW[5]], 14, 0),
+      jumpapex:   A_([K.jump[6]],  10, 0),
+      jumpapexW:  A_([K.jumpW[6]], 10, 0),
+      jumpfall:   A_([K.jump[7]],  10, 0),
+      jumpfallW:  A_([K.jumpW[7]], 10, 0),
+      land:       A_([K.jump[8]],  10, 0),
+      landW:      A_([K.jumpW[8]], 10, 0)
+    } : {
+      jump:       A_(mid(K.run),  10, 0),
+      jumpW:      A_(mid(K.runW), 10, 0)
+    }),
     // placeholder — the run cycle until the real art arrives
     sword:      A_(K.run,       14, 0),
     swordW:     A_(K.runW,      14, 0)

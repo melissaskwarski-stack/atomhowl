@@ -1181,6 +1181,8 @@ class GameScene extends Phaser.Scene {
     this.nextDashAt = 0;
     this.dashUntil = 0;
     this.dashAnimUntil = 0;
+    this.airSince = 0;
+    this.landUntil = 0;
     this.walkMode = false;       // X toggles; combat runs by default
     this.dropThrough = false;
     this.dead = false;
@@ -2082,6 +2084,13 @@ class GameScene extends Phaser.Scene {
     }
 
     const onGround = this.player.body.blocked.down || this.player.body.touching.down;
+    // Touching down after real air time plays the landing squash for a beat.
+    // A step off a kerb is not a landing, so it needs to have been airborne
+    // long enough to have visibly left the ground.
+    if (onGround && this.airSince && time - this.airSince > 160 && window.EW && window.EW.anims.land) {
+      this.landUntil = time + LAND_MS;
+    }
+    this.airSince = onGround ? 0 : (this.airSince || time);
     if (onGround) { this.lastGrounded = time; this.jumpsUsed = 0; }
 
     // ----- aim -----
@@ -2119,6 +2128,7 @@ class GameScene extends Phaser.Scene {
         const second = canAirJump && !canGroundJump;
         this.player.setVelocityY(second ? -560 : -640);
         this.jumpsUsed = second ? 2 : 1;
+        this.curAnim = '';                 // replay the lift-off, even mid-rise
         this.jumpBufferedAt = -9999;
         this.lastGrounded = -9999;
         Sfx.ensure(); Sfx.jump();
@@ -2141,7 +2151,8 @@ class GameScene extends Phaser.Scene {
       } else {
         let want;
         if (time < this.dashAnimUntil) want = 'ew-dash';   // the burst owns the sprite
-        else if (!onGround) want = 'ew-jump';          // freezes on the tucked frame
+        else if (!onGround) want = airAnim(this.player.body.velocity.y);
+        else if (time < this.landUntil) want = 'ew-land';
         else if (firing) want = moving ? 'ew-runshoot' : 'ew-shoot';
         else if (moving) want = this.walkMode ? 'ew-walk' : 'ew-run';
         else want = 'ew-idle';
@@ -2321,6 +2332,19 @@ const ACTION_INTRO = {
 };
 const actionOf = key => (key || '').replace(/W$/, '').replace(/in$/, '');
 
+// Airborne, the frame follows the vertical speed: lift-off and rise on the
+// way up, the tucked apex while he hangs, the fall once gravity wins. With
+// the art built this way a short hop and a full jump both read correctly,
+// and a second jump restarts the rise. Anything without the phase art gets
+// the plain jump frame.
+const AIR_APEX_VY = 140;
+function airAnim(vy) {
+  if (!window.EW || !window.EW.anims.jumpapex) return 'ew-jump';
+  return vy < -AIR_APEX_VY ? 'ew-jump' : vy > AIR_APEX_VY ? 'ew-jumpfall' : 'ew-jumpapex';
+}
+// How long the landing squash holds before he stands or runs.
+const LAND_MS = 110;
+
 function playAction(p, want) {
   const intro = ACTION_INTRO[want];
   if (intro && actionOf(p._curAnim) !== actionOf(want) && p.scene.anims.exists(intro)) {
@@ -2354,6 +2378,13 @@ function driveWalker(scene, p, keys, onGround) {
                 || Phaser.Input.Keyboard.JustDown(keys.UP);
   if (wantJump && onGround) { p.setVelocityY(-640); Sfx.ensure(); Sfx.jump(); }
 
+  // same landing beat as combat: only after real air time
+  const now = scene.time.now;
+  if (onGround && p._airSince && now - p._airSince > 160 && window.EW && window.EW.anims.land) {
+    p._landUntil = now + LAND_MS;
+  }
+  p._airSince = onGround ? 0 : (p._airSince || now);
+
   ewFlip(p, p._facing);
   const moving = Math.abs(p.body.velocity.x) > 20;
 
@@ -2364,7 +2395,8 @@ function driveWalker(scene, p, keys, onGround) {
   const bored = p._restSince && scene.time.now - p._restSince > IDLE_GUITAR_MS;
 
   if (p._real) {
-    let want = !onGround ? 'ew-jump'
+    let want = !onGround ? airAnim(p.body.velocity.y)
+             : now < (p._landUntil || 0) ? 'ew-land'
              : moving    ? (sprint ? 'ew-run' : 'ew-walk')
              : bored     ? 'ew-guitar' : 'ew-idle';
     want = ewAnim(want, p._facing);
