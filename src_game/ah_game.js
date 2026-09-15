@@ -650,6 +650,21 @@ const WORLD_W = 2400;
 const WORLD_H = 720;
 const GROUND_Y = 648;          // top surface of the street
 const GRAVITY = 1500;
+// The row of main.png where the painted street's lit edge drops away into the
+// dark foreground — measured as the strongest lit-to-dark step across the width
+// (595 on the left, 602 on the right). The painting is scaled so this row lands
+// on GROUND_Y, which is what puts the player's feet on the stone instead of in
+// the shadow strip below it.
+const COMBAT_FLOOR_ROW = 598;
+
+// The alien shambles until it is shot, then commits. Two lunges, picked at
+// random, so a run-in never reads the same way twice.
+const ALIEN_HEIGHT     = 124;   // on-screen height; a head under the player's 132
+const ALIEN_ENRAGE     = 2.3;   // speed multiplier once it has been hit
+const ALIEN_LUNGE_NEAR = 250;   // how close before it commits
+const ALIEN_LUNGE_MS   = 620;   // how long a lunge owns the sprite
+const ALIEN_LUNGE_CD   = 1500;  // cooldown between lunges
+const ALIEN_RAGE_TINT  = 0xffa88f;
 
 // ------------------------------------------------------------------ //
 //  BOOT — builds every texture procedurally                           //
@@ -720,6 +735,12 @@ class BootScene extends Phaser.Scene {
     if (window.ZOMBS) {
       for (const S of Object.keys(window.ZOMBS)) {
         window.ZOMBS[S].frames.forEach((uri, i) => this.load.image('zomb_' + S + '_' + i, uri));
+      }
+    }
+    // Creature sprites — one shared canvas per enemy across all its clips.
+    if (window.ENEMIES) {
+      for (const [name, e] of Object.entries(window.ENEMIES)) {
+        for (const k of Object.keys(e.frames)) this.load.image(`mob_${name}_${k}`, e.frames[k]);
       }
     }
     // Front-end art: dialogue frame, character busts (each with an eyes-shut
@@ -817,6 +838,24 @@ class BootScene extends Phaser.Scene {
           frames: f.map((_, i) => ({ key: `rot_${n}_${i}` })),
           frameRate: 5, repeat: -1
         });
+      }
+    }
+
+    // Creature animations. These are high-resolution renders shown small, so
+    // like the hero they get linear sampling rather than the game's nearest.
+    if (window.ENEMIES) {
+      for (const [name, e] of Object.entries(window.ENEMIES)) {
+        for (const k of Object.keys(e.frames)) {
+          const t = this.textures.get(`mob_${name}_${k}`);
+          if (t) t.setFilter(Phaser.Textures.FilterMode.LINEAR);
+        }
+        for (const [key, a] of Object.entries(e.anims)) {
+          this.anims.create({
+            key: name + '-' + key,
+            frames: a.keys.map(k => ({ key: `mob_${name}_${k}` })),
+            frameRate: a.fps, repeat: a.repeat
+          });
+        }
       }
     }
 
@@ -1052,7 +1091,10 @@ class GameScene extends Phaser.Scene {
     this.useCustomBg = this.textures.exists('bg_custom');
     if (this.useCombatArt) {
       const img = this.add.image(0, 0, 'scene_combat').setOrigin(0, 0).setDepth(-25);
-      const s = WORLD_H / img.height;            // fill the 720 height
+      // Scaled from the floor, not the height: the painted street has to meet
+      // the physics ground. What hangs below the street is a dark strip and
+      // falls off the bottom of the camera.
+      const s = COMBAT_FLOOR_ROW < img.height ? GROUND_Y / COMBAT_FLOOR_ROW : WORLD_H / img.height;
       img.setScale(s);
       img.setScrollFactor(1);                     // scrolls 1:1 with the world
       this.combatArtW = img.width * s;
@@ -1100,8 +1142,9 @@ class GameScene extends Phaser.Scene {
       this.player = this.physics.add.sprite(SPAWN_X, GROUND_Y - 80, 'ew_idle_0');
       const B = window.EW.body;
       this.player.body.setSize(B.w, B.h).setOffset(B.x, B.y);
-      // ~120px tall in combat, whatever the source art measures
-      this.player.setScale(ewScale(120, 0.5));
+      // ~132px tall in combat, whatever the source art measures — level with
+      // the alien's head, which is the tallest thing he fights on foot
+      this.player.setScale(ewScale(132, 0.55));
       this.player.play('ew-idle');
     } else {
       this.player = this.physics.add.sprite(SPAWN_X, GROUND_Y - 80, 'hero_idle_0');
@@ -1137,6 +1180,8 @@ class GameScene extends Phaser.Scene {
     this.nextSwordAt = 0;
     this.nextDashAt = 0;
     this.dashUntil = 0;
+    this.dashAnimUntil = 0;
+    this.walkMode = false;       // X toggles; combat runs by default
     this.dropThrough = false;
     this.dead = false;
     this.kills = 0;
@@ -1172,6 +1217,7 @@ class GameScene extends Phaser.Scene {
     this.input.keyboard.on('keydown-Q', () => this.useNuke());
     this.input.keyboard.on('keydown-J', () => this.swordAttack());
     this.input.keyboard.on('keydown-SHIFT', () => this.dash());
+    this.input.keyboard.on('keydown-X', () => this.toggleWalk());
     // --- test keys (for tuning, harmless to ship) ---
     this.input.keyboard.on('keydown-V', () => {   // V = spawn one of each enemy
       if (this.dead) return;
@@ -1217,6 +1263,8 @@ class GameScene extends Phaser.Scene {
     const tstyle = { fontFamily: 'Courier New, monospace', fontSize: '20px', color: '#d9c7a8' };
     this.waveText = this.add.text(1250, 18, '', tstyle).setOrigin(1, 0).setScrollFactor(0).setDepth(60);
     this.killText = this.add.text(1250, 44, '', tstyle).setOrigin(1, 0).setScrollFactor(0).setDepth(60);
+    this.modeText = this.add.text(1250, 70, '', tstyle).setOrigin(1, 0).setScrollFactor(0).setDepth(60)
+      .setColor('#9fc3d9').setAlpha(0);
 
     // Power-up HUD row: icons + count under the hearts
     const powDefs = [
@@ -1233,7 +1281,7 @@ class GameScene extends Phaser.Scene {
       this.powHudIcons[d.key] = { ic, lbl };
     });
     this.add.text(640, 702,
-      'A/D · W/Space jump ×2 · Shift dash · LMB fire · RMB/F sword · Q nuke · H horde · B boss · M mute',
+      'A/D · W/Space jump ×2 · Shift dash · X walk · LMB fire · RMB/F sword · Q nuke · H horde · B boss · M mute',
       { fontFamily: 'Courier New, monospace', fontSize: '14px', color: '#8a6f4a' })
       .setOrigin(0.5, 1).setScrollFactor(0).setDepth(60).setAlpha(0.85);
 
@@ -1345,7 +1393,19 @@ class GameScene extends Phaser.Scene {
 
     const speedJitter = 0.85 + Math.random() * 0.3;
     let z;
-    if (type === 'zomba' && this.textures.exists('mob_zomba')) {
+    if (type === 'alien' && window.ENEMIES && window.ENEMIES.alien) {
+      const E = window.ENEMIES.alien;
+      z = this.physics.add.sprite(x, GROUND_Y - 90, 'mob_alien_walk_0');
+      z.setScale(ALIEN_HEIGHT / E.charH);
+      z.body.setSize(E.body.w, E.body.h).setOffset(E.body.x, E.body.y);
+      // Shambles in slowly. Shooting it is what wakes it up — see damageZombie.
+      z.setData({ hp: 6, speed: this.waveSpeed * 0.55 * speedJitter, dmg: 2, type: type });
+      z.setData('faceLeft', true);            // the art is drawn facing west
+      z.setData('nextLungeAt', this.time.now + 900);
+      z.setData('lungeUntil', 0);
+      z.setData('enraged', false);
+      z.play('alien-walk');
+    } else if (type === 'zomba' && this.textures.exists('mob_zomba')) {
       z = this.physics.add.sprite(x, GROUND_Y - 40, 'mob_zomba');
       z.body.setSize(40, 60).setOffset(20, 8);
       z.setData({ hp: 3, speed: this.waveSpeed * 0.9 * speedJitter, dmg: 1, type: type });
@@ -1678,8 +1738,20 @@ class GameScene extends Phaser.Scene {
     z.setData('hp', hp);
     Sfx.hit();
 
+    // Shooting the alien is what makes it dangerous: the first hit enrages it
+    // for good and it stops shambling.
+    if (type === 'alien' && !z.getData('enraged')) {
+      z.setData('enraged', true);
+      z.setData('nextLungeAt', this.time.now + 260);   // it reacts immediately
+      Sfx.roar();
+    }
+
     z.setTintFill(0xffffff);
-    this.time.delayedCall(60, () => { if (z.active) z.clearTint(); });
+    this.time.delayedCall(60, () => {
+      if (!z.active) return;
+      z.clearTint();
+      if (z.getData('enraged')) z.setTint(ALIEN_RAGE_TINT);   // rage outlives the hit flash
+    });
 
     z.setData('knockUntil', this.time.now + 160);
     const resist = type === 'brute' ? 0.35 : (type === 'boss' ? 0 : 1);
@@ -1878,11 +1950,30 @@ class GameScene extends Phaser.Scene {
   }
 
   // ================= MOVEMENT =================
+  // Walking is a mode rather than a held key because the held keys are
+  // spoken for: Shift is the dash here, and Ctrl and Alt reach browser
+  // shortcuts the page cannot swallow. The badge under the kill count says
+  // which mode you are in.
+  toggleWalk() {
+    if (this.dead) return;
+    this.walkMode = !this.walkMode;
+    this.modeText.setText(this.walkMode ? 'WALK' : 'RUN');
+    this.tweens.killTweensOf(this.modeText);
+    this.modeText.setAlpha(1);
+    if (!this.walkMode) {
+      this.tweens.add({ targets: this.modeText, alpha: 0, delay: 900, duration: 400 });
+    }
+    Sfx.ensure(); Sfx.blip(this.walkMode ? 520 : 760, 0.06, 'square', 0.18, this.walkMode ? 380 : 900);
+  }
+
   dash() {
     const time = this.time.now;
     if (time < this.nextDashAt || this.dead) return;
     this.nextDashAt = time + 900;
-    this.dashUntil = time + 260;
+    this.dashUntil = time + 260;       // invulnerability window
+    // The clip runs longer than the i-frames, so the animation gets its own
+    // window: tying it to dashUntil cut the dash off a third of the way in.
+    this.dashAnimUntil = time + 560;
     Sfx.ensure(); Sfx.dash();
 
     let dir = 0;
@@ -2014,7 +2105,7 @@ class GameScene extends Phaser.Scene {
     // ----- horizontal movement -----
     const dashing = time < this.dashUntil;
     if (!dashing) {
-      this.player.setVelocityX(move * (boostActive ? 580 : 340));
+      this.player.setVelocityX(move * (boostActive ? 580 : this.walkMode ? WALK_SPEED : COMBAT_SPEED));
 
       // drop through one-way ledges with S/Down + jump press
       this.dropThrough = (this.keys.S.isDown || this.keys.DOWN.isDown);
@@ -2049,11 +2140,17 @@ class GameScene extends Phaser.Scene {
         // let it play
       } else {
         let want;
-        if (!onGround) want = 'ew-jump';            // freezes on the tucked frame
-        else if (firing) want = 'ew-shoot';         // draws once, then holds the recoil loop
-        else if (moving) want = 'ew-run';
+        if (time < this.dashAnimUntil) want = 'ew-dash';   // the burst owns the sprite
+        else if (!onGround) want = 'ew-jump';          // freezes on the tucked frame
+        else if (firing) want = moving ? 'ew-runshoot' : 'ew-shoot';
+        else if (moving) want = this.walkMode ? 'ew-walk' : 'ew-run';
         else want = 'ew-idle';
         want = ewAnim(want, this.facing);
+        // There is no armed walk in the art, so walking and firing borrows the
+        // run-and-gun cycle slowed to the ground speed, which keeps the feet
+        // landing where they should instead of skating.
+        const slowFire = this.walkMode && firing && moving && onGround && time >= this.dashAnimUntil;
+        this.player.anims.timeScale = slowFire ? WALK_SPEED / COMBAT_SPEED : 1;
         if (this.curAnim !== want) {
           this.player._curAnim = this.curAnim;      // playAction reads the previous action
           playAction(this.player, want);
@@ -2141,6 +2238,26 @@ class GameScene extends Phaser.Scene {
         return;
       }
 
+      // the alien: a slow shamble that turns into a committed lunge
+      if (type === 'alien') {
+        if (time < z.getData('lungeUntil')) return;        // a lunge owns the sprite
+        const grounded = z.body.blocked.down || z.body.touching.down;
+        const speed = z.getData('speed') * (z.getData('enraged') ? ALIEN_ENRAGE : 1);
+
+        if (grounded && Math.abs(dx) < ALIEN_LUNGE_NEAR && time > z.getData('nextLungeAt')) {
+          const which = Math.random() < 0.5 ? 'lungeA' : 'lungeB';
+          z.play('alien-' + which);
+          z.setData('lungeUntil', time + ALIEN_LUNGE_MS);
+          z.setData('nextLungeAt', time + ALIEN_LUNGE_CD + Math.random() * 700);
+          z.setVelocity(dir * speed * 4.2, -250);
+          Sfx.swoop();
+          return;
+        }
+        z.setVelocityX(dir * speed);
+        if (grounded && z.anims.getName() !== 'alien-walk') z.play('alien-walk');
+        return;
+      }
+
       z.setVelocityX(dir * z.getData('speed'));
 
       const zGrounded = z.body.blocked.down || z.body.touching.down;
@@ -2197,9 +2314,10 @@ function makeWalker(scene, x, groundY, targetH) {
 // loop behind it is what makes the action read. Turning on the spot keeps the
 // action, so only a CHANGE of action replays the intro.
 const ACTION_INTRO = {
-  'ew-run':    'ew-runin',    'ew-runW':    'ew-runinW',
-  'ew-guitar': 'ew-guitarin', 'ew-guitarW': 'ew-guitarinW',
-  'ew-shoot':  'ew-shootin',  'ew-shootW':  'ew-shootinW'
+  'ew-run':      'ew-runin',      'ew-runW':      'ew-runinW',
+  'ew-guitar':   'ew-guitarin',   'ew-guitarW':   'ew-guitarinW',
+  'ew-shoot':    'ew-shootin',    'ew-shootW':    'ew-shootinW',
+  'ew-runshoot': 'ew-runshootin', 'ew-runshootW': 'ew-runshootinW'
 };
 const actionOf = key => (key || '').replace(/W$/, '').replace(/in$/, '');
 
@@ -2215,8 +2333,11 @@ function playAction(p, want) {
 
 // Ground speeds. He walks by default and sprints on shift, which is also what
 // picks between the walk cycle and the run.
-const WALK_SPEED = 235;
-const RUN_SPEED  = 430;
+const WALK_SPEED   = 235;
+const RUN_SPEED    = 430;
+// Combat runs by default (X drops it to the walk); the exploration sprint is
+// faster still because there is nothing there to run into.
+const COMBAT_SPEED = 340;
 // How long he has to stand still before he gets bored and starts playing.
 const IDLE_GUITAR_MS = 5000;
 
@@ -3238,7 +3359,7 @@ class ShopScene extends WalkScene {
 // ================================================================== //
 const SANDBOX_ENEMIES = [
   ['ONE', 'walker'], ['TWO', 'runner'], ['THREE', 'brute'], ['FOUR', 'flyer'],
-  ['FIVE', 'zomba'], ['SIX', 'archer'], ['SEVEN', 'kingo']
+  ['FIVE', 'zomba'], ['SIX', 'archer'], ['SEVEN', 'kingo'], ['NINE', 'alien']
 ];
 
 // Roster for the character switcher. Adding a playable character is one entry
@@ -3282,11 +3403,11 @@ class DebugScene extends GameScene {
     const lines = [
       'SANDBOX                                   F9 / ESC — leave',
       '1 walker   2 runner   3 brute   4 flyer',
-      '5 zomba    6 archer   7 kingo   8 boss',
+      '5 zomba    6 archer   7 kingo   8 boss    9 ALIEN',
       'C clear    P character    O finisher    R reset',
-      'A/D move · W jump ×2 · Shift dash · LMB fire · F sword · Q nuke'
+      'A/D move · X walk/run · W jump ×2 · Shift dash · LMB fire · F sword · Q nuke'
     ];
-    this.add.rectangle(14, 96, 470, 112, 0x0a0807, 0.72)
+    this.add.rectangle(14, 96, 540, 112, 0x0a0807, 0.72)
       .setOrigin(0, 0).setScrollFactor(0).setDepth(70);
     this._dbgText = this.add.text(26, 104, lines.join('\n'), {
       fontFamily: F_UI, fontSize: '13px', fontStyle: '600', color: '#f2b13c', lineSpacing: 4
@@ -3303,6 +3424,7 @@ class DebugScene extends GameScene {
     this._dbgStatus.setText(
       'PLAYING ' + cast.name + '  (' + (this.castIdx + 1) + '/' + SANDBOX_CAST.length + ')' +
       '     FINISHER ' + (this.finisherEnabled ? 'ON' : 'OFF') +
+      '     MOVE ' + (this.walkMode ? 'WALK' : 'RUN') +
       '     ENEMIES ' + this.zombies.countActive(true));
   }
 

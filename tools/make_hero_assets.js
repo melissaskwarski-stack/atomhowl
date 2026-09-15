@@ -27,12 +27,18 @@ const { PNG } = require('pngjs');
 const ROOT = path.resolve(__dirname, '..');
 const A = 'public/assets/';
 const SRC = {
-  idle:   A + 'Idle_v3_idle_breathing_east.gif',
-  run:    A + 'Idle_v3_run_east.gif',
-  runW:   A + 'Idle_v3_run_west.gif',
-  walk:   A + 'Idle_v3_walk_east.gif',
-  guitar: A + 'Idle_v3_guitar_east.gif',
-  pistol: A + 'Idle_v3_pistol_east.gif'
+  idle:      A + 'Idle_v3_idle_breathing_east.gif',
+  // The run is two clips: the lean-in that gets him moving, which has real east
+  // and west art, and a true looping sprint behind it. Before the sprint arrived
+  // the loop had to be sliced out of the lean-in, which never settles.
+  runin:     A + 'Idle_v3_run_east.gif',
+  runinW:    A + 'Idle_v3_run_west.gif',
+  sprint:    A + 'Idle_v3_sprint_east.gif',
+  walk:      A + 'Idle_v3_walk_east.gif',
+  guitar:    A + 'Idle_v3_guitar_east.gif',
+  pistol:    A + 'Idle_v3_pistol_east.gif',
+  dash:      A + 'Idle_v3_dash_east.gif',
+  runshootW: A + 'Idle_v3_runshoot_west.gif'   // drawn facing west; east is mirrored
 };
 
 // Several clips open with a one-shot action and only then settle into
@@ -41,7 +47,7 @@ const SRC = {
 // once, '<name>' loops the settled tail. The index is where that tail starts,
 // chosen by comparing the wrap discontinuity against the in-loop motion
 // (tools note: run 4 scored 1.12, pistol 7 scored 1.00 — lower is smoother).
-const LOOP_FROM = { run: 4, runW: 4, guitar: 4, pistol: 7 };
+const LOOP_FROM = { guitar: 4, pistol: 7, runshoot: 8, runshootW: 8 };
 
 // Playing the guitar is an upper-body action, but the render has him shifting
 // his weight foot to foot, which looks wrong once the clip is looping on the
@@ -129,7 +135,7 @@ for (const [name, rel] of Object.entries(SRC)) {
   console.log(`${name}: ${d.W}x${d.H} ${d.frames.length}f` +
     (stripped ? '  matte removed' : '  (alpha present)'));
 }
-if (!clips.idle || !clips.run) { console.error('need idle + run east'); process.exit(1); }
+if (!clips.idle || !clips.runin) { console.error('need idle + run east'); process.exit(1); }
 
 for (const [name, frac] of Object.entries(FREEZE_BELOW)) {
   const d = clips[name];
@@ -208,19 +214,27 @@ const K = {
   idleW:     pool('idleW',     'idle',   true),   // east only — mirror
   walk:      pool('walk',      'walk',   false),
   walkW:     pool('walkW',     'walk',   true),   // east only — mirror
-  runin:     pool('runin',     'run',    false),  // real east run
-  runinW:    pool('runinW',    'runW',   false),  // real west run
+  runin:     pool('runin',     'runin',  false),  // real east lean-in
+  runinW:    pool('runinW',    'runinW', false),  // real west lean-in
+  run:       pool('run',       'sprint', false),  // true looping sprint
+  runW:      pool('runW',      'sprint', true),   // east only — mirror
   guitarin:  pool('guitarin',  'guitar', false),
   guitarinW: pool('guitarinW', 'guitar', true),   // east only — mirror
   pistolin:  pool('pistolin',  'pistol', false),
-  pistolinW: pool('pistolinW', 'pistol', true)    // east only — mirror
+  pistolinW: pool('pistolinW', 'pistol', true),   // east only — mirror
+  dash:      pool('dash',      'dash',   false),
+  dashW:     pool('dashW',     'dash',   true),   // east only — mirror
+  runshootinW: pool('runshootinW', 'runshootW', false),  // real west art
+  runshootin:  pool('runshootin',  'runshootW', true)    // west only — mirror
 };
 // Each looping tail reuses frames already emitted for its intro, so splitting
 // a clip in two costs no extra image data.
-for (const [name, from] of Object.entries({ run: LOOP_FROM.run, guitar: LOOP_FROM.guitar,
-                                            pistol: LOOP_FROM.pistol })) {
-  K[name]        = K[name + 'in'].slice(from);
-  K[name + 'W']  = K[name + 'inW'].slice(from);
+// The run has its own loop art now, so only these still slice a tail out of a
+// one-shot clip.
+for (const name of ['guitar', 'pistol', 'runshoot']) {
+  const from = LOOP_FROM[name] || 0;
+  K[name]       = K[name + 'in'].slice(from);
+  K[name + 'W'] = K[name + 'inW'].slice(from);
 }
 
 // ---------- body box + muzzle ----------
@@ -247,7 +261,8 @@ const mod = {
   directional: true,       // real per-side art — pick the anim, never flipX
   body, muzzle,
   pending: ['idle west (mirrored east)', 'walk west (mirrored east)',
-            'guitar west (mirrored east)', 'pistol west (mirrored east)', 'sword'],
+            'guitar west (mirrored east)', 'pistol west (mirrored east)',
+            'dash west (mirrored east)', 'run-shoot east (mirrored west)', 'sword'],
   frames,
   anims: {
     idle:       A_(K.idle,      5),     // slow breathing
@@ -268,8 +283,12 @@ const mod = {
     guitarW:    A_(K.guitarW,   7),
     shoot:      A_(K.pistol,    10),    // arm out, recoil
     shootW:     A_(K.pistolW,   10),
-    runshoot:   A_(K.pistol,    10),
-    runshootW:  A_(K.pistolW,   10),
+    runshootin:  A_(K.runshootin,  15, 0),   // draws the pistol at a run
+    runshootinW: A_(K.runshootinW, 15, 0),
+    runshoot:   A_(K.runshoot,  15),   // settled run-and-fire cycle
+    runshootW:  A_(K.runshootW, 15),
+    dash:       A_(K.dash,      16, 0),      // one burst, never loops
+    dashW:      A_(K.dashW,     16, 0),
     jump:       A_(mid(K.run),  10, 0),
     jumpW:      A_(mid(K.runW), 10, 0),
     // placeholder — the run cycle until the real art arrives

@@ -156,6 +156,7 @@ const read = rel => fs.readFileSync(p(rel), 'utf8');
 const blocks = [
   read('vendor/phaser.min.js'),
   read('build/ew_assets.js'),
+  read('build/enemy_assets.js'),
   read('build/zomb_assets.js'),
   read('build/ui_assets.js'),
   sceneBlock,
