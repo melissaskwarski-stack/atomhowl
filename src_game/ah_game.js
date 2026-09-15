@@ -669,28 +669,76 @@ const ALIEN_RAGE_TINT  = 0xffa88f;
 // ------------------------------------------------------------------ //
 //  BOOT — builds every texture procedurally                           //
 // ------------------------------------------------------------------ //
-//  Hero animation helpers                                             //
+//  THE CAST                                                           //
 //                                                                     //
-//  The current character art ships per-direction (real east AND west  //
-//  frames), so facing left plays the west animation rather than       //
-//  mirroring the sprite — mirroring would flip his hair and gear.     //
-//  Single-sided art has no *W keys and still mirrors via flipX.       //
+//  A playable character is an asset module (window.EW, window.WF)     //
+//  plus one entry below. Its frames load as '<pre>_<frame>' and its    //
+//  animations register as '<pre>-<action>', so two characters never    //
+//  collide; the state machines name bare ACTIONS ('run', 'idle') and   //
+//  resolve them against whoever is being played.                       //
+//                                                                     //
+//  The art ships per-direction where it exists, so facing left plays   //
+//  the west animation rather than mirroring the sprite — mirroring     //
+//  would flip asymmetric hair and gear. Single-sided art has no *W     //
+//  keys and still mirrors via flipX.                                   //
+//                                                                     //
+//  Nobody has a complete set. Rather than have every scene test what   //
+//  exists, a missing action falls back along a chain — no dash art     //
+//  runs instead, no jump art runs in the air — so a character can be   //
+//  dropped into the sandbox with four clips and still be playable.     //
 // ------------------------------------------------------------------ //
-const EW_DIR = !!(window.EW && window.EW.directional);
+const CAST = [];
+(function buildCast() {
+  [{ id: 'eterwolf', name: 'ETERWOLF', pre: 'ew', art: window.EW,
+     longIdle: 'guitar', longIdleMs: 5000 },
+   { id: 'wolffel',  name: 'WOLFFEL',  pre: 'wf', art: window.WF,
+     longIdle: 'burger', longIdleMs: 8000 }].forEach(d => {
+    if (!d.art || !d.art.anims) return;      // art not built — leave them out
+    if (d.art.longIdle) d.longIdle = d.art.longIdle;
+    if (d.art.longIdleMs) d.longIdleMs = d.art.longIdleMs;
+    d.dir = !!d.art.directional;
+    CAST.push(d);
+  });
+})();
+const DEFAULT_CAST = CAST.length ? CAST[0].id : null;
+const castById = id => CAST.find(c => c.id === id) || CAST[0] || null;
 
-// 'ew-run' facing left -> 'ew-runW', when that variant exists
-function ewAnim(key, facing) {
-  return (EW_DIR && facing < 0 && window.EW.anims[key.slice(3) + 'W']) ? key + 'W' : key;
+// What to play when a character has no art for an action. First hit wins.
+const ACTION_FALLBACK = {
+  dash:     ['dash', 'run', 'walk', 'idle'],
+  jump:     ['jump', 'run', 'walk', 'idle'],
+  jumpapex: ['jumpapex', 'jump', 'run', 'idle'],
+  jumpfall: ['jumpfall', 'jump', 'run', 'idle'],
+  land:     ['land', 'idle'],
+  runshoot: ['runshoot', 'shoot', 'run', 'idle'],
+  shoot:    ['shoot', 'idle'],
+  sword:    ['sword', 'shoot', 'run', 'idle'],
+  guitar:   ['guitar', 'idle'],
+  burger:   ['burger', 'idle'],
+  walk:     ['walk', 'run', 'idle'],
+  run:      ['run', 'walk', 'idle']
+};
+function heroHas(hero, action) { return !!(hero && hero.art.anims[action]); }
+function heroAction(hero, action) {
+  if (!hero) return action;
+  if (hero.art.anims[action]) return action;
+  const chain = ACTION_FALLBACK[action];
+  if (chain) for (const a of chain) if (hero.art.anims[a]) return a;
+  return 'idle';
 }
-
+// an action plus a facing -> the animation key registered at boot
+function heroAnim(hero, action, facing) {
+  const a = heroAction(hero, action);
+  const w = a + 'W';
+  return hero.pre + '-' + (hero.dir && facing < 0 && hero.art.anims[w] ? w : a);
+}
 // only mirror when there's no real art for the other side
-function ewFlip(sprite, facing) { sprite.setFlipX(EW_DIR ? false : facing < 0); }
-
+function heroFlip(sprite, hero, facing) { sprite.setFlipX(hero && hero.dir ? false : facing < 0); }
 // hi-res renders scale fractionally; pixel art snaps to whole pixels so it stays crisp
-function ewScale(targetH, fallback) {
-  if (!window.EW || !window.EW.charH) return fallback;
-  const s = targetH / window.EW.charH;
-  return window.EW.hiRes ? s : Math.max(1, Math.round(s));
+function heroScale(hero, targetH, fallback) {
+  if (!hero || !hero.art.charH) return fallback;
+  const s = targetH / hero.art.charH;
+  return hero.art.hiRes ? s : Math.max(1, Math.round(s));
 }
 
 // ------------------------------------------------------------------ //
@@ -698,19 +746,20 @@ class BootScene extends Phaser.Scene {
   constructor() { super('BootScene'); }
 
   preload() {
-    // Real Eterwolf frames (PixelLab GIFs, decoded + embedded as data URIs).
-    // If window.EW is missing we fall back to the procedural placeholder.
-    if (window.EW) {
-      if (window.EW.frames) {
-        // shared frame pool — placeholder anims reuse real frames, so each
-        // image is loaded once no matter how many anims reference it
-        for (const k of Object.keys(window.EW.frames)) {
-          this.load.image('ew_' + k, window.EW.frames[k]);
+    // Character frames (PixelLab GIFs, decoded + embedded as data URIs), one
+    // pool per member of the cast. With none built the game falls back to the
+    // procedural placeholder hero.
+    for (const c of CAST) {
+      if (c.art.frames) {
+        // shared frame pool — an intro and its looping tail reference the same
+        // images, so each is loaded once however many anims name it
+        for (const k of Object.keys(c.art.frames)) {
+          this.load.image(c.pre + '_' + k, c.art.frames[k]);
         }
       } else {
-        for (const name of Object.keys(window.EW.anims)) {
-          window.EW.anims[name].frames.forEach((uri, i) => {
-            this.load.image('ew_' + name + '_' + i, uri);
+        for (const name of Object.keys(c.art.anims)) {
+          c.art.anims[name].frames.forEach((uri, i) => {
+            this.load.image(c.pre + '_' + name + '_' + i, uri);
           });
         }
       }
@@ -800,22 +849,23 @@ class BootScene extends Phaser.Scene {
     // The game runs pixelArt (NEAREST) for the sprite sheets, but the current
     // hero is a high-res render shrunk to fit — nearest-sampling that drops
     // pixels and stipples the edges, so give just his frames linear filtering.
-    if (window.EW && window.EW.hiRes && window.EW.frames) {
-      for (const k of Object.keys(window.EW.frames)) {
-        const t = this.textures.get('ew_' + k);
+    for (const c of CAST) {
+      if (!c.art.hiRes || !c.art.frames) continue;
+      for (const k of Object.keys(c.art.frames)) {
+        const t = this.textures.get(c.pre + '_' + k);
         if (t) t.setFilter(Phaser.Textures.FilterMode.LINEAR);
       }
     }
 
-    // real Eterwolf animations. Directional art registers both an east key
-    // ('ew-run') and a west one ('ew-runW'); see ewAnim().
-    if (window.EW) {
-      for (const name of Object.keys(window.EW.anims)) {
-        const a = window.EW.anims[name];
+    // Character animations, namespaced by character. Directional art registers
+    // both an east key ('ew-run') and a west one ('ew-runW'); see heroAnim().
+    for (const c of CAST) {
+      for (const name of Object.keys(c.art.anims)) {
+        const a = c.art.anims[name];
         this.anims.create({
-          key: 'ew-' + name,
-          frames: a.keys ? a.keys.map(k => ({ key: 'ew_' + k }))
-                         : a.frames.map((u, i) => ({ key: 'ew_' + name + '_' + i })),
+          key: c.pre + '-' + name,
+          frames: a.keys ? a.keys.map(k => ({ key: c.pre + '_' + k }))
+                         : a.frames.map((u, i) => ({ key: c.pre + '_' + name + '_' + i })),
           frameRate: a.fps,
           repeat: a.repeat
         });
@@ -1135,17 +1185,21 @@ class GameScene extends Phaser.Scene {
       this.oneWays.push(ledge);
     });
 
-    // ---------- player: Eterwolf (enters the level from the LEFT) ----------
+    // ---------- player (enters the level from the LEFT) ----------
+    // The story always plays Eterwolf; the sandbox sets castId before this
+    // runs, which is the whole of what switching a character costs.
     const SPAWN_X = 160;
-    this.realHero = !!window.EW;
+    this.castId = this.castId || DEFAULT_CAST;
+    this.hero = castById(this.castId);
+    this.realHero = !!this.hero;
     if (this.realHero) {
-      this.player = this.physics.add.sprite(SPAWN_X, GROUND_Y - 80, 'ew_idle_0');
-      const B = window.EW.body;
+      this.player = this.physics.add.sprite(SPAWN_X, GROUND_Y - 80, this.hero.pre + '_idle_0');
+      const B = this.hero.art.body;
       this.player.body.setSize(B.w, B.h).setOffset(B.x, B.y);
       // ~132px tall in combat, whatever the source art measures — level with
       // the alien's head, which is the tallest thing he fights on foot
-      this.player.setScale(ewScale(132, 0.55));
-      this.player.play('ew-idle');
+      this.player.setScale(heroScale(this.hero, 132, 0.55));
+      this.player.play(this.hero.pre + '-idle');
     } else {
       this.player = this.physics.add.sprite(SPAWN_X, GROUND_Y - 80, 'hero_idle_0');
       this.player.body.setSize(22, 60).setOffset(10, 6);
@@ -1183,6 +1237,7 @@ class GameScene extends Phaser.Scene {
     this.dashAnimUntil = 0;
     this.airSince = 0;
     this.landUntil = 0;
+    this.restSince = 0;
     this._executing = false;     // scene instances are reused across restart()
     this.walkMode = false;       // X toggles; combat runs by default
     this.dropThrough = false;
@@ -1679,8 +1734,8 @@ class GameScene extends Phaser.Scene {
     const angle = base + (Math.random() - 0.5) * 0.05;
     let muzzleX, muzzleY;
     if (this.realHero) {
-      muzzleX = this.player.x + this.facing * window.EW.muzzle.dx * this.player.scaleX;
-      muzzleY = this.player.y + window.EW.muzzle.dy * this.player.scaleY;
+      muzzleX = this.player.x + this.facing * this.hero.art.muzzle.dx * this.player.scaleX;
+      muzzleY = this.player.y + this.hero.art.muzzle.dy * this.player.scaleY;
     } else {
       muzzleX = this.arm.x + Math.cos(angle) * 38;
       muzzleY = this.arm.y + Math.sin(angle) * 38;
@@ -1716,7 +1771,7 @@ class GameScene extends Phaser.Scene {
 
     // play the swing animation for its actual duration (asset-agnostic)
     if (this.realHero) {
-      const swordKey = ewAnim('ew-sword', this.facing);
+      const swordKey = heroAnim(this.hero, 'sword', this.facing);
       this.player.play(swordKey);
       this.curAnim = swordKey;
       const sa = this.anims.get(swordKey);
@@ -2098,7 +2153,7 @@ class GameScene extends Phaser.Scene {
     // Touching down after real air time plays the landing squash for a beat.
     // A step off a kerb is not a landing, so it needs to have been airborne
     // long enough to have visibly left the ground.
-    if (onGround && this.airSince && time - this.airSince > 160 && window.EW && window.EW.anims.land) {
+    if (onGround && this.airSince && time - this.airSince > 160 && heroHas(this.hero, 'land')) {
       this.landUntil = time + LAND_MS;
     }
     this.airSince = onGround ? 0 : (this.airSince || time);
@@ -2153,30 +2208,38 @@ class GameScene extends Phaser.Scene {
     }
 
     // ----- animation state -----
-    ewFlip(this.player, this.facing);
+    heroFlip(this.player, this.hero, this.facing);
     const moving = Math.abs(this.player.body.velocity.x) > 20;
     if (this.realHero) {
+      // Standing about with nothing left to shoot, he finds something to do
+      // with his hands. Only with the street clear — strumming or eating in
+      // the middle of a wave would read as a bug, not a flourish.
+      if (moving || !onGround || firing || this.dead) this.restSince = 0;
+      else if (!this.restSince) this.restSince = time;
+      const bored = this.restSince && this.aliveEnemies() === 0 &&
+                    time - this.restSince > ((this.hero.longIdleMs) || IDLE_LONG_MS);
+
       // sword swing owns the sprite until it finishes
       if (time < this.swordAnimUntil) {
         // let it play
       } else {
         let want;
-        if (time < this.dashAnimUntil) want = 'ew-dash';   // the burst owns the sprite
-        else if (!onGround) want = airAnim(this.player.body.velocity.y);
-        else if (time < this.landUntil) want = 'ew-land';
-        else if (firing) want = moving ? 'ew-runshoot' : 'ew-shoot';
-        else if (moving) want = this.walkMode ? 'ew-walk' : 'ew-run';
-        else want = 'ew-idle';
-        want = ewAnim(want, this.facing);
+        if (time < this.dashAnimUntil) want = 'dash';   // the burst owns the sprite
+        else if (!onGround) want = airAction(this.hero, this.player.body.velocity.y);
+        else if (time < this.landUntil) want = 'land';
+        else if (firing) want = moving ? 'runshoot' : 'shoot';
+        else if (moving) want = this.walkMode ? 'walk' : 'run';
+        else if (bored) want = this.hero.longIdle || 'idle';
+        else want = 'idle';
+        const key = heroAnim(this.hero, want, this.facing);
         // There is no armed walk in the art, so walking and firing borrows the
         // run-and-gun cycle slowed to the ground speed, which keeps the feet
         // landing where they should instead of skating.
         const slowFire = this.walkMode && firing && moving && onGround && time >= this.dashAnimUntil;
         this.player.anims.timeScale = slowFire ? WALK_SPEED / COMBAT_SPEED : 1;
-        if (this.curAnim !== want) {
-          this.player._curAnim = this.curAnim;      // playAction reads the previous action
-          playAction(this.player, want);
-          this.curAnim = want;
+        if (this.curAnim !== key) {
+          playAction(this.player, this.hero, want, this.facing);
+          this.curAnim = key;
         }
       }
     } else {
@@ -2302,19 +2365,21 @@ class GameScene extends Phaser.Scene {
 // targetH is the on-screen height in pixels. Backdrops are painted at
 // different scales, so each scene states the height that reads life-size
 // against its own art rather than sharing one number.
-function makeWalker(scene, x, groundY, targetH) {
+function makeWalker(scene, x, groundY, targetH, castId) {
   const H = targetH || 190;
+  const hero = castById(castId || DEFAULT_CAST);
   let p;
-  if (window.EW) {
+  if (hero) {
     // Dropped in from a height that scales with him: a fixed offset put a
     // taller character's feet inside the floor slab, and arcade separation
     // then pushed him out through the BOTTOM and he fell out of the room.
-    p = scene.physics.add.sprite(x, groundY - H * 0.75, 'ew_idle_0');
-    const B = window.EW.body;
+    p = scene.physics.add.sprite(x, groundY - H * 0.75, hero.pre + '_idle_0');
+    const B = hero.art.body;
     p.body.setSize(B.w, B.h).setOffset(B.x, B.y);
-    p.setScale(ewScale(H, H / 224));
-    p.play('ew-idle');
+    p.setScale(heroScale(hero, H, H / 224));
+    p.play(hero.pre + '-idle');
     p._real = true;
+    p._hero = hero;
   } else {
     p = scene.physics.add.sprite(x, groundY - 80, 'hero_idle_0');
     p.body.setSize(22, 60).setOffset(10, 6);
@@ -2325,6 +2390,7 @@ function makeWalker(scene, x, groundY, targetH) {
   p.setDepth(10);
   p._facing = 1;
   p._curAnim = '';
+  p._curAction = '';
   return p;
 }
 
@@ -2336,12 +2402,12 @@ function makeWalker(scene, x, groundY, targetH) {
 // loop behind it is what makes the action read. Turning on the spot keeps the
 // action, so only a CHANGE of action replays the intro.
 const ACTION_INTRO = {
-  'ew-run':      'ew-runin',      'ew-runW':      'ew-runinW',
-  'ew-guitar':   'ew-guitarin',   'ew-guitarW':   'ew-guitarinW',
-  'ew-shoot':    'ew-shootin',    'ew-shootW':    'ew-shootinW',
-  'ew-runshoot': 'ew-runshootin', 'ew-runshootW': 'ew-runshootinW'
+  run:      'runin',
+  guitar:   'guitarin',
+  shoot:    'shootin',
+  runshoot: 'runshootin',
+  burger:   'burgerin'      // Wolffel digs it out of his side pocket first
 };
-const actionOf = key => (key || '').replace(/W$/, '').replace(/in$/, '');
 
 // Airborne, the frame follows the vertical speed: lift-off and rise on the
 // way up, the tucked apex while he hangs, the fall once gravity wins. With
@@ -2349,21 +2415,29 @@ const actionOf = key => (key || '').replace(/W$/, '').replace(/in$/, '');
 // and a second jump restarts the rise. Anything without the phase art gets
 // the plain jump frame.
 const AIR_APEX_VY = 140;
-function airAnim(vy) {
-  if (!window.EW || !window.EW.anims.jumpapex) return 'ew-jump';
-  return vy < -AIR_APEX_VY ? 'ew-jump' : vy > AIR_APEX_VY ? 'ew-jumpfall' : 'ew-jumpapex';
+function airAction(hero, vy) {
+  if (!heroHas(hero, 'jumpapex')) return 'jump';
+  return vy < -AIR_APEX_VY ? 'jump' : vy > AIR_APEX_VY ? 'jumpfall' : 'jumpapex';
 }
 // How long the landing squash holds before he stands or runs.
 const LAND_MS = 110;
 
-function playAction(p, want) {
-  const intro = ACTION_INTRO[want];
-  if (intro && actionOf(p._curAnim) !== actionOf(want) && p.scene.anims.exists(intro)) {
-    p.play(intro);
-    p.chain(want);
+// Plays `action` on `hero`, chaining through its intro when the action is
+// changing. Returns the key actually playing, which is what callers cache to
+// decide whether anything needs replaying.
+function playAction(p, hero, action, facing) {
+  const act = heroAction(hero, action);
+  const key = heroAnim(hero, act, facing);
+  const intro = ACTION_INTRO[act];
+  const introKey = heroHas(hero, intro) ? heroAnim(hero, intro, facing) : null;
+  if (introKey && p._curAction !== act && p.scene.anims.exists(introKey)) {
+    p.play(introKey);
+    p.chain(key);
   } else {
-    p.play(want);
+    p.play(key);
   }
+  p._curAction = act;
+  return key;
 }
 
 // Ground speeds. He walks by default and sprints on shift, which is also what
@@ -2373,8 +2447,8 @@ const RUN_SPEED    = 430;
 // Combat runs by default (X drops it to the walk); the exploration sprint is
 // faster still because there is nothing there to run into.
 const COMBAT_SPEED = 340;
-// How long he has to stand still before he gets bored and starts playing.
-const IDLE_GUITAR_MS = 5000;
+// Fallback for a character that does not state its own.
+const IDLE_LONG_MS = 5000;
 
 function driveWalker(scene, p, keys, onGround) {
   let move = 0;
@@ -2389,29 +2463,32 @@ function driveWalker(scene, p, keys, onGround) {
                 || Phaser.Input.Keyboard.JustDown(keys.UP);
   if (wantJump && onGround) { p.setVelocityY(-640); Sfx.ensure(); Sfx.jump(); }
 
+  const hero = p._hero;
   // same landing beat as combat: only after real air time
   const now = scene.time.now;
-  if (onGround && p._airSince && now - p._airSince > 160 && window.EW && window.EW.anims.land) {
+  if (onGround && p._airSince && now - p._airSince > 160 && heroHas(hero, 'land')) {
     p._landUntil = now + LAND_MS;
   }
   p._airSince = onGround ? 0 : (p._airSince || now);
 
-  ewFlip(p, p._facing);
+  heroFlip(p, hero, p._facing);
   const moving = Math.abs(p.body.velocity.x) > 20;
 
-  // Standing still long enough, he takes the guitar off his back and plays
-  // until you move again.
+  // Left standing long enough he finds something to do with his hands —
+  // Eterwolf the guitar off his back, Wolffel a burger out of his side pocket.
+  // Each character names its own and how long it takes to get bored.
   if (moving || !onGround) p._restSince = 0;
-  else if (!p._restSince) p._restSince = scene.time.now;
-  const bored = p._restSince && scene.time.now - p._restSince > IDLE_GUITAR_MS;
+  else if (!p._restSince) p._restSince = now;
+  const boredAt = (hero && hero.longIdleMs) || IDLE_LONG_MS;
+  const bored = p._restSince && now - p._restSince > boredAt;
 
   if (p._real) {
-    let want = !onGround ? airAnim(p.body.velocity.y)
-             : now < (p._landUntil || 0) ? 'ew-land'
-             : moving    ? (sprint ? 'ew-run' : 'ew-walk')
-             : bored     ? 'ew-guitar' : 'ew-idle';
-    want = ewAnim(want, p._facing);
-    if (p._curAnim !== want) { playAction(p, want); p._curAnim = want; }
+    const want = !onGround ? airAction(hero, p.body.velocity.y)
+               : now < (p._landUntil || 0) ? 'land'
+               : moving    ? (sprint ? 'run' : 'walk')
+               : bored     ? (hero.longIdle || 'idle') : 'idle';
+    const key = heroAnim(hero, want, p._facing);
+    if (p._curAnim !== key) { playAction(p, hero, want, p._facing); p._curAnim = key; }
   } else {
     if (!onGround) p.play('hero-air', true);
     else if (moving) p.play('hero-run', true);
@@ -3405,17 +3482,19 @@ const SANDBOX_ENEMIES = [
   ['FIVE', 'zomba'], ['SIX', 'archer'], ['SEVEN', 'kingo'], ['NINE', 'alien']
 ];
 
-// Roster for the character switcher. Adding a playable character is one entry
-// here plus its art in window.EW — nothing else in the sandbox needs touching.
-const SANDBOX_CAST = [
-  { id: 'eterwolf', name: 'ETERWOLF' }
-];
-
 class DebugScene extends GameScene {
   constructor() { super('DebugScene'); }
 
+  // Which character to build. Switching restarts the scene, and the choice has
+  // to survive that, so it arrives as restart data rather than living on the
+  // instance Phaser reuses.
+  init(data) {
+    this._wantCast = (data && data.cast) || this._wantCast || DEFAULT_CAST;
+  }
+
   create() {
     GameState.hasWeapon = true;        // sandbox starts armed
+    this.castId = this._wantCast;      // read by GameScene.create when it builds the player
     super.create();
 
     // The wave director is the only part of the combat scene the sandbox does
@@ -3424,7 +3503,6 @@ class DebugScene extends GameScene {
     this.waveActive = false;
     this.spawnQueue = [];
     this.waveSpeed = 55;               // enemy speeds derive from this; NaN without it
-    this.castIdx = 0;
     this.finisherEnabled = true;
 
     if (this.advanceHint) this.advanceHint.setVisible(false);
@@ -3450,7 +3528,7 @@ class DebugScene extends GameScene {
       'C clear    P character    O finisher    R reset',
       'A/D move · X walk/run · W jump ×2 · Shift dash · LMB fire · F sword · Q nuke'
     ];
-    this.add.rectangle(14, 96, 540, 112, 0x0a0807, 0.72)
+    this.add.rectangle(14, 96, 540, 148, 0x0a0807, 0.72)
       .setOrigin(0, 0).setScrollFactor(0).setDepth(70);
     this._dbgText = this.add.text(26, 104, lines.join('\n'), {
       fontFamily: F_UI, fontSize: '13px', fontStyle: '600', color: '#f2b13c', lineSpacing: 4
@@ -3459,13 +3537,46 @@ class DebugScene extends GameScene {
     this._dbgStatus = this.add.text(26, 214, '', {
       fontFamily: F_UI, fontSize: '13px', fontStyle: '600', color: '#cbbba1'
     }).setScrollFactor(0).setDepth(71);
+
+    // One clickable button per playable character. Clicking rebuilds the arena
+    // as that character; P still cycles them from the keyboard.
+    this._castBtns = [];
+    let x = 26;
+    this.add.text(x, 236, 'PLAY', {
+      fontFamily: F_UI, fontSize: '12px', fontStyle: '700', color: '#7d6c55'
+    }).setScrollFactor(0).setDepth(71);
+    x += 42;
+    CAST.forEach(c => {
+      const t = this.add.text(x + 10, 234, c.name, {
+        fontFamily: F_UI, fontSize: '14px', fontStyle: '700', color: '#cbbba1'
+      }).setScrollFactor(0).setDepth(72);
+      const box = this.add.rectangle(x, 231, t.width + 20, 24, 0x1b1611, 0.95)
+        .setOrigin(0, 0).setScrollFactor(0).setDepth(71)
+        .setStrokeStyle(1, 0x4a3b2a).setInteractive({ useHandCursor: true });
+      box.on('pointerover', () => { if (c.id !== this.castId) t.setColor('#f2b13c'); });
+      box.on('pointerout',  () => this._refreshCastBtns());
+      box.on('pointerdown', () => { Sfx.ensure(); Sfx.select(); this._setCast(c.id); });
+      this._castBtns.push({ c, t, box });
+      x += t.width + 28;
+    });
+    this._refreshCastBtns();
     this._refreshStatus();
   }
 
+  _refreshCastBtns() {
+    (this._castBtns || []).forEach(({ c, t, box }) => {
+      const on = c.id === this.castId;
+      t.setColor(on ? '#0a0807' : '#cbbba1');
+      box.setFillStyle(on ? 0xf2b13c : 0x1b1611, on ? 1 : 0.95);
+      box.setStrokeStyle(1, on ? 0xf2b13c : 0x4a3b2a);
+    });
+  }
+
   _refreshStatus() {
-    const cast = SANDBOX_CAST[this.castIdx];
+    const n = CAST.findIndex(c => c.id === this.castId);
     this._dbgStatus.setText(
-      'PLAYING ' + cast.name + '  (' + (this.castIdx + 1) + '/' + SANDBOX_CAST.length + ')' +
+      'PLAYING ' + (this.hero ? this.hero.name : '—') +
+      '  (' + (n + 1) + '/' + CAST.length + ')' +
       '     FINISHER ' + (this.finisherEnabled ? 'ON' : 'OFF') +
       '     MOVE ' + (this.walkMode ? 'WALK' : 'RUN') +
       '     ENEMIES ' + this.zombies.countActive(true));
@@ -3528,11 +3639,22 @@ class DebugScene extends GameScene {
   }
 
   _cycleCast() {
-    this.castIdx = (this.castIdx + 1) % SANDBOX_CAST.length;
-    this._refreshStatus();
-    if (SANDBOX_CAST.length === 1) {
-      this.showBanner('ONE CHARACTER BUILT', 'add to SANDBOX_CAST to test another', 1600);
+    if (CAST.length < 2) {
+      this.showBanner('ONE CHARACTER BUILT', 'build a second art module to test another', 1600);
+      return;
     }
+    const n = CAST.findIndex(c => c.id === this.castId);
+    this._setCast(CAST[(n + 1) % CAST.length].id);
+  }
+
+  // A character is chosen when the player sprite is built, so switching means
+  // rebuilding the arena. That also clears whatever was spawned, which is what
+  // R does anyway — cheaper and far safer than swapping a live body and every
+  // collider that references it.
+  _setCast(id) {
+    if (id === this.castId || !castById(id)) return;
+    this.physics.world.timeScale = 1;
+    this.scene.restart({ cast: id });
   }
 
   update(time, delta) {
