@@ -30,6 +30,18 @@ const ENEMIES = {
     },
     fps: { walk: 9, lungeA: 14, lungeB: 13 },
     loop: { walk: true, lungeA: false, lungeB: false }
+  },
+
+  // A thorny thing that lives on walls. It does not walk anywhere — it clings,
+  // creeps along the brick and spits. The crawl is a true cycle (wrap 1.13);
+  // the spit is one shot, the spray leaving its mouth over frames 2-6.
+  crawler: {
+    clips: {
+      walk: 'crawler_crawl.gif',     // 'walk' is what the builder keys off
+      spit: 'crawler_spit.gif'
+    },
+    fps: { walk: 10, spit: 12 },
+    loop: { walk: true, spit: false }
   }
 };
 

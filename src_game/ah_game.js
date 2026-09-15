@@ -666,6 +666,17 @@ const ALIEN_LUNGE_MS   = 620;   // how long a lunge owns the sprite
 const ALIEN_LUNGE_CD   = 1500;  // cooldown between lunges
 const ALIEN_RAGE_TINT  = 0xffa88f;
 
+// The wall crawler never touches the ground. It clings, creeps up and down its
+// stretch of brick, and spits acid down at whoever walks underneath — so it
+// cannot be fought the way everything else can, which is the point of it.
+const CRAWLER_HEIGHT   = 86;
+const CRAWLER_SPEED    = 42;    // how fast it creeps along the wall
+const CRAWLER_RANGE    = 560;   // how far it will spit
+const CRAWLER_SPIT_CD  = 2200;
+const CRAWLER_SPIT_MS  = 560;   // the wind-up the animation needs
+const ACID_SPEED       = 430;
+const ACID_GRAVITY     = 520;   // arcs, so it has to be dodged rather than out-run
+
 // ------------------------------------------------------------------ //
 //  BOOT — builds every texture procedurally                           //
 // ------------------------------------------------------------------ //
@@ -947,6 +958,23 @@ class BootScene extends Phaser.Scene {
     g.generateTexture('bullet', 18, 5);
     g.destroy();
 
+    // acid glob — a bright core inside a sicker rim, so it still reads as a
+    // blob of something corrosive at 14px against a dark street
+    g = this.make.graphics({ add: false });
+    g.fillStyle(0x3f6b18, 1);   g.fillCircle(7, 7, 7);
+    g.fillStyle(0x8ede2a, 1);   g.fillCircle(7, 7, 5);
+    g.fillStyle(0xe4ff9a, 1);   g.fillCircle(5.5, 5.5, 2.4);
+    g.generateTexture('acid', 14, 14);
+    g.destroy();
+
+    // the splat it leaves where it lands
+    g = this.make.graphics({ add: false });
+    g.fillStyle(0x6ba81f, 0.9);
+    g.fillEllipse(16, 5, 30, 9);
+    g.fillStyle(0x9ee63a, 0.9); g.fillEllipse(13, 4, 13, 5);
+    g.generateTexture('acid_splat', 32, 10);
+    g.destroy();
+
     // muzzle flash (two sizes)
     [['flash_0', 16], ['flash_1', 10]].forEach(item => {
       const gg = this.make.graphics({ add: false });
@@ -1188,6 +1216,9 @@ class GameScene extends Phaser.Scene {
     this.physics.add.existing(street, true);
     this.solids.push(street);
 
+    // Vertical faces a crawler can cling to. The street has none by default;
+    // the sandbox puts one up to test with, and a level can push its own.
+    this.walls = [];
     this.oneWays = [];
     // stair-stepped: every ledge reachable — 540 from ground, 455 from 540, 370 from 455
     [[620, 540], [1780, 540], [950, 455], [1500, 455], [1200, 370]].forEach(pos => {
@@ -1478,6 +1509,34 @@ class GameScene extends Phaser.Scene {
 
     const speedJitter = 0.85 + Math.random() * 0.3;
     let z;
+    if (type === 'crawler' && window.ENEMIES && window.ENEMIES.crawler) {
+      const E = window.ENEMIES.crawler;
+      // It belongs on a wall, so it is placed on the nearest one rather than
+      // wherever the wave director would have put a walker.
+      const wall = this._nearestWall(x);
+      const wx = wall ? wall.faceX : x;
+      const wy = wall ? Phaser.Math.Between(wall.top + 40, wall.bottom - 40) : GROUND_Y - 200;
+      z = this.physics.add.sprite(wx, wy, 'mob_crawler_walk_0');
+      z.setScale(CRAWLER_HEIGHT / E.charH);
+      z.body.setSize(E.body.w, E.body.h).setOffset(E.body.x, E.body.y);
+      z.setData({ hp: 4, speed: CRAWLER_SPEED, dmg: 1, type: type });
+      z.setData('wall', wall || null);
+      z.setData('climbDir', Math.random() < 0.5 ? 1 : -1);
+      z.setData('nextSpitAt', this.time.now + 700 + Math.random() * 900);
+      z.setData('spitUntil', 0);
+      z.play('crawler-walk');
+      z.setData('alive', true);
+      z.setDepth(8);
+      this.zombies.add(z);
+      // AFTER the group takes it: adding to a physics group re-applies the
+      // group's own body defaults, so setting this before the add left gravity
+      // switched back on and dropped the creature into the street.
+      z.body.allowGravity = false;          // it clings; nothing pulls it off
+      z.body.setGravityY(0);
+      z.body.immovable = true;
+      return z;
+    }
+
     if (type === 'alien' && window.ENEMIES && window.ENEMIES.alien) {
       const E = window.ENEMIES.alien;
       z = this.physics.add.sprite(x, GROUND_Y - 90, 'mob_alien_walk_0');
@@ -1718,6 +1777,58 @@ class GameScene extends Phaser.Scene {
         z.setData('nextChargeAt', time + 2400 + Math.random() * 1600);
       }
     }
+  }
+
+  // A wall a crawler can live on: a solid vertical face, plus the side of it
+  // the creature sits on and the stretch it may creep along.
+  addWall(x, top, bottom, width) {
+    const w = width || 26;
+    const h = bottom - top;
+    const img = this.add.rectangle(x, top + h / 2, w, h, 0x1a1512)
+      .setDepth(-1).setStrokeStyle(2, 0x2c241c);
+    this.physics.add.existing(img, true);
+    this.solids.push(img);
+    // The creature hangs clear of the brick: its own body is ~34px wide, and
+    // overlapping the wall would have the solids collider shove it off the face
+    // every frame.
+    const wall = { x: x, top: top, bottom: bottom, w: w,
+                   faceX: x - w / 2 - 32, img: img };
+    this.walls.push(wall);
+    return wall;
+  }
+
+  // The wall a crawler spawning near x should end up on.
+  _nearestWall(x) {
+    if (!this.walls || !this.walls.length) return null;
+    let best = null, bd = Infinity;
+    this.walls.forEach(w => {
+      const d = Math.abs(w.x - x);
+      if (d < bd) { bd = d; best = w; }
+    });
+    return best;
+  }
+
+  // A glob of acid, lobbed rather than fired: it arcs, so standing still under
+  // one is the mistake and moving out is the answer.
+  spitAcid(z) {
+    const t = this.time.now;
+    const shot = this.enemyShots.create(z.x, z.y + 8, 'acid');
+    shot.body.allowGravity = true;
+    shot.body.setGravityY(ACID_GRAVITY);
+    shot.setDepth(9).setData('bornAt', t).setData('acid', true);
+    // Lob it so it lands where he is standing. The horizontal speed is a real
+    // speed, and the flight time follows from it; solving the other way round
+    // — taking the speed from the distance — makes the glob crawl at a target
+    // 13px away and fall short of one past the clamp.
+    const dx = this.player.x - z.x;
+    const dy = this.player.y - z.y;
+    const dir = dx >= 0 ? 1 : -1;
+    const vx = dir * Phaser.Math.Clamp(Math.abs(dx) / 0.85, 90, ACID_SPEED);
+    const tFlight = Math.max(0.12, Math.abs(dx) / Math.abs(vx));
+    const vy = (dy - 0.5 * ACID_GRAVITY * tFlight * tFlight) / tFlight;
+    shot.setVelocity(vx, Phaser.Math.Clamp(vy, -460, 380));
+    this.tweens.add({ targets: shot, angle: 360, duration: 700, repeat: -1 });
+    Sfx.ensure(); Sfx.blip(180, 0.12, 'sawtooth', 0.22, 90);
   }
 
   // How many are still on their feet. A corpse stays in the group for the
@@ -2033,7 +2144,22 @@ class GameScene extends Phaser.Scene {
     this.time.delayedCall(60, () => this.checkWaveCleared());
   }
 
+  // A glob hitting the ground leaves a mark and a hiss — cheap, but it tells
+  // you where the next one is going to land.
+  splashAcid(b) {
+    const sp = this.add.image(b.x, GROUND_Y - 4, 'acid_splat').setDepth(1).setAlpha(0.85);
+    this.tweens.add({ targets: sp, alpha: 0, scaleX: 1.5, duration: 1400,
+      onComplete: () => sp.destroy() });
+    Sfx.ensure(); Sfx.blip(120, 0.14, 'sawtooth', 0.14, 60);
+    b.destroy();
+  }
+
   onEnemyShotHit(player, shot) {
+    if (shot.getData('acid')) {
+      const sp = this.add.image(shot.x, shot.y, 'acid_splat').setDepth(14).setAlpha(0.9);
+      this.tweens.add({ targets: sp, alpha: 0, scaleX: 1.6, duration: 700,
+        onComplete: () => sp.destroy() });
+    }
     shot.destroy();
     if (this.dead) return;
     const time = this.time.now;
@@ -2120,14 +2246,13 @@ class GameScene extends Phaser.Scene {
     Sfx.ensure(); Sfx.blip(this.walkMode ? 520 : 760, 0.06, 'square', 0.18, this.walkMode ? 380 : 900);
   }
 
-  // The body offset is measured against the frame's top-left, and the origin
-  // decides where that corner sits relative to the sprite's position. Dropping
-  // the origin to the boots for the aim lean would carry the body up with it,
-  // so every offset adds the shift back.
+  // The body offset is measured from the frame's top-left corner, and Phaser
+  // already places that corner from the origin — so moving the origin to the
+  // boots carries the body along with the image and needs no correction here.
+  // Adding one "to compensate" pushes the body 49px below his feet and leaves
+  // him floating, which is what it did.
   heroBodyOffsetY(extra) {
-    const B = this.hero.art.body;
-    const frameH = this.player.frame ? this.player.frame.height : 0;
-    return B.y + (extra || 0) + (AIM_PIVOT_Y - 0.5) * frameH;
+    return this.hero.art.body.y + (extra || 0);
   }
 
   // Ducking shortens the body so shots pass over, and the sprite's feet have
@@ -2436,6 +2561,8 @@ class GameScene extends Phaser.Scene {
     });
     this.enemyShots.getChildren().forEach(b => {
       if (!b.active) return;
+      // acid that reaches the street burns out there rather than falling on
+      if (b.getData('acid') && b.y >= GROUND_Y - 6) { this.splashAcid(b); return; }
       if (time - b.getData('bornAt') > 2500 || b.x < -40 || b.x > WORLD_W + 40 || b.y < -40 || b.y > WORLD_H + 40) {
         b.destroy();
       }
@@ -2490,6 +2617,38 @@ class GameScene extends Phaser.Scene {
           this.physics.velocityFromRotation(ang, 380, shot.body.velocity);
           shot.setData('bornAt', time);
           Sfx.blip(420, 0.08, 'square', 0.2, 700);
+        }
+        return;
+      }
+
+      // the wall crawler: it never chases, it creeps and spits
+      if (type === 'crawler') {
+        const wall = z.getData('wall');
+        if (time < z.getData('spitUntil')) { z.setVelocity(0, 0); return; }
+
+        // creep up and down its stretch, turning at the ends
+        let cd = z.getData('climbDir');
+        if (wall) {
+          if (z.y < wall.top + 30) { cd = 1; z.setData('climbDir', 1); }
+          else if (z.y > wall.bottom - 30) { cd = -1; z.setData('climbDir', -1); }
+          z.x = wall.faceX;                      // stays welded to the face
+        }
+        z.setVelocity(0, cd * z.getData('speed'));
+        z.setFlipX(this.player.x < z.x);         // the mouth follows the player
+
+        if (Math.abs(dx) < CRAWLER_RANGE && time > z.getData('nextSpitAt')) {
+          z.setData('spitUntil', time + CRAWLER_SPIT_MS);
+          z.setData('nextSpitAt', time + CRAWLER_SPIT_CD + Math.random() * 900);
+          z.play('crawler-spit');
+          z.setVelocity(0, 0);
+          // the glob leaves part-way in, when the spray does in the art
+          this.time.delayedCall(240, () => {
+            if (z.active && z.getData('alive') !== false && !this.dead) this.spitAcid(z);
+          });
+          return;
+        }
+        if (z.anims.getName() !== 'crawler-walk' && time > z.getData('spitUntil')) {
+          z.play('crawler-walk');
         }
         return;
       }
@@ -2630,7 +2789,7 @@ const AIM_PIVOT_Y = 0.86;
 
 // Crouching drops him low: slower, and a shorter body so shots go over.
 const CROUCH_SPEED = 120;
-const CROUCH_BODY  = 0.58;
+const CROUCH_BODY  = 0.51;   // measured: prone is 114px against a 222px stand
 
 // Plays `action` on `hero`, chaining through its intro when the action is
 // changing. Returns the key actually playing, which is what callers cache to
@@ -3689,7 +3848,8 @@ class ShopScene extends WalkScene {
 // ================================================================== //
 const SANDBOX_ENEMIES = [
   ['ONE', 'walker'], ['TWO', 'runner'], ['THREE', 'brute'], ['FOUR', 'flyer'],
-  ['FIVE', 'zomba'], ['SIX', 'archer'], ['SEVEN', 'kingo'], ['NINE', 'alien']
+  ['FIVE', 'zomba'], ['SIX', 'archer'], ['SEVEN', 'kingo'], ['NINE', 'alien'],
+  ['ZERO', 'crawler']
 ];
 
 class DebugScene extends GameScene {
@@ -3715,6 +3875,13 @@ class DebugScene extends GameScene {
     this.waveSpeed = 55;               // enemy speeds derive from this; NaN without it
     this.finisherEnabled = true;
 
+    // A face for the wall crawler to live on, with a gap under it you can walk
+    // through — the whole point is being spat at from above while you move.
+    this._testWall = this.addWall(760, GROUND_Y - 330, GROUND_Y, 30);
+    this.add.text(760, GROUND_Y - 348, 'CRAWLER WALL', {
+      fontFamily: F_UI, fontSize: '11px', fontStyle: '700', color: '#6f5c44'
+    }).setOrigin(0.5, 1).setDepth(1);
+
     if (this.advanceHint) this.advanceHint.setVisible(false);
     this.waveText.setText('SANDBOX');
     // The combat scene opens on a "advance to the middle of the street" banner,
@@ -3735,7 +3902,7 @@ class DebugScene extends GameScene {
     const lines = [
       'SANDBOX                                   F9 / ESC — leave',
       '1 walker   2 runner   3 brute   4 flyer',
-      '5 zomba    6 archer   7 kingo   8 boss    9 ALIEN',
+      '5 zomba    6 archer   7 kingo   8 boss    9 ALIEN   0 CRAWLER',
       'C clear    P character    O finisher    R reset',
       'A/D move · S crouch · X walk/run · W jump ×2 · Shift dash',
       'LMB/K fire · E swap weapon · F/RMB sword (3-hit chain) · Q nuke'
@@ -3828,6 +3995,9 @@ class DebugScene extends GameScene {
     this.spawnZombie(type);
     const kids = this.zombies.getChildren();
     const z = kids[kids.length - 1];
+    // A crawler belongs on the wall, not in front of you — spawnZombie has
+    // already put it there and moving it would take it off the brick.
+    if (z && type === 'crawler') { this._refreshStatus(); return; }
     if (z) {
       // Fanned out rather than stacked, so spawning several of a kind gives you
       // a row to look at instead of one sprite with the rest hidden behind it.

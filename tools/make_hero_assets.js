@@ -47,7 +47,10 @@ const SRC = {
   esword:     A + 'Idle_v3_esword_east.gif',
   eswordF:    A + 'Idle_v3_esword_front.gif',
   // --- low stance ---
-  crouch:     A + 'Idle_v3_crouch_east.gif',
+  // He goes all the way down onto his hands rather than half-squatting; the
+  // last three frames are him settled there (they differ by 5, against 147
+  // through the descent), so those are the hold.
+  crouch:     A + 'Idle_v3_prone_east.gif',
   crouchwalk: A + 'Idle_v3_crouchwalk_east.gif',
   // --- the second gun ---
   akwalk:     A + 'Idle_v3_akwalk_east.gif'
@@ -289,8 +292,8 @@ const mod = {
     ...(K.crouch ? {
       crouchin:  A_(K.crouch,           18, 0),
       crouchinW: A_(K.crouchW,          18, 0),
-      crouch:    A_(K.crouch.slice(4),   5),
-      crouchW:   A_(K.crouchW.slice(4),  5)
+      crouch:    A_(K.crouch.slice(6),   4),
+      crouchW:   A_(K.crouchW.slice(6),  4)
     } : {}),
     ...(K.cwalk ? {
       crouchwalk:  A_(K.cwalk,  10),
