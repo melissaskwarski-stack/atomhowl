@@ -1214,6 +1214,7 @@ class GameScene extends Phaser.Scene {
     this.dashAnimUntil = 0;
     this.airSince = 0;
     this.landUntil = 0;
+    this._executing = false;     // scene instances are reused across restart()
     this.walkMode = false;       // X toggles; combat runs by default
     this.dropThrough = false;
     this.dead = false;
@@ -1668,10 +1669,22 @@ class GameScene extends Phaser.Scene {
     }
   }
 
+  // How many are still on their feet. A corpse stays in the group for the
+  // length of its 380ms topple, so countActive() keeps seeing it — and the
+  // wave-clear check runs 60ms after the kill, long before that. Counting the
+  // living is what lets the last kill of a wave actually end the wave.
+  aliveEnemies() {
+    let n = 0;
+    this.zombies.getChildren().forEach(e => {
+      if (e.active && e.getData('alive') !== false) n++;
+    });
+    return n;
+  }
+
   checkWaveCleared() {
     if (!this.waveActive || this.dead) return;
     if (this.spawnQueue.length > 0) return;
-    if (this.zombies.countActive(true) > 0) return;
+    if (this.aliveEnemies() > 0) return;
     this.waveActive = false;
 
     if (this.wave === 5) {
@@ -1807,14 +1820,7 @@ class GameScene extends Phaser.Scene {
     if (this._executing || this.dead) return false;
     if (this.spawnQueue && this.spawnQueue.length > 0) return false;
     if (z.getData('alive') === false) return false;
-    // Count the living, not the active: a corpse stays in the group for the
-    // length of its death tween, so killing two in quick succession would
-    // otherwise look like two enemies remaining and skip the finisher.
-    let alive = 0;
-    this.zombies.getChildren().forEach(e => {
-      if (e.active && e.getData('alive') !== false) alive++;
-    });
-    return alive <= 1;
+    return this.aliveEnemies() <= 1;
   }
 
   // Single-player finisher: the last one standing dies to a solo execution.
@@ -1839,10 +1845,10 @@ class GameScene extends Phaser.Scene {
     this.showBanner('EXECUTION', '', 900);
 
     this.time.delayedCall(560, () => {
-      cam.shake(260, 0.016);
-      cam.flash(180, 255, 240, 200);
-      Sfx.squelch();
-      z.clearTint();
+      // The camera, the physics clock and the flag are handed back whatever
+      // happened to the target: the sandbox's clear key can destroy it in the
+      // middle of this, and a world left at 2.6x with the camera parked on a
+      // dead sprite strands the scene.
       this.physics.world.timeScale = 1;
       cam.zoomTo(1, 300, 'Sine.easeInOut');
       // Follow resumes on the pan's own completion rather than a timer: a pan
@@ -1853,6 +1859,11 @@ class GameScene extends Phaser.Scene {
           if (progress === 1) camera.startFollow(this.player, true, 0.12, 0.1);
         });
       this._executing = false;
+      if (!z.active || !z.scene) return;      // cleared out from under us
+      cam.shake(260, 0.016);
+      cam.flash(180, 255, 240, 200);
+      Sfx.squelch();
+      z.clearTint();
       z.body.enable = true;          // killZombie disables it again and tidies up
       this.killZombie(z, fromSword);
     });
