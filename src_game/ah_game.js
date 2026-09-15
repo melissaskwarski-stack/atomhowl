@@ -735,9 +735,6 @@ class BootScene extends Phaser.Scene {
       for (const [n, frames] of Object.entries(window.UIART.rotations || {})) {
         frames.forEach((uri, i) => this.load.image(`rot_${n}_${i}`, uri));
       }
-      for (const [n, frames] of Object.entries(window.UIART.walks || {})) {
-        frames.forEach((uri, i) => this.load.image(`cwalk_${n}_${i}`, uri));
-      }
     }
   }
 
@@ -810,7 +807,6 @@ class BootScene extends Phaser.Scene {
       const keys = Object.keys(window.UIART.panels || {}).map(s => 'ui_panel_' + s);
       for (const n of Object.keys(window.UIART.portraits || {})) keys.push('portrait_' + n, 'portrait_' + n + '_closed');
       for (const [n, f] of Object.entries(window.UIART.rotations || {})) f.forEach((_, i) => keys.push(`rot_${n}_${i}`));
-      for (const [n, f] of Object.entries(window.UIART.walks || {})) f.forEach((_, i) => keys.push(`cwalk_${n}_${i}`));
       for (const k of keys) {
         if (this.textures.exists(k)) this.textures.get(k).setFilter(Phaser.Textures.FilterMode.LINEAR);
       }
@@ -820,14 +816,6 @@ class BootScene extends Phaser.Scene {
           key: 'turn-' + n,
           frames: f.map((_, i) => ({ key: `rot_${n}_${i}` })),
           frameRate: 5, repeat: -1
-        });
-      }
-      // walk cycles for the AI companion
-      for (const [n, f] of Object.entries(window.UIART.walks || {})) {
-        this.anims.create({
-          key: 'cwalk-' + n,
-          frames: f.map((_, i) => ({ key: `cwalk_${n}_${i}` })),
-          frameRate: 10, repeat: -1
         });
       }
     }
@@ -1047,7 +1035,10 @@ class BootScene extends Phaser.Scene {
 //  GAME                                                               //
 // ------------------------------------------------------------------ //
 class GameScene extends Phaser.Scene {
-  constructor() { super('GameScene'); }
+  // The key is a parameter so the debug sandbox can subclass this scene and
+  // inherit the entire kit — movement, weapons, enemies, damage, HUD — rather
+  // than duplicating it and drifting out of sync.
+  constructor(key) { super(key || 'GameScene'); }
 
   create() {
     const cam = this.cameras.main;
@@ -1698,7 +1689,68 @@ class GameScene extends Phaser.Scene {
       this.bossBarFill.setScale(Math.max(0, hp / z.getData('hpMax')), 1);
     }
 
-    if (hp <= 0) this.killZombie(z, fromSword);
+    if (hp <= 0) {
+      if (this.finisherEnabled !== false && this._isLastEnemy(z)) this.executeKill(z, fromSword);
+      else this.killZombie(z, fromSword);
+    }
+  }
+
+  // True when this is the only one left standing and nothing more is queued —
+  // the game had no notion of a final enemy before, only a zero/non-zero count
+  // checked after a kill.
+  _isLastEnemy(z) {
+    if (this._executing || this.dead) return false;
+    if (this.spawnQueue && this.spawnQueue.length > 0) return false;
+    if (z.getData('alive') === false) return false;
+    // Count the living, not the active: a corpse stays in the group for the
+    // length of its death tween, so killing two in quick succession would
+    // otherwise look like two enemies remaining and skip the finisher.
+    let alive = 0;
+    this.zombies.getChildren().forEach(e => {
+      if (e.active && e.getData('alive') !== false) alive++;
+    });
+    return alive <= 1;
+  }
+
+  // Single-player finisher: the last one standing dies to a solo execution.
+  // Physics is slowed rather than the scene clock, so the tweens and timers
+  // driving the sequence keep running at full speed and it always resolves.
+  executeKill(z, fromSword) {
+    this._executing = true;
+    const cam = this.cameras.main;
+    this.physics.world.timeScale = 2.6;
+    this.invulnUntil = this.time.now + 1600;
+    this.player.setVelocityX(0);
+
+    z.setData('alive', false);
+    z.body.enable = false;
+    z.setTintFill(0xffe9b0);
+    this.tweens.killTweensOf(z);
+
+    cam.stopFollow();
+    cam.pan(z.x, z.y - 30, 420, 'Sine.easeInOut');
+    cam.zoomTo(1.4, 420, 'Sine.easeInOut');
+    Sfx.ensure(); Sfx.roar();
+    this.showBanner('EXECUTION', '', 900);
+
+    this.time.delayedCall(560, () => {
+      cam.shake(260, 0.016);
+      cam.flash(180, 255, 240, 200);
+      Sfx.squelch();
+      z.clearTint();
+      this.physics.world.timeScale = 1;
+      cam.zoomTo(1, 300, 'Sine.easeInOut');
+      // Follow resumes on the pan's own completion rather than a timer: a pan
+      // overrides the scroll every frame while it runs, so handing control back
+      // on a guess either fights the pan or never lands.
+      cam.pan(this.player.x, this.player.y, 300, 'Sine.easeInOut', false,
+        (camera, progress) => {
+          if (progress === 1) camera.startFollow(this.player, true, 0.12, 0.1);
+        });
+      this._executing = false;
+      z.body.enable = true;          // killZombie disables it again and tidies up
+      this.killZombie(z, fromSword);
+    });
   }
 
   killZombie(z, fromSword) {
@@ -2168,101 +2220,6 @@ const RUN_SPEED  = 430;
 // How long he has to stand still before he gets bored and starts playing.
 const IDLE_GUITAR_MS = 5000;
 
-// Wolffel tags along behind his brother in the exploration scenes. Only a
-// single side-on pose exists for him so far, so he is a static sprite that
-// flips to face his travel direction rather than an animated walker — he
-// trails to a fixed gap and stops short rather than crowding.
-const FOLLOW_GAP   = 200;   // how far behind he settles
-const FOLLOW_RUN   = 480;   // his top speed closing the gap, enough to keep up a sprint
-const FOLLOW_GAIN  = 8;     // how hard he chases the gap; sets how far he lags in motion
-const FOLLOW_DEAD  = 3;     // slack once stopped, so he does not jitter in place
-// The brothers are the same build, so he is drawn at his brother's height and
-// stands on the same floor line. He still sits behind rather than pasted
-// alongside — he draws underneath and carries a touch less contrast, which
-// separates them without shrinking him.
-const FOLLOW_SCALE = 1;
-const FOLLOW_LIFT  = 0;     // shares his brother's floor line
-// Cadence is derived from the stride in the art rather than picked by eye. One
-// full cycle of his walk carries him a bit under his own height (measured off
-// the frames: a 127px step on a 222px figure), so the animation is played at
-// whatever rate makes the cycle cover exactly that much ground at his current
-// speed. Get this wrong and his legs churn faster than the floor moves, which
-// is what makes a character look like he is shuffling rather than walking.
-const WALK_FRAMES   = 8;
-const WALK_BASE_FPS = 10;     // the rate the clip is registered at
-const WALK_STRIDE   = 0.85;   // ground per cycle, as a fraction of his height
-
-function makeFollower(scene, x, groundY, targetH) {
-  // The standing pose comes from the walk clip, not the turntable. The two are
-  // cut to different canvases, so mixing them made him grow ~8px the moment he
-  // stopped; taking both from the same clip keeps his height fixed.
-  const standKey = scene.textures.exists('cwalk_wolffel_0') ? 'cwalk_wolffel_0' : 'rot_wolffel_2';
-  if (!scene.textures.exists(standKey)) return null;
-  const y = groundY - FOLLOW_LIFT;
-  const f = scene.add.sprite(x, y, standKey).setOrigin(0.5, 1).setDepth(8);
-  // Scale against the FIGURE height rather than the canvas: his clip and his
-  // brother's are cut to different canvases, so dividing by the canvas left
-  // him a couple of percent short of matching him.
-  const meta = window.UIART && window.UIART.walkMeta && window.UIART.walkMeta.wolffel;
-  const figH = meta ? meta.figH : scene.textures.get(standKey).getSourceImage().height;
-  f.setScale((targetH || 190) * FOLLOW_SCALE / figH);
-  f.setTint(0xd8d2ca);
-  // Driven by the physics step rather than by hand. Phaser clamps and smooths
-  // the frame delta, so integrating his position against it made him crawl
-  // whenever the frame rate dipped — he fell behind and stood still while his
-  // brother walked off. On the physics step he moves in real time, exactly as
-  // the player does. He collides with nothing; gravity is off and y is fixed.
-  scene.physics.add.existing(f);
-  f.body.setAllowGravity(false);
-  f.body.setImmovable(true);
-  f._facing = 1;
-  f._standKey = standKey;
-  f._baseY = y;
-  return f;
-}
-
-function driveFollower(f, lead) {
-  if (!f || !f.body) return;
-  // Kept inside the level: near either end the spot behind his brother falls
-  // outside the world, and he would trudge off into nothing trying to reach it.
-  const edge = lead.scene && lead.scene.worldW ? lead.scene.worldW : 0;
-  let behind = lead.x - lead._facing * FOLLOW_GAP;
-  if (edge) behind = Math.max(40, Math.min(edge - 40, behind));
-  const gap = behind - f.x;
-
-  // Chase the gap proportionally rather than snapping onto the target. Snapping
-  // meant that while his brother walked he sat inside the slack, jerked forward
-  // the moment he fell out of it, then sat still again — so his walk cycle was
-  // starting and stopping several times a second and read as no animation at
-  // all. Easing gives him a small steady lag and one continuous stride.
-  const v = Math.abs(gap) > FOLLOW_DEAD
-    ? Math.max(-FOLLOW_RUN, Math.min(FOLLOW_RUN, gap * FOLLOW_GAIN))
-    : 0;
-  f.body.setVelocityX(v);
-  if (Math.abs(v) > 1) f._facing = Math.sign(v);
-  f.setFlipX(f._facing < 0);
-  f.y = f._baseY;
-
-  // Real walk cycle when he is covering ground, standing frame when he is not.
-  // Playback is scaled by how fast he is actually moving, so closing a long gap
-  // steps quicker instead of skating, and settling in slows him down.
-  const speed = Math.abs(v);
-  const walking = speed > 18;
-  if (walking && f.scene.anims.exists('cwalk-wolffel')) {
-    if (f.anims.getName() !== 'cwalk-wolffel') f.play('cwalk-wolffel');
-    const cycleGround = WALK_STRIDE * f.displayHeight;          // px he should cover per cycle
-    const wantFps = (speed / cycleGround) * WALK_FRAMES;
-    f.anims.timeScale = Math.max(0.4, Math.min(2.4, wantFps / WALK_BASE_FPS));
-  } else if (!walking) {
-    if (f.anims.isPlaying) f.anims.stop();
-    if (f.texture.key !== f._standKey) f.setTexture(f._standKey);
-    // Caught up: turn and face his brother instead of staring off the way he
-    // happened to arrive.
-    f._facing = lead.x >= f.x ? 1 : -1;
-    f.setFlipX(f._facing < 0);
-  }
-}
-
 function driveWalker(scene, p, keys, onGround) {
   let move = 0;
   if (keys.A.isDown || keys.LEFT.isDown)  move -= 1;
@@ -2350,6 +2307,8 @@ class MenuScene extends Phaser.Scene {
       ['SETTINGS', () => this._toast('Settings — coming soon.')],
       ['CREDITS',  () => this._toast('Credits — coming soon.')]
     ];
+    // Development builds only — a release build drops this entry entirely.
+    if (window.ATOMHOWL_DEV) items.push(['DEBUG SANDBOX', () => enterSandbox(this)]);
     this._btns = items.map(([label, act], i) => this._button(LX, 348 + i * 56, label, act));
     this._cursor = 0;
     this._highlight(0);
@@ -2909,8 +2868,6 @@ class WalkScene extends Phaser.Scene {
     // The cast scales with the room, or he would shrink as the art grows.
     const charH = (cfg.charH || 190) * zoom;
     this.player = makeWalker(this, startX, groundY, charH);
-    // Brother in tow — absent once the horde starts, which is a separate scene.
-    this.follower = makeFollower(this, Math.max(40, startX - FOLLOW_GAP), groundY, charH);
     this._buildBeats(cfg);
     this.physics.add.collider(this.player, floor);
     this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
@@ -3035,7 +2992,6 @@ class WalkScene extends Phaser.Scene {
   update() {
     const onGround = this.player.body.blocked.down || this.player.body.touching.down;
     if (!this._transitioning) driveWalker(this, this.player, this.keys, onGround);
-    driveFollower(this.follower, this.player);
     this._runBeats();
 
     if (this.grain && this.game.loop.frame % 3 === 0) {
@@ -3274,6 +3230,188 @@ class ShopScene extends WalkScene {
   }
 }
 
+// ================================================================== //
+//  DEBUG SANDBOX                                                     //
+//  A subclass of the combat scene, so every ability, enemy, damage   //
+//  rule and HUD element is the real one rather than a copy that      //
+//  drifts. It only switches the wave director off and adds spawning. //
+// ================================================================== //
+const SANDBOX_ENEMIES = [
+  ['ONE', 'walker'], ['TWO', 'runner'], ['THREE', 'brute'], ['FOUR', 'flyer'],
+  ['FIVE', 'zomba'], ['SIX', 'archer'], ['SEVEN', 'kingo']
+];
+
+// Roster for the character switcher. Adding a playable character is one entry
+// here plus its art in window.EW — nothing else in the sandbox needs touching.
+const SANDBOX_CAST = [
+  { id: 'eterwolf', name: 'ETERWOLF' }
+];
+
+class DebugScene extends GameScene {
+  constructor() { super('DebugScene'); }
+
+  create() {
+    GameState.hasWeapon = true;        // sandbox starts armed
+    super.create();
+
+    // The wave director is the only part of the combat scene the sandbox does
+    // not want: enemies come from the keyboard instead.
+    this.waveTriggered = true;
+    this.waveActive = false;
+    this.spawnQueue = [];
+    this.waveSpeed = 55;               // enemy speeds derive from this; NaN without it
+    this.castIdx = 0;
+    this.finisherEnabled = true;
+
+    if (this.advanceHint) this.advanceHint.setVisible(false);
+    this.waveText.setText('SANDBOX');
+    // The combat scene opens on a "advance to the middle of the street" banner,
+    // which is the wave director talking. Nothing here obeys it.
+    this.bannerText.setText('').setAlpha(0);
+    this.subBannerText.setText('').setAlpha(0);
+    this.tweens.killTweensOf([this.bannerText, this.subBannerText]);
+
+    this._buildDebugPanel();
+    this._bindDebugKeys();
+  }
+
+  // Nothing triggers a wave in here.
+  checkWaveTrigger() {}
+
+  _buildDebugPanel() {
+    const lines = [
+      'SANDBOX                                   F9 / ESC — leave',
+      '1 walker   2 runner   3 brute   4 flyer',
+      '5 zomba    6 archer   7 kingo   8 boss',
+      'C clear    P character    O finisher    R reset',
+      'A/D move · W jump ×2 · Shift dash · LMB fire · F sword · Q nuke'
+    ];
+    this.add.rectangle(14, 96, 470, 112, 0x0a0807, 0.72)
+      .setOrigin(0, 0).setScrollFactor(0).setDepth(70);
+    this._dbgText = this.add.text(26, 104, lines.join('\n'), {
+      fontFamily: F_UI, fontSize: '13px', fontStyle: '600', color: '#f2b13c', lineSpacing: 4
+    }).setScrollFactor(0).setDepth(71);
+
+    this._dbgStatus = this.add.text(26, 214, '', {
+      fontFamily: F_UI, fontSize: '13px', fontStyle: '600', color: '#cbbba1'
+    }).setScrollFactor(0).setDepth(71);
+    this._refreshStatus();
+  }
+
+  _refreshStatus() {
+    const cast = SANDBOX_CAST[this.castIdx];
+    this._dbgStatus.setText(
+      'PLAYING ' + cast.name + '  (' + (this.castIdx + 1) + '/' + SANDBOX_CAST.length + ')' +
+      '     FINISHER ' + (this.finisherEnabled ? 'ON' : 'OFF') +
+      '     ENEMIES ' + this.zombies.countActive(true));
+  }
+
+  _bindDebugKeys() {
+    SANDBOX_ENEMIES.forEach(([key, type]) => {
+      this.input.keyboard.on('keydown-' + key, () => this._spawnNear(type));
+    });
+    this.input.keyboard.on('keydown-EIGHT', () => {
+      if (this.dead || (this.boss && this.boss.active)) return;
+      this.spawnBoss();
+      this._refreshStatus();
+    });
+    this.input.keyboard.on('keydown-C', () => this._clearEnemies());
+    // The combat scene only honours R once you are dead; in here it always
+    // rebuilds the arena.
+    this.input.keyboard.on('keydown-R', () => {
+      this.physics.world.timeScale = 1;
+      this.scene.restart();
+    });
+    this.input.keyboard.on('keydown-P', () => this._cycleCast());
+    this.input.keyboard.on('keydown-O', () => {
+      this.finisherEnabled = !this.finisherEnabled;
+      this._refreshStatus();
+    });
+    this.input.keyboard.on('keydown-ESC', () => leaveSandbox(this));
+  }
+
+  // spawnZombie places enemies off the camera edge, which is right for a wave
+  // but useless when you want to look at one. The newest child is repositioned
+  // in front of the player instead.
+  _spawnNear(type) {
+    if (this.dead) return;
+    this.spawnZombie(type);
+    const kids = this.zombies.getChildren();
+    const z = kids[kids.length - 1];
+    if (z) {
+      // Fanned out rather than stacked, so spawning several of a kind gives you
+      // a row to look at instead of one sprite with the rest hidden behind it.
+      const dir = this.facing >= 0 ? 1 : -1;
+      const spread = 200 + (this._spawnN = ((this._spawnN || 0) + 1) % 5) * 90;
+      z.setPosition(Phaser.Math.Clamp(this.player.x + dir * spread, 40, WORLD_W - 40), z.y);
+    }
+    this._refreshStatus();
+  }
+
+  _clearEnemies() {
+    this.zombies.getChildren().slice().forEach(z => { if (z.active) z.destroy(); });
+    this.enemyShots.getChildren().slice().forEach(b => { if (b.active) b.destroy(); });
+    if (this.boss) {
+      this.boss = null;
+      this.bossBarBg.setVisible(false);
+      this.bossBarFill.setVisible(false);
+      this.bossBarLabel.setVisible(false);
+    }
+    this._executing = false;
+    this.physics.world.timeScale = 1;
+    this._refreshStatus();
+  }
+
+  _cycleCast() {
+    this.castIdx = (this.castIdx + 1) % SANDBOX_CAST.length;
+    this._refreshStatus();
+    if (SANDBOX_CAST.length === 1) {
+      this.showBanner('ONE CHARACTER BUILT', 'add to SANDBOX_CAST to test another', 1600);
+    }
+  }
+
+  update(time, delta) {
+    super.update(time, delta);
+    if (this.time.now > (this._nextStatusAt || 0)) {
+      this._nextStatusAt = this.time.now + 250;
+      this._refreshStatus();
+    }
+  }
+}
+
+// ------------------------------------------------------------------ //
+//  SANDBOX ENTRY                                                      //
+//  Reachable only in a development build. tools/build_html.js sets    //
+//  window.ATOMHOWL_DEV, and --release clears it, which drops both the //
+//  menu entry and the hotkey without touching this code.              //
+// ------------------------------------------------------------------ //
+const DEV_BUILD = !!window.ATOMHOWL_DEV;
+
+function enterSandbox(from) {
+  if (!DEV_BUILD || !from || from.scene.key === 'DebugScene') return;
+  stopMusic(200);
+  from.scene.start('DebugScene');
+}
+
+function leaveSandbox(from) {
+  if (!from) return;
+  from.physics.world.timeScale = 1;
+  from.scene.start('MenuScene');
+}
+
+if (DEV_BUILD) {
+  // A plain DOM listener, because no scene owns the hotkey and it has to work
+  // from wherever you happen to be. Boot is excluded: the sandbox needs the
+  // textures and animations that BootScene.create() registers.
+  window.addEventListener('keydown', e => {
+    if (e.key !== 'F9' || !window.__game) return;
+    const live = window.__game.scene.getScenes(true)[0];
+    if (!live || live.scene.key === 'BootScene') return;
+    e.preventDefault();
+    enterSandbox(live);
+  });
+}
+
 // ------------------------------------------------------------------ //
 //  BOOT THE GAME                                                      //
 // ------------------------------------------------------------------ //
@@ -3286,7 +3424,7 @@ window.__game = new Phaser.Game({
   scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
   physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
   scene: [BootScene, MenuScene, CharSelectScene, IntroDialogueScene,
-          BunkerScene, CityScene, ShopFrontScene, ShopScene, GameScene]
+          BunkerScene, CityScene, ShopFrontScene, ShopScene, GameScene, DebugScene]
 });
 
 })();

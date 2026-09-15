@@ -127,6 +127,14 @@ for (const [key, candidates] of Object.entries(MEDIA_SRC)) {
 }
 const mediaBlock = `/* Streamed media paths */ window.MEDIA = ${JSON.stringify(media)};`;
 
+// ---------- build mode ----------
+// Development builds carry the debug sandbox — its menu entry and its hotkey.
+// `node tools/build_html.js --release` clears the flag, which removes both
+// without the game code needing a second code path.
+const DEV = !process.argv.includes('--release');
+const devBlock = `/* Build mode */ window.ATOMHOWL_DEV = ${DEV};`;
+console.log(`build mode: ${DEV ? 'development (sandbox reachable)' : 'release (sandbox stripped)'}`);
+
 // ---------- UI typeface ----------
 // The UI face ships inline as base64: a canvas cannot draw with a face the
 // document has not loaded, and a webfont URL would not resolve on file://.
@@ -152,6 +160,7 @@ const blocks = [
   read('build/ui_assets.js'),
   sceneBlock,
   mediaBlock,
+  devBlock,
   '/* ATOMHOWL game */\n' + read('src_game/ah_game.js')
 ];
 

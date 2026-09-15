@@ -24,9 +24,6 @@ const PORTRAITS = {
   wolffel:  { open: 'portrait_wolffel_open.png',  closed: 'portrait_wolffel_closed.png' }
 };
 const ROTATIONS = { eterwolf: 'rotation_eterwolf.gif', wolffel: 'rotation_wolffel.gif' };
-// Walk cycles for the AI companion. Cut the same way as the turntables so the
-// two sets share a floor line and he does not hop when he starts moving.
-const WALKS = { wolffel: 'Idle_v3_wolffel_walk_east.gif' };
 // Two frames of the same bar: the name plate sits left on one and right on the
 // other, so the speaker can take the one whose plate is clear of them.
 const PANELS = { l: 'dialogue_panel.png', r: 'dialogue_panel_r.png' };
@@ -259,10 +256,7 @@ function cutClip(file) {
     return 'data:image/png;base64,' +
       PNG.sync.write(cleanCutout(png, 0)).toString('base64');
   });
-  // The figure height, not the canvas: two clips cut to different canvases
-  // scale to different on-screen sizes if the canvas is used as the divisor.
-  const figH = Math.max.apply(null, boxes.map(b => b.maxY - b.minY + 1));
-  return { frames: out, cw, ch, figH };
+  return { frames: out, cw, ch };
 }
 
 const rotations = {};
@@ -271,15 +265,6 @@ for (const [name, file] of Object.entries(ROTATIONS)) {
   const c = cutClip(A(file));
   rotations[name] = c.frames;
   console.log(`turntable ${name}: ${c.frames.length} frames @ ${c.cw}x${c.ch}`);
-}
-
-const walks = {}, walkMeta = {};
-for (const [name, file] of Object.entries(WALKS)) {
-  if (!fs.existsSync(A(file))) { console.log('MISSING', file); continue; }
-  const c = cutClip(A(file));
-  walks[name] = c.frames;
-  walkMeta[name] = { figH: c.figH, canvasH: c.ch };
-  console.log(`walk ${name}: ${c.frames.length} frames @ ${c.cw}x${c.ch}, figure ${c.figH}px`);
 }
 
 // ---------- dialogue frames ----------
@@ -293,6 +278,6 @@ for (const [side, file] of Object.entries(PANELS)) {
 }
 
 fs.writeFileSync(OUT, '/* UI art */ window.UIART = ' +
-  JSON.stringify({ panels, portraits, rotations, walks, walkMeta }) + ';\n');
+  JSON.stringify({ panels, portraits, rotations }) + ';\n');
 fs.rmSync(TMP, { recursive: true, force: true });
 console.log('wrote', OUT, Math.round(fs.statSync(OUT).size / 1024) + 'KB');
