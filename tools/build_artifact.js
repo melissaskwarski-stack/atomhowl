@@ -11,6 +11,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const ROOT = path.resolve(__dirname, '..');
 const p = rel => path.join(ROOT, rel);
@@ -86,6 +87,12 @@ const order = ['phaser.min.js', 'ew_assets.js', 'wf_assets.js', 'enemy_assets.js
                'zomb_assets.js', 'ui_assets.js', 'scene_assets.js',
                'media.js', 'devflag.js', 'ah_game.js'];
 
+// Shown in the page header so it is possible to tell at a glance whether the
+// build in front of you is the one that was just published.
+const BUILD_ID = crypto.createHash('sha1')
+  .update(fs.readFileSync(path.join(OUT, 'ah_game.js')))
+  .digest('hex').slice(0, 7) + ' \u00b7 ' + new Date().toISOString().slice(0, 16).replace('T', ' ');
+
 const html = `<title>ATOMHOWL</title>
 <style>
 ${fontFace}
@@ -114,7 +121,7 @@ h1 span{color:var(--faint); letter-spacing:.08em; font-weight:600; float:right}
 @media (max-width:520px){ h1 span{display:none} }
 </style>
 
-<h1>ATOMHOWL <span>dev build &middot; click once for sound</span></h1>
+<h1>ATOMHOWL <span>build ${BUILD_ID} &middot; click once for sound</span></h1>
 <div id="game"></div>
 <div class="legend">
   <span><b>MOVE</b> <span class="k">A D</span></span>
@@ -133,11 +140,22 @@ h1 span{color:var(--faint); letter-spacing:.08em; font-weight:600; float:right}
   <span><b>MENU</b> <span class="k">ESC</span></span>
   <span><b>PROP EDITOR</b> <span class="k">\\</span> drag &middot; <span class="k">&#96;</span> export</span>
 </div>
-` + order.map(f =>
+` + order.map(f => {
   // charset on every tag: these are separate files now, and a script without
   // one is decoded with whatever the document happens to be using. The caret
   // in the menu came through as mojibake locally because of exactly that.
-  `<script src="${f}" charset="utf-8"></script>`).join('\n') + '\n';
+  //
+  // ?v= is the file's own content hash, and it is not optional. The page is
+  // republished to one fixed URL, so every sibling file keeps its name from
+  // build to build — and the browser, having no reason to think ah_game.js
+  // changed, serves the copy it already has. The page updates and the game
+  // does not, which reads as the publish having silently failed. A name that
+  // changes with the bytes is what forces the refetch.
+  const full = path.join(OUT, f);
+  if (!fs.existsSync(full)) return '';
+  const v = crypto.createHash('sha1').update(fs.readFileSync(full)).digest('hex').slice(0, 10);
+  return `<script src="${f}?v=${v}" charset="utf-8"></script>`;
+}).filter(Boolean).join('\n') + '\n';
 
 fs.writeFileSync(path.join(OUT, 'index.html'), html);
 
