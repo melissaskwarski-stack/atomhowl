@@ -4478,6 +4478,10 @@ if (DEV_BUILD) {
 // ------------------------------------------------------------------ //
 window.__game = new Phaser.Game({
   type: Phaser.AUTO,
+  // The single-file build has no container and Phaser appends to the body,
+  // which is right there. The hosted build wraps the canvas so the page can
+  // lay out around it, and names it here.
+  parent: (typeof document !== 'undefined' && document.getElementById('game')) ? 'game' : undefined,
   width: 1280,
   height: 720,
   pixelArt: true,
