@@ -63,6 +63,29 @@ fs.writeFileSync(path.join(OUT, 'media.js'),
   '/* Media, as files beside the page */ window.MEDIA = ' + JSON.stringify(mediaMap) + ';\n');
 files.push('media.js');
 
+// ---------- dialogue voice ----------
+// A clip per line, shipped as ordinary files. Not one take seeked into: a plain
+// <audio> reports seekable [0,0] unless the host answers range requests, so
+// seeking played the top of the take over every line.
+const VOICE_SRC = 'public/assets/voice';
+const voice = {}, voiceMs = {};
+if (fs.existsSync(p(VOICE_SRC))) {
+  const durs = fs.existsSync(p(VOICE_SRC + '/durations.json'))
+    ? JSON.parse(fs.readFileSync(p(VOICE_SRC + '/durations.json'), 'utf8')) : {};
+  fs.readdirSync(p(VOICE_SRC)).filter(f => f.endsWith('.mp3')).sort().forEach(f => {
+    const id = path.basename(f, '.mp3');
+    total += copy(VOICE_SRC + '/' + f, f);
+    files.push(f);
+    voice[id] = f;
+    if (durs[id]) voiceMs[id] = Math.round(durs[id] * 1000);
+  });
+  console.log(`voice: ${Object.keys(voice).length} lines as files`);
+}
+fs.writeFileSync(path.join(OUT, 'voice.js'),
+  '/* Dialogue voice */ window.VOICE = ' + JSON.stringify(voice) +
+  '; window.VOICE_MS = ' + JSON.stringify(voiceMs) + ';\n');
+files.push('voice.js');
+
 // The sandbox ships: this is the build being played to give feedback on.
 fs.writeFileSync(path.join(OUT, 'devflag.js'), '/* Build mode */ window.ATOMHOWL_DEV = true;\n');
 files.push('devflag.js');
@@ -85,15 +108,17 @@ for (const [src, name] of SCRIPTS) {
 
 const order = ['phaser.min.js', 'ew_assets.js', 'wf_assets.js', 'enemy_assets.js',
                'zomb_assets.js', 'ui_assets.js', 'scene_assets.js',
-               'media.js', 'devflag.js', 'ah_game.js'];
+               'media.js', 'voice.js', 'devflag.js', 'ah_game.js'];
 
 // Shown in the page header so it is possible to tell at a glance whether the
 // build in front of you is the one that was just published.
 const BUILD_ID = crypto.createHash('sha1')
   .update(fs.readFileSync(path.join(OUT, 'ah_game.js')))
-  .digest('hex').slice(0, 7) + ' \u00b7 ' + new Date().toISOString().slice(0, 16).replace('T', ' ');
+  .digest('hex').slice(0, 7) + ' &middot; ' + new Date().toISOString().slice(0, 16).replace('T', ' ');
 
-const html = `<title>ATOMHOWL</title>
+const html = `<meta http-equiv="Cache-Control" content="no-store, max-age=0">
+<meta http-equiv="Pragma" content="no-cache">
+<title>ATOMHOWL</title>
 <style>
 ${fontFace}
 :root{
@@ -136,9 +161,9 @@ h1 span{color:var(--faint); letter-spacing:.08em; font-weight:600; float:right}
   <span><b>SWORD</b> <span class="k">F</span> / <span class="k">RMB</span></span>
   <span><b>SANDBOX</b> <span class="k">F9</span></span>
   <span><b>RESTART STAGE</b> <span class="k">R</span></span>
-  <span><b>MUTE</b> <span class="k">M</span></span>
+  <span><b>MUTE</b> <span class="k">N</span></span>
   <span><b>MENU</b> <span class="k">ESC</span></span>
-  <span><b>PROP EDITOR</b> <span class="k">\\</span> drag &middot; <span class="k">&#96;</span> export</span>
+  <span><b>PROP EDITOR</b> <span class="k">M</span> toggle &middot; drag &middot; <span class="k">O</span> export</span>
 </div>
 ` + order.map(f => {
   // charset on every tag: these are separate files now, and a script without

@@ -120,8 +120,29 @@ const MEDIA_SRC = {
   // 4.3MB of the page once base64'd.
   menuMusic: [['public/assets/Atom_howl_intro_lite.mp3', 'audio/mpeg'],
               ['public/assets/Atom_howl_intro_web.mp3',  'audio/mpeg'],
-              ['public/assets/Atom_howl_intro.mp3',      'audio/mpeg']]
+              ['public/assets/Atom_howl_intro.mp3',      'audio/mpeg']],
 };
+
+// ---------- dialogue voice ----------
+// One clip per line, cut from the scene's single take by tools/cut_voice.js.
+// Not one file seeked into: a plain <audio> reports seekable [0,0] unless the
+// host answers range requests, so seeking silently played the top of the take
+// over every line.
+const VOICE_DIR = 'public/assets/voice';
+const voice = {}, voiceMs = {};
+if (fs.existsSync(p(VOICE_DIR))) {
+  const durs = fs.existsSync(p(VOICE_DIR + '/durations.json'))
+    ? JSON.parse(fs.readFileSync(p(VOICE_DIR + '/durations.json'), 'utf8')) : {};
+  fs.readdirSync(p(VOICE_DIR)).filter(f => f.endsWith('.mp3')).sort().forEach(f => {
+    const id = path.basename(f, '.mp3');
+    voice[id] = toDataUri(p(VOICE_DIR + '/' + f), 'audio/mpeg');
+    if (durs[id]) voiceMs[id] = Math.round(durs[id] * 1000);
+  });
+  const kb = Math.round(Object.values(voice).reduce((n, u) => n + u.length, 0) / 1024);
+  console.log(`voice: ${Object.keys(voice).length} lines (${kb}KB inline)`);
+}
+const voiceBlock = `/* Dialogue voice */ window.VOICE = ${JSON.stringify(voice)}; ` +
+                   `window.VOICE_MS = ${JSON.stringify(voiceMs)};`;
 const media = {};
 for (const [key, candidates] of Object.entries(MEDIA_SRC)) {
   const hits = candidates.filter(([rel]) => fs.existsSync(p(rel)));
@@ -171,6 +192,7 @@ const blocks = [
   read('build/ui_assets.js'),
   sceneBlock,
   mediaBlock,
+  voiceBlock,
   devBlock,
   '/* ATOMHOWL game */\n' + read('src_game/ah_game.js')
 ];

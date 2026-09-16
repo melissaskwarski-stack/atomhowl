@@ -132,6 +132,15 @@ function pickAudio(list) {
 // Built during boot rather than when the menu opens, so the track is fetched
 // and decoded while the page is still loading and playback can begin on the
 // first frame instead of buffering first.
+// The menu bed, and how far it drops under a spoken line. Voice at 64k mono
+// loses badly to a full-range music bed at 0.5 — the words are there and you
+// cannot make them out.
+const MUSIC_BED = 0.5, MUSIC_DUCK = 0.14;
+function duckMusic(on) {
+  if (!_music) return;
+  try { _music.volume = on ? MUSIC_DUCK : MUSIC_BED; } catch (e) {}
+}
+
 function primeMusic() {
   if (_music) return _music;
   const list = mediaList('menuMusic');
@@ -139,7 +148,7 @@ function primeMusic() {
   try {
     _music = new Audio(pickAudio(list));
     _music.loop = true;
-    _music.volume = 0.5;
+    _music.volume = MUSIC_BED;
     _music.preload = 'auto';
     _music.load();
   } catch (e) { _music = null; }
@@ -1369,7 +1378,7 @@ class GameScene extends Phaser.Scene {
     const wake = () => Sfx.ensure();
     this.input.on('pointerdown', wake);
     this.input.keyboard.on('keydown', wake);
-    this.input.keyboard.on('keydown-M', () => Sfx.toggleMute());
+    this.input.keyboard.on('keydown-N', () => Sfx.toggleMute());
     this.input.keyboard.on('keydown-R', () => { if (this.dead) this.scene.restart(); });
     this.input.keyboard.on('keydown-ESC', () => {
       this.cameras.main.fadeOut(300, 0, 0, 0);
@@ -1449,7 +1458,7 @@ class GameScene extends Phaser.Scene {
       this.powHudIcons[d.key] = { ic, lbl };
     });
     this.add.text(640, 702,
-      'A/D · W jump ×2 · S crouch · Shift dash · X walk · LMB fire · E weapon · RMB/F sword · Q nuke · M mute',
+      'A/D · W jump ×2 · S crouch · Shift dash · X walk · LMB fire · UP+fire 45° · E weapon · RMB/F sword · Q nuke · N mute',
       { fontFamily: 'Courier New, monospace', fontSize: '14px', color: '#8a6f4a' })
       .setOrigin(0.5, 1).setScrollFactor(0).setDepth(60).setAlpha(0.85);
 
@@ -3367,18 +3376,62 @@ const SLEEPER = 'WOLFFEL';        // out cold until the line that wakes him
 // The bunker wake-up. Eterwolf calls his brother "Feli"; the plate shows his
 // name, WOLFFEL. A line marked wake is where the brother comes round — until
 // then he is slumped and unlit.
+// `vox` names this line's own recording. The scene was recorded as one
+// continuous take and is cut into a clip per line at build time — seeking into
+// the single take looked tidier but does not work: a plain <audio> reports
+// seekable [0,0] unless the host answers range requests, so every seek snapped
+// back to 0 and played the top of the take over whichever line was on screen.
+// A file per line needs no seeking, and dropping the gaps between lines makes
+// it smaller than the take was.
+//
+// The take stops after "Ok, let's get out." — the last two lines are silent.
 const INTRO_LINES = [
-  { who: 'ETERWOLF', text: "Mk, what happened? Where are we?" },
-  { who: 'ETERWOLF', text: "Wake up, Feli." },
-  { who: 'WOLFFEL',  text: "Hmm, what's going on? I'm hungry.", wake: true },
-  { who: 'ETERWOLF', text: "Do you remember how we got here?" },
-  { who: 'WOLFFEL',  text: "No..." },
+  { who: 'ETERWOLF', text: "Mk, what happened? Where are we?", vox: 'bunker_01' },
+  { who: 'ETERWOLF', text: "Wake up, Feli.", vox: 'bunker_02' },
+  { who: 'WOLFFEL',  text: "Hmm, what's going on? I'm hungry.", wake: true, vox: 'bunker_03' },
+  { who: 'ETERWOLF', text: "Do you remember how we got here?", vox: 'bunker_04' },
+  { who: 'WOLFFEL',  text: "No...", vox: 'bunker_05' },
   { who: 'WOLFFEL',  text: "..." },
   { who: 'ETERWOLF', text: "..." },
-  { who: 'ETERWOLF', text: "Ok, let's get out." },
+  { who: 'ETERWOLF', text: "Ok, let's get out.", vox: 'bunker_06' },
   { who: 'ETERWOLF', text: "Looks like we're in some sort of bunker." },
   { who: 'ETERWOLF', text: "Let's look around for a way to get out." }
 ];
+
+// ---- dialogue voice ------------------------------------------------------
+// One element per clip, kept after first use: re-creating an Audio per line
+// re-downloads it on some browsers, and the clips are small enough to hold.
+const _voxPool = {};
+let _voxNow = null;
+function stopVoice() {
+  if (_voxNow) { try { _voxNow.pause(); _voxNow.currentTime = 0; } catch (e) {} _voxNow = null; }
+  duckMusic(false);
+}
+// Returns the clip's length in seconds so the typewriter can be paced to it,
+// or 0 when there is no voice for this line.
+function playVoice(id) {
+  stopVoice();
+  if (!id) return 0;
+  const map = window.VOICE || {};
+  const src = map[id];
+  if (!src) return 0;
+  let a = _voxPool[id];
+  if (!a) {
+    try { a = _voxPool[id] = new Audio(src); a.preload = 'auto'; } catch (e) { return 0; }
+  }
+  try {
+    a.currentTime = 0;                       // from the top; no seeking involved
+    const pr = a.play();
+    if (pr && pr.catch) pr.catch(() => {});  // autoplay may still be blocked
+  } catch (e) { return 0; }
+  _voxNow = a;
+  duckMusic(true);
+  a.addEventListener('ended', () => { if (_voxNow === a) stopVoice(); }, { once: true });
+  // Durations are measured at build time, so the pacing does not have to wait
+  // for metadata to arrive before the first character is drawn.
+  const d = (window.VOICE_MS || {})[id];
+  return d ? d / 1000 : (isFinite(a.duration) ? a.duration : 0);
+}
 
 class IntroDialogueScene extends Phaser.Scene {
   constructor() { super('IntroDialogueScene'); }
@@ -3561,12 +3614,25 @@ class IntroDialogueScene extends Phaser.Scene {
     this._typing = true;
     let i = 0;
     if (this._typeEv) this._typeEv.remove();
+
+    // A voiced line paces its typing to the recording so the last glyph lands
+    // as the line is finished being spoken — text racing ahead of the voice and
+    // then waiting is what makes dubbed dialogue feel wrong. The 0.88 leaves
+    // the text complete slightly before the audio tail, which reads as the
+    // speaker finishing rather than the text lagging.
+    const spoken = playVoice(line.vox);
+    const delay = spoken
+      ? Math.max(12, Math.round((spoken * 1000 * 0.88) / Math.max(1, line.text.length)))
+      : 26;
+
     this._typeEv = this.time.addEvent({
-      delay: 26,
+      delay: delay,
       repeat: line.text.length - 1,
       callback: () => {
         this._body.setText(line.text.slice(0, ++i));
-        if (i % 3 === 0) Sfx.type();
+        // The keyclick is the stand-in for a voice; with a real one it is just
+        // noise over the top of it.
+        if (!spoken && i % 3 === 0) Sfx.type();
         if (i >= line.text.length) { this._typing = false; this._more.setAlpha(0.8); }
       }
     });
@@ -3578,7 +3644,7 @@ class IntroDialogueScene extends Phaser.Scene {
       this._body.setText(INTRO_LINES[this._idx].text);
       this._typing = false;
       this._more.setAlpha(0.8);
-      return;
+      return;                                 // the voice keeps playing out
     }
     this._idx++;
     this._show();
@@ -3588,6 +3654,7 @@ class IntroDialogueScene extends Phaser.Scene {
     if (this._done) return;
     this._done = true;
     if (this._typeEv) this._typeEv.remove();
+    stopVoice();                 // ESC out of the scene should not keep talking
     stopMusic(900);
     this.cameras.main.fadeOut(900, 0, 0, 0);
     this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('BunkerScene'));
@@ -3757,7 +3824,7 @@ class WalkScene extends Phaser.Scene {
 
     // input
     this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,SHIFT,M,E,ENTER,R');
-    this.input.keyboard.on('keydown-M', () => Sfx.toggleMute());
+    this.input.keyboard.on('keydown-N', () => Sfx.toggleMute());
     if (cfg.canReset) this.input.keyboard.on('keydown-R', () => this.resetStage());
     if (cfg.castSwitch) this._buildCastSwitch();
     const wake = () => Sfx.ensure();
@@ -3767,7 +3834,7 @@ class WalkScene extends Phaser.Scene {
     // Level editor: drag props and export config
     this._editorMode = false;
     this._draggedProp = null;
-    this.input.keyboard.on('keydown-BACKSLASH', () => {
+    this.input.keyboard.on('keydown-M', () => {
       this._editorMode = !this._editorMode;
       console.log(`Editor mode ${this._editorMode ? 'ON' : 'OFF'}`);
       this.propImages.forEach(p => {
@@ -3794,7 +3861,7 @@ class WalkScene extends Phaser.Scene {
       console.log(`Moved prop ${p.idx} to xFrac: ${p.pr.xFrac.toFixed(3)}`);
       this._draggedProp = null;
     });
-    this.input.keyboard.on('keydown-GRAVE', () => {
+    this.input.keyboard.on('keydown-O', () => {
       if (!this._editorMode) return;
       const cfg = this.cfg;
       const exported = {
@@ -3857,7 +3924,7 @@ class WalkScene extends Phaser.Scene {
       fontFamily: F_UI, fontSize: '15px', fontStyle: '700', color: '#d9c7a8',
       stroke: '#070605', strokeThickness: 4
     }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(40);
-    this.add.text(640, 692, 'A/D WALK   ·   SHIFT RUN   ·   W JUMP   ·   E ENTER   ·   M MUTE',
+    this.add.text(640, 692, 'A/D WALK   ·   SHIFT RUN   ·   W JUMP   ·   E ENTER   ·   N MUTE   ·   M EDIT',
       { fontFamily: F_UI, fontSize: '10px', fontStyle: '500', color: '#8a6f4a' })
       .setOrigin(0.5, 1).setScrollFactor(0).setDepth(40).setAlpha(0.85);
 
