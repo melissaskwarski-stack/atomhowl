@@ -2903,7 +2903,10 @@ function playAction(p, hero, action, facing) {
 // Ground speeds. He walks by default and sprints on shift, which is also what
 // picks between the walk cycle and the run.
 const WALK_SPEED   = 300;
-const RUN_SPEED    = 430;
+// Run is nearly twice the walk. At 430 against a 300 walk the two read as the
+// same pace with a different cycle on top, which is not what holding a key
+// should feel like.
+const RUN_SPEED    = 560;
 // Combat runs by default (X drops it to the walk); the exploration sprint is
 // faster still because there is nothing there to run into.
 const COMBAT_SPEED = 340;
@@ -3602,6 +3605,24 @@ class WalkScene extends Phaser.Scene {
       dark.setOrigin(0.5, 0);
     });
 
+    // A band of burnt logs along the very front, tiled across the world and
+    // scrolling faster than it. Parallax is the whole trick: something moving
+    // past quicker than the ground reads as being between you and the scene,
+    // which is what gives a flat painting depth.
+    if (cfg.foreground && this.textures.exists('scene_fglogs')) {
+      const src = this.textures.get('scene_fglogs').getSourceImage();
+      const fgH = cfg.fgHeight || 190;
+      const sc = fgH / src.height;
+      const tileW = src.width * sc;
+      // it scrolls 1.18x, so it has to cover the world plus the extra it travels
+      const span = WW + this.cameras.main.width * 0.4;
+      for (let x = -tileW * 0.3; x < span; x += tileW - 6) {
+        this.add.image(x, groundY + (cfg.fgDrop != null ? cfg.fgDrop : 62), 'scene_fglogs')
+          .setOrigin(0, 1).setDepth(36).setScale(sc)
+          .setScrollFactor(1.18, 1);
+      }
+    }
+
     // Props. Rubble is solid, so it is something to jump onto; logs sit in
     // front of everything at a touch more than world speed, which is what
     // makes them read as being close to the camera rather than in the scene.
@@ -3618,6 +3639,8 @@ class WalkScene extends Phaser.Scene {
       // stand rather than by a raw scale factor.
       const painted = this.textures.exists('scene_rubble');
       const wantH = (pr.h || 112);
+      // he clears ~136px from a standing jump, so anything near that has to be
+      // run at — which is the point of the obstacle
       let sc;
       if (painted) {
         const im = this.add.image(x, groundY + 6, 'scene_rubble').setOrigin(0.5, 1).setDepth(3);
@@ -3635,7 +3658,9 @@ class WalkScene extends Phaser.Scene {
         // through. A rectangle placed by hand is the same thing the floor
         // slabs do, and it lands where it is put.
         const bw = painted ? 104 * sc * 0.62 : 104 * sc;
-        const bh = painted ? wantH * 0.78 : 70 * sc;
+        // The heap's own height, near enough: at 0.78 the collision stood 90px
+        // against a 137px jump, so he stepped over it without trying.
+        const bh = painted ? wantH * 0.93 : 70 * sc;
         const box = this.add.rectangle(x, groundY + 4 - bh / 2, bw, bh, 0x000000, 0).setDepth(-1);
         this.physics.add.existing(box, true);
         this.solidsW.push(box);
@@ -4008,20 +4033,16 @@ class ExitScene extends WalkScene {
     this.cameras.main.fadeIn(600, 0, 0, 0);
     this.buildWalk({
       bgKey: 'scene_exit',
-      worldW: 'auto', groundFrac: 0.80, startXFrac: 0.04, charH: 200, bgZoom: 1.25,
+      worldW: 'auto', groundFrac: 0.755, startXFrac: 0.05, charH: 200, bgZoom: 1.2,
       title: 'OUTSIDE — the village road',
       castSwitch: true, canReset: true, noLongIdle: true,
-      props: [
-        { xFrac: 0.30, kind: 'log',    scale: 1.8 },
-        { xFrac: 0.66, kind: 'rubble', scale: 1.4 },
-        { xFrac: 0.93, kind: 'log',    scale: 2.1, yOff: 34 }
-      ],
+      foreground: true, fgHeight: 165, fgDrop: 74,
       beats: [
         { at: 0,    say: [['ETERWOLF', 'So this is what is left of it.']],
                     tip: 'HOLD  A  OR  D  TO WALK' },
-        { at: 0.34, tip: 'HOLD  SHIFT  WHILE WALKING TO RUN' },
-        { at: 0.72, say: [['ETERWOLF', 'Road keeps going. Come on.']],
-                    tip: 'KEEP WALKING RIGHT' }
+        { at: 0.30, tip: 'HOLD  SHIFT  WHILE WALKING TO RUN — it is much faster' },
+        { at: 0.70, say: [['ETERWOLF', 'Road keeps going. Come on.']],
+                    tip: 'KEEP GOING RIGHT' }
       ],
       exits: [
         { xFrac: 0.985, w: 90, label: 'ON UP THE ROAD ▶', target: 'JumpScene', auto: true }
@@ -4052,28 +4073,29 @@ class JumpScene extends WalkScene {
     this.cameras.main.fadeIn(600, 0, 0, 0);
     this.buildWalk({
       bgKey: 'scene_jump',
-      worldW: 'auto', groundFrac: 0.78, startXFrac: 0.03, charH: 200, bgZoom: 1.25,
-      title: 'THE BURNT STREET — mind the holes',
+      worldW: 'auto', groundFrac: 0.755, startXFrac: 0.04, charH: 200, bgZoom: 1.2,
+      title: 'THE BURNT STREET',
       castSwitch: true, canReset: true, noLongIdle: true,
-      gaps: [
-        { atFrac: 0.30, wFrac: 0.045 },
-        { atFrac: 0.62, wFrac: 0.060 }
-      ],
+      foreground: true, fgHeight: 175, fgDrop: 78,
+      // No holes: this stage teaches one thing. Three heaps in the road, each
+      // tall enough that a standing jump will not clear it — he reaches about
+      // 136px straight up, so 128 means running at it.
+      // He clears 137px straight up and covers 256px of ground jumping at a
+      // walk against 478px at a run. So a heap this tall has to be jumped
+      // properly, and this wide has to be run at to clear in one — walk into
+      // it and you land on top instead, which still gets you over.
       props: [
-        { xFrac: 0.16, kind: 'rubble', scale: 1.5 },
-        { xFrac: 0.45, kind: 'rubble', scale: 1.9 },
-        { xFrac: 0.50, kind: 'log',    scale: 1.9 },
-        { xFrac: 0.79, kind: 'rubble', scale: 1.6 },
-        { xFrac: 0.96, kind: 'log',    scale: 2.2, yOff: 36 }
+        { xFrac: 0.26, kind: 'rubble', h: 134 },
+        { xFrac: 0.55, kind: 'rubble', h: 140 },
+        { xFrac: 0.82, kind: 'rubble', h: 136 }
       ],
       beats: [
-        { at: 0,    say: [['ETERWOLF', 'Road is out ahead. We go over.']],
+        { at: 0,    say: [['ETERWOLF', 'Road is buried. We go over it.']],
                     tip: 'PRESS  W  OR  SPACE  TO JUMP' },
-        { at: 0.24, tip: 'JUMP THE HOLE — RUN AT IT FOR THE DISTANCE' },
-        { at: 0.42, tip: 'JUMP ONTO THE RUBBLE TO GET OVER IT' },
-        { at: 0.58, tip: 'ONE MORE, AND IT IS WIDER' },
-        { at: 0.88, say: [['ETERWOLF', 'Good. That is enough for now.']],
-                    tip: 'THAT IS EVERYTHING THERE IS TO DO SO FAR' }
+        { at: 0.18, tip: 'TOO HIGH TO STEP OVER — RUN AT IT AND JUMP' },
+        { at: 0.48, tip: 'AGAIN. HOLD SHIFT, THEN JUMP' },
+        { at: 0.90, say: [['ETERWOLF', 'Good. That is as far as it goes.']],
+                    tip: 'THAT IS EVERYTHING BUILT SO FAR' }
       ],
       exits: [
         { xFrac: 0.99, w: 90, label: 'END OF WHAT IS BUILT ▶', target: 'MenuScene' }
