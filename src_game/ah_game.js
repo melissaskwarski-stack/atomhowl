@@ -644,7 +644,7 @@ function waveConfig(n) {
 }
 
 // cross-scene progress (weapon acquired in the shop, etc.)
-const GameState = { hasWeapon: false };
+const GameState = { hasWeapon: false, castId: null };
 
 const WORLD_W = 2400;
 const WORLD_H = 720;
@@ -969,6 +969,34 @@ class BootScene extends Phaser.Scene {
     g.fillStyle(0x8ede2a, 1);   g.fillCircle(7, 7, 5);
     g.fillStyle(0xe4ff9a, 1);   g.fillCircle(5.5, 5.5, 2.4);
     g.generateTexture('acid', 14, 14);
+    g.destroy();
+
+    // A fallen log. Drawn rather than painted: it only ever reads as a dark
+    // shape near the camera, so the end grain and a couple of highlights along
+    // the top are the whole of what is needed.
+    g = this.make.graphics({ add: false });
+    g.fillStyle(0x1a1410, 1); g.fillRoundedRect(0, 8, 190, 40, 14);
+    g.fillStyle(0x241c15, 1); g.fillRoundedRect(4, 10, 182, 16, 8);
+    g.fillStyle(0x2e2419, 1); g.fillEllipse(176, 28, 26, 40);
+    g.fillStyle(0x191309, 1); g.fillEllipse(176, 28, 15, 25);
+    g.fillStyle(0x0f0b08, 1); g.fillEllipse(176, 28, 6, 11);
+    for (let i = 0; i < 5; i++) {
+      g.fillStyle(0x30271c, 0.7);
+      g.fillRect(18 + i * 32, 12 + (i % 2) * 3, 20, 2);
+    }
+    g.generateTexture('log_prop', 192, 56);
+    g.destroy();
+
+    // A heap of broken masonry, stacked so it has a top to land on.
+    g = this.make.graphics({ add: false });
+    const blocks = [[0,44,120,36],[14,26,92,22],[30,10,62,20],[8,34,40,14],[74,30,44,16]];
+    blocks.forEach(([x, y, w, h], i) => {
+      g.fillStyle([0x2a241d, 0x342c22, 0x1f1a15][i % 3], 1);
+      g.fillRect(x, y, w, h);
+      g.fillStyle(0x433a2c, 0.9); g.fillRect(x, y, w, 3);
+    });
+    g.fillStyle(0x4a4032, 0.8); g.fillRect(30, 10, 62, 3);
+    g.generateTexture('rubble_prop', 120, 80);
     g.destroy();
 
     // speed line — a streak that fades out at both ends, so a row of them
@@ -2852,7 +2880,7 @@ const DASH_LEAN     = 0.17;   // ~10 degrees into the run
 const DASH_GHOST_MS = 26;     // one blur copy this often while he travels
 const DASH_GHOST_FADE = 260;
 const DASH_STRETCH  = 1.42;   // ghosts smeared along the dash, squashed across
-const CROUCH_BODY  = 0.51;   // measured: prone is 114px against a 222px stand
+const CROUCH_BODY  = 0.57;   // measured: the crouch is 128px against a 226px stand
 
 // Plays `action` on `hero`, chaining through its intro when the action is
 // changing. Returns the key actually playing, which is what callers cache to
@@ -2874,7 +2902,7 @@ function playAction(p, hero, action, facing) {
 
 // Ground speeds. He walks by default and sprints on shift, which is also what
 // picks between the walk cycle and the run.
-const WALK_SPEED   = 235;
+const WALK_SPEED   = 300;
 const RUN_SPEED    = 430;
 // Combat runs by default (X drops it to the walk); the exploration sprint is
 // faster still because there is nothing there to run into.
@@ -2911,14 +2939,20 @@ function driveWalker(scene, p, keys, onGround) {
   // Each character names its own and how long it takes to get bored.
   if (moving || !onGround) { p._restSince = 0; p._longIdleDone = false; }
   else if (!p._restSince) p._restSince = now;
+  // A tutorial stage says what it teaches and nothing else — no taking the
+  // guitar off his back halfway through learning to jump.
+  const allowLong = !(scene.cfg && scene.cfg.noLongIdle);
   const boredAt = (hero && hero.longIdleMs) || IDLE_LONG_MS;
   if (hero && hero.longIdleOnce && p._curAnim &&
       p._curAnim.indexOf('-' + hero.longIdle) === 2 && !p.anims.isPlaying) {
     p._longIdleDone = true;
   }
-  const bored = p._restSince && !p._longIdleDone && now - p._restSince > boredAt;
+  const bored = allowLong && p._restSince && !p._longIdleDone && now - p._restSince > boredAt;
 
   if (p._real) {
+    // picking himself up owns the sprite until it finishes
+    if (now < (p._downUntil || 0)) { p.setVelocityX(0); return move; }
+
     const want = !onGround ? airAction(hero, p.body.velocity.y)
                : now < (p._landUntil || 0) ? 'land'
                : moving    ? (sprint ? 'run' : 'walk')
@@ -2943,12 +2977,10 @@ class MenuScene extends Phaser.Scene {
     const W = 1280, H = 720;
     this.cameras.main.setBackgroundColor('#0a0807');
 
-    // Still art sits underneath the video: it covers the first frames while
-    // the video decodes, and stays put if the file is missing entirely.
-    if (this.textures.exists('scene_menu')) {
-      const img = this.add.image(W / 2, H / 2, 'scene_menu').setDepth(-20);
-      img.setScale(Math.max(W / img.width, H / img.height));
-    }
+    // No still art behind the video. The old painted menu used to sit there
+    // to cover the frames before the clip decodes, and what it actually did
+    // was show through — its own title and layout bleeding past the edges of
+    // the new one. The dark camera fill covers that gap instead.
     this._buildVideo(W, H);
 
     // The type sits in the left third, so the plate is darkened as a gradient
@@ -3528,15 +3560,87 @@ class WalkScene extends Phaser.Scene {
       if (cfg.worldW === 'auto') WW = 2200;
       if (cfg.drawFallback) cfg.drawFallback.call(this, WW);
     }
+    // With no art there is nothing to take the floor line off, and every stage
+    // that leans on groundFrac was ending up with an undefined floor — which
+    // makes a NaN slab, drops the player through the world and takes his
+    // physics body with him. The fraction is of the view instead.
+    if (groundY == null || !isFinite(groundY)) {
+      groundY = Math.round(H * (cfg.groundFrac != null ? cfg.groundFrac : 0.83));
+    }
     this.worldW = WW;
     this.cfg.worldW = WW;
 
     this.physics.world.setBounds(0, 0, WW, H);
     this.cameras.main.setBounds(0, 0, WW, H);
 
-    // invisible floor
-    const floor = this.add.rectangle(WW / 2, groundY + 40, WW, 80, 0x000000, 0).setDepth(-1);
-    this.physics.add.existing(floor, true);
+    this.groundY = groundY;
+
+    // The floor is built in segments so a stage can open holes in it. With no
+    // gaps declared that is one slab across the world, exactly as before.
+    this.solidsW = [];
+    const gaps = (cfg.gaps || []).map(g => ({
+      x0: g.atFrac * WW, x1: (g.atFrac + g.wFrac) * WW
+    })).sort((a, b) => a.x0 - b.x0);
+    let cursor = 0;
+    const slab = (x0, x1) => {
+      if (x1 - x0 < 4) return;
+      const f = this.add.rectangle((x0 + x1) / 2, groundY + 40, x1 - x0, 80, 0x000000, 0).setDepth(-1);
+      this.physics.add.existing(f, true);
+      this.solidsW.push(f);
+    };
+    gaps.forEach(g => { slab(cursor, g.x0); cursor = g.x1; });
+    slab(cursor, WW);
+    const floor = this.solidsW[0];
+
+    // A gap needs an edge you can see, or it is an invisible pit.
+    gaps.forEach(g => {
+      [g.x0, g.x1].forEach((x, i) => {
+        const e = this.add.rectangle(x, groundY + 30, 10, 64, 0x0b0907, 0.9).setDepth(2);
+        e.setOrigin(i === 0 ? 1 : 0, 0.5);
+      });
+      const dark = this.add.rectangle((g.x0 + g.x1) / 2, groundY + 46, g.x1 - g.x0, 96, 0x050403, 0.92).setDepth(1);
+      dark.setOrigin(0.5, 0);
+    });
+
+    // Props. Rubble is solid, so it is something to jump onto; logs sit in
+    // front of everything at a touch more than world speed, which is what
+    // makes them read as being close to the camera rather than in the scene.
+    (cfg.props || []).forEach(pr => {
+      const x = pr.xFrac * WW;
+      if (pr.kind === 'log') {
+        const im = this.add.image(x, groundY + (pr.yOff || 26), 'log_prop')
+          .setOrigin(0.5, 1).setDepth(34).setScale(pr.scale || 1.7);
+        im.setScrollFactor(1.08, 1);
+        return;
+      }
+      // The painted pile if it is in the build, the drawn one if not. The
+      // painting is 2128px of content, so it is sized by the height it should
+      // stand rather than by a raw scale factor.
+      const painted = this.textures.exists('scene_rubble');
+      const wantH = (pr.h || 112);
+      let sc;
+      if (painted) {
+        const im = this.add.image(x, groundY + 6, 'scene_rubble').setOrigin(0.5, 1).setDepth(3);
+        sc = wantH / im.height;
+        im.setScale(sc);
+        sc = im.displayWidth / 104;          // express it the way the box below wants
+      } else {
+        sc = pr.scale || 1.6;
+        this.add.image(x, groundY + 4, 'rubble_prop').setOrigin(0.5, 1).setDepth(3).setScale(sc);
+      }
+      if (pr.solid !== false) {
+        // A separate invisible box rather than a body on the image. Giving a
+        // STATIC body an offset moves the body instead of insetting it, so the
+        // collision ended up somewhere the heap was not and he fell straight
+        // through. A rectangle placed by hand is the same thing the floor
+        // slabs do, and it lands where it is put.
+        const bw = painted ? 104 * sc * 0.62 : 104 * sc;
+        const bh = painted ? wantH * 0.78 : 70 * sc;
+        const box = this.add.rectangle(x, groundY + 4 - bh / 2, bw, bh, 0x000000, 0).setDepth(-1);
+        this.physics.add.existing(box, true);
+        this.solidsW.push(box);
+      }
+    });
 
     // player — a scene transition can override the spawn point (e.g. re-enter at the hole)
     const data = this.sys.settings.data || {};
@@ -3544,15 +3648,20 @@ class WalkScene extends Phaser.Scene {
     const startX = spawnFrac != null ? spawnFrac * WW : (cfg.startX || 160);
     // The cast scales with the room, or he would shrink as the art grows.
     const charH = (cfg.charH || 190) * zoom;
-    this.player = makeWalker(this, startX, groundY, charH);
+    this.castId = data.cast || GameState.castId || DEFAULT_CAST;
+    GameState.castId = this.castId;
+    this.player = makeWalker(this, startX, groundY, charH, this.castId);
     this._buildBeats(cfg);
-    this.physics.add.collider(this.player, floor);
+    this.solidsW.forEach(f => this.physics.add.collider(this.player, f));
+    this._safeX = startX;
     this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
     this.cameras.main.setDeadzone(160, 100);
 
     // input
-    this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,SHIFT,M,E,ENTER');
+    this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,SHIFT,M,E,ENTER,R');
     this.input.keyboard.on('keydown-M', () => Sfx.toggleMute());
+    if (cfg.canReset) this.input.keyboard.on('keydown-R', () => this.resetStage());
+    if (cfg.castSwitch) this._buildCastSwitch();
     const wake = () => Sfx.ensure();
     this.input.on('pointerdown', wake);
     this.input.keyboard.on('keydown', wake);
@@ -3613,6 +3722,78 @@ class WalkScene extends Phaser.Scene {
       this._gf = 0;
     }
     this._transitioning = false;
+  }
+
+  // Put the stage back the way it started, keeping whoever you are playing.
+  resetStage() {
+    this.cameras.main.fadeOut(180, 0, 0, 0);
+    this.cameras.main.once('camerafadeoutcomplete', () =>
+      this.scene.restart({ cast: this.castId }));
+  }
+
+  // Two buttons to swap brother, so the same stage can be walked as either
+  // without going back through the menu. Switching restarts the stage: the
+  // character is chosen when the sprite is built.
+  _buildCastSwitch() {
+    if (CAST.length < 2) return;
+    let x = 22;
+    this.add.text(x, 664, 'PLAY', {
+      fontFamily: F_UI, fontSize: '11px', fontStyle: '700', color: '#7d6c55'
+    }).setScrollFactor(0).setDepth(45);
+    x += 40;
+    this._castBtns = [];
+    CAST.forEach(c => {
+      const t = this.add.text(x + 10, 660, c.name, {
+        fontFamily: F_UI, fontSize: '13px', fontStyle: '700'
+      }).setScrollFactor(0).setDepth(46);
+      const box = this.add.rectangle(x, 657, t.width + 20, 22, 0x1b1611, 0.95)
+        .setOrigin(0, 0).setScrollFactor(0).setDepth(45)
+        .setStrokeStyle(1, 0x4a3b2a).setInteractive({ useHandCursor: true });
+      box.on('pointerover', () => { if (c.id !== this.castId) t.setColor('#f2b13c'); });
+      box.on('pointerout', () => this._paintCast());
+      box.on('pointerdown', () => {
+        if (c.id === this.castId) return;
+        Sfx.ensure(); Sfx.select();
+        GameState.castId = c.id;
+        this.cameras.main.fadeOut(180, 0, 0, 0);
+        this.cameras.main.once('camerafadeoutcomplete', () => this.scene.restart({ cast: c.id }));
+      });
+      this._castBtns.push({ c, t, box });
+      x += t.width + 26;
+    });
+    this._paintCast();
+    this.add.text(x + 14, 660, 'R  RESTART STAGE', {
+      fontFamily: F_UI, fontSize: '11px', fontStyle: '600', color: '#7d6c55'
+    }).setScrollFactor(0).setDepth(45);
+  }
+
+  _paintCast() {
+    (this._castBtns || []).forEach(({ c, t, box }) => {
+      const on = c.id === this.castId;
+      t.setColor(on ? '#0a0807' : '#cbbba1');
+      box.setFillStyle(on ? 0xf2b13c : 0x1b1611, on ? 1 : 0.95);
+      box.setStrokeStyle(1, on ? 0xf2b13c : 0x4a3b2a);
+    });
+  }
+
+  // Missing a jump drops him back on the near side of whatever he fell into,
+  // rather than ending anything — this is a tutorial, not a punishment.
+  _catchFall() {
+    if (this._transitioning || this.player.y < 820) return;
+    this.player.setVelocity(0, 0);
+    this.player.setPosition(this._safeX, this.groundY - 120);
+    this.cameras.main.flash(160, 0, 0, 0);
+    // He lands badly and picks himself up. The clip is the one that used to
+    // stand in for a crouch — it was always a man going down, not ducking.
+    const hero = this.player._hero;
+    if (heroHas(hero, 'falldown')) {
+      const key = heroAnim(hero, 'falldown', this.player._facing);
+      const a = this.anims.get(key);
+      this.player._downUntil = this.time.now + (a ? a.duration : 450) + 180;
+      this.player.play(key);
+      this.player._curAnim = key;
+      this.player._curAction = 'falldown';
+    }
   }
 
   // ---- scripted beats ----------------------------------------------------
@@ -3681,6 +3862,9 @@ class WalkScene extends Phaser.Scene {
 
   update() {
     const onGround = this.player.body.blocked.down || this.player.body.touching.down;
+    // the last place he stood, to put him back if he misses a jump
+    if (onGround && Math.abs(this.player.body.velocity.x) < 40) this._safeX = this.player.x;
+    this._catchFall();
     if (!this._transitioning) driveWalker(this, this.player, this.keys, onGround);
     this._runBeats();
 
@@ -3779,13 +3963,15 @@ class BunkerScene extends WalkScene {
       // than taken in at a glance; the floor line follows the zoom by fraction.
       worldW: 'auto', groundFrac: 0.872, startXFrac: 0.06, charH: 280, bgZoom: 1.35,
       title: 'THE BUNKER — quarantine shelter',
+      castSwitch: true, canReset: true, noLongIdle: true,
       beats: [
-        { at: 0,    tip: 'A / D  TO MOVE     SHIFT  TO RUN' },
+        { at: 0,    tip: 'HOLD  A  TO GO LEFT,  D  TO GO RIGHT' },
+        { at: 0.22, tip: 'HOLD  SHIFT  WHILE WALKING TO RUN' },
         { at: 0.72, say: [['ETERWOLF', 'Look, Feli, a door.']],
                     tip: 'PRESS  E  AT THE DOOR' }
       ],
       exits: [
-        { xFrac: 0.90, w: 180, label: 'UP TO THE CITY', target: 'CityScene' }   // the green door
+        { xFrac: 0.90, w: 180, label: 'OUT THE BLAST DOOR', target: 'ExitScene' }
       ],
       drawFallback(WW) {
         const g = this.add.graphics().setDepth(-20);
@@ -3810,6 +3996,103 @@ class BunkerScene extends WalkScene {
 // ================================================================== //
 //  SCENE 2 — THE CITY (walk right to the shop on the far edge)        //
 // ================================================================== //
+// ================================================================== //
+//  TUTORIAL 1 — OUTSIDE THE BUNKER (learn to walk)                   //
+//  The first thing past the blast door. Nothing to fight and nothing //
+//  to fall into: the whole stage is there to teach the two keys that //
+//  move him, and it reveals itself as he walks, like the bunker.     //
+// ================================================================== //
+class ExitScene extends WalkScene {
+  constructor() { super('ExitScene'); }
+  create() {
+    this.cameras.main.fadeIn(600, 0, 0, 0);
+    this.buildWalk({
+      bgKey: 'scene_exit',
+      worldW: 'auto', groundFrac: 0.80, startXFrac: 0.04, charH: 200, bgZoom: 1.25,
+      title: 'OUTSIDE — the village road',
+      castSwitch: true, canReset: true, noLongIdle: true,
+      props: [
+        { xFrac: 0.30, kind: 'log',    scale: 1.8 },
+        { xFrac: 0.66, kind: 'rubble', scale: 1.4 },
+        { xFrac: 0.93, kind: 'log',    scale: 2.1, yOff: 34 }
+      ],
+      beats: [
+        { at: 0,    say: [['ETERWOLF', 'So this is what is left of it.']],
+                    tip: 'HOLD  A  OR  D  TO WALK' },
+        { at: 0.34, tip: 'HOLD  SHIFT  WHILE WALKING TO RUN' },
+        { at: 0.72, say: [['ETERWOLF', 'Road keeps going. Come on.']],
+                    tip: 'KEEP WALKING RIGHT' }
+      ],
+      exits: [
+        { xFrac: 0.985, w: 90, label: 'ON UP THE ROAD ▶', target: 'JumpScene', auto: true }
+      ],
+      drawFallback(WW) {
+        const g = this.add.graphics().setDepth(-20);
+        g.fillStyle(0x241814, 1); g.fillRect(0, 0, WW, 420);
+        g.fillStyle(0x7a3a1c, 1); g.fillRect(0, 300, WW, 130);
+        g.fillStyle(0x2c2018, 1); g.fillRect(0, 430, WW, 160);
+        for (let x = 120; x < WW; x += 420) {
+          g.fillStyle(0x181310, 1); g.fillRect(x, 300, 190, 240);
+          g.fillStyle(0xf2b13c, 0.5); g.fillRect(x + 40, 380, 34, 40);
+        }
+        g.fillStyle(0x15100c, 1); g.fillRect(0, 576, WW, 144);
+      }
+    });
+  }
+}
+
+// ================================================================== //
+//  TUTORIAL 2 — THE BURNT STREET (learn to jump)                     //
+//  Rubble to climb and two holes in the road. Missing a jump puts    //
+//  him back on the near side rather than killing him.                //
+// ================================================================== //
+class JumpScene extends WalkScene {
+  constructor() { super('JumpScene'); }
+  create() {
+    this.cameras.main.fadeIn(600, 0, 0, 0);
+    this.buildWalk({
+      bgKey: 'scene_jump',
+      worldW: 'auto', groundFrac: 0.78, startXFrac: 0.03, charH: 200, bgZoom: 1.25,
+      title: 'THE BURNT STREET — mind the holes',
+      castSwitch: true, canReset: true, noLongIdle: true,
+      gaps: [
+        { atFrac: 0.30, wFrac: 0.045 },
+        { atFrac: 0.62, wFrac: 0.060 }
+      ],
+      props: [
+        { xFrac: 0.16, kind: 'rubble', scale: 1.5 },
+        { xFrac: 0.45, kind: 'rubble', scale: 1.9 },
+        { xFrac: 0.50, kind: 'log',    scale: 1.9 },
+        { xFrac: 0.79, kind: 'rubble', scale: 1.6 },
+        { xFrac: 0.96, kind: 'log',    scale: 2.2, yOff: 36 }
+      ],
+      beats: [
+        { at: 0,    say: [['ETERWOLF', 'Road is out ahead. We go over.']],
+                    tip: 'PRESS  W  OR  SPACE  TO JUMP' },
+        { at: 0.24, tip: 'JUMP THE HOLE — RUN AT IT FOR THE DISTANCE' },
+        { at: 0.42, tip: 'JUMP ONTO THE RUBBLE TO GET OVER IT' },
+        { at: 0.58, tip: 'ONE MORE, AND IT IS WIDER' },
+        { at: 0.88, say: [['ETERWOLF', 'Good. That is enough for now.']],
+                    tip: 'THAT IS EVERYTHING THERE IS TO DO SO FAR' }
+      ],
+      exits: [
+        { xFrac: 0.99, w: 90, label: 'END OF WHAT IS BUILT ▶', target: 'MenuScene' }
+      ],
+      drawFallback(WW) {
+        const g = this.add.graphics().setDepth(-20);
+        g.fillStyle(0x1a0f0b, 1); g.fillRect(0, 0, WW, 560);
+        g.fillStyle(0x8a2c10, 0.75); g.fillRect(0, 250, WW, 190);
+        for (let x = 60; x < WW; x += 330) {
+          g.fillStyle(0x141010, 1); g.fillRect(x, 190, 230, 330);
+          g.fillStyle(0xd85a1c, 0.55); g.fillRect(x + 30, 260, 40, 52);
+          g.fillStyle(0xd85a1c, 0.35); g.fillRect(x + 140, 320, 40, 52);
+        }
+        g.fillStyle(0x120d0a, 1); g.fillRect(0, 560, WW, 160);
+      }
+    });
+  }
+}
+
 class CityScene extends WalkScene {
   constructor() { super('CityScene'); }
   create() {
@@ -4180,7 +4463,8 @@ window.__game = new Phaser.Game({
   scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
   physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
   scene: [BootScene, MenuScene, CharSelectScene, IntroDialogueScene,
-          BunkerScene, CityScene, ShopFrontScene, ShopScene, GameScene, DebugScene]
+          BunkerScene, ExitScene, JumpScene,
+          CityScene, ShopFrontScene, ShopScene, GameScene, DebugScene]
 });
 
 })();

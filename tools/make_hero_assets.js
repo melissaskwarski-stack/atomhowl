@@ -47,10 +47,14 @@ const SRC = {
   esword:     A + 'Idle_v3_esword_east.gif',
   eswordF:    A + 'Idle_v3_esword_front.gif',
   // --- low stance ---
-  // He goes all the way down onto his hands rather than half-squatting; the
-  // last three frames are him settled there (they differ by 5, against 147
-  // through the descent), so those are the hold.
-  crouch:     A + 'Idle_v3_prone_east.gif',
+  // 29 frames of crouch AND slide. Only the crouch is wanted: he stands
+  // through 0-1, bends from 2, and is settled from 8 (frames 8-11 are
+  // identical at 110x128). Everything from 12 is him throwing his feet out
+  // into a slide, which is a separate move and is cut off here.
+  crouch:     A + 'Idle_v3_crouch2_east.gif',
+  // The all-fours clip that used to be the crouch is really him going down —
+  // it is the fall, played when he misses a jump.
+  falldown:   A + 'Idle_v3_prone_east.gif',
   crouchwalk: A + 'Idle_v3_crouchwalk_east.gif',
   // --- the second gun ---
   akwalk:     A + 'Idle_v3_akwalk_east.gif'
@@ -80,7 +84,7 @@ const FREEZE_BELOW = { guitar: 0.52 };
 // The swords throw an arc far wider than the body and the crouch drops the
 // silhouette, so both would slide if each frame were centred on its own bounds.
 const SHARE_X = ['jump', 'katana', 'katanaW', 'katanaF', 'esword', 'eswordF',
-                 'crouch', 'crouchwalk'];
+                 'crouch', 'crouchwalk', 'falldown'];
 
 // Bursts: the physics launches the instant the key goes down, so a clip that
 // opens on two or three frames of the character still standing reads as him
@@ -191,6 +195,8 @@ const K = {
   eswordF:   clips.eswordF ? pool('eswordF', 'eswordF', false) : null,
   crouch:    clips.crouch  ? pool('crouch',  'crouch',  false) : null,
   crouchW:   clips.crouch  ? pool('crouchW', 'crouch',  true)  : null,
+  falldown:  clips.falldown ? pool('falldown',  'falldown', false) : null,
+  falldownW: clips.falldown ? pool('falldownW', 'falldown', true)  : null,
   cwalk:     clips.crouchwalk ? pool('cwalk',  'crouchwalk', false) : null,
   cwalkW:    clips.crouchwalk ? pool('cwalkW', 'crouchwalk', true)  : null,
   akwalk:    clips.akwalk  ? pool('akwalk',  'akwalk',  false) : null,
@@ -314,10 +320,20 @@ const mod = {
 
     // ---- low stance -----------------------------------------------------
     ...(K.crouch ? {
-      crouchin:  A_(K.crouch,           18, 0),
-      crouchinW: A_(K.crouchW,          18, 0),
-      crouch:    A_(K.crouch.slice(6),   4),
-      crouchW:   A_(K.crouchW.slice(6),  4)
+      // down through 2-11, then hold the settled frame. 8-11 are the same
+      // drawing, so the hold is one frame rather than four copies of it.
+      crouchin:  A_(K.crouch.slice(2, 12),  24, 0),
+      crouchinW: A_(K.crouchW.slice(2, 12), 24, 0),
+      crouch:    A_([K.crouch[9]],  4),
+      crouchW:   A_([K.crouchW[9]], 4),
+      // the rest of the same clip: feet thrown forward. Built and waiting —
+      // nothing plays it yet.
+      slide:     A_(K.crouch.slice(12, 21),  22, 0),
+      slideW:    A_(K.crouchW.slice(12, 21), 22, 0)
+    } : {}),
+    ...(K.falldown ? {
+      falldown:  A_(K.falldown,  20, 0),
+      falldownW: A_(K.falldownW, 20, 0)
     } : {}),
     ...(K.cwalk ? {
       crouchwalk:  A_(K.cwalk,  10),

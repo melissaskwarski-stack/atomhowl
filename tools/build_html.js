@@ -56,7 +56,12 @@ function encodeScene(file) {
 
 // first path that exists wins
 const SCENE_SRC = {
-  menu:      ['public/assets/atomhowl-menu.png', 'atomhowl-menu.png', 'atomic-howl-menu.png'],
+  // No `menu` entry: the menu is the video now, and the old painted still that
+  // used to sit behind it was showing through past the clip's edges. Dropping
+  // it takes 2.2MB out of the page as well.
+  exit:      ['public/assets/tutorial_exit.png', 'tutorial_exit.png'],
+  jump:      ['public/assets/tutorial_jump.png', 'tutorial_jump.png'],
+  rubble:    ['public/assets/rubble_pile.png', 'rubble to jump.png'],
   bunker:    ['public/assets/bunker_wide.png', 'public/assets/bunker2.png', 'bunker2.png', 'bunker.png'],
   city:      ['public/assets/city.png', 'city.png', 'city-1.png'],
   shop:      ['shops.png', 'public/assets/shops.png'],
