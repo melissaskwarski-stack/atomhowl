@@ -39,7 +39,12 @@ const SRC = {
   sword:  A('wf_greatsword_east.gif'),
   crouch: A('wf_crouch_east.gif'),
   akwalk: A('wf_akwalk_east.gif'),        // walking and firing the rifle
-  pwalk:  A('wf_pistolwalk_east.gif')     // walking with the pistol up
+  pwalk:  A('wf_pistolwalk_east.gif'),    // walking with the pistol up
+  // 21 frames of him leaning into a hard run. Only the front of it is a dash:
+  // four standing frames, then the lean at 4, the push-off widening 116 -> 205
+  // through 5-8, and 9 coming back down. Frames 4-9 are the whole move; the
+  // rest is a sprint cycle he already has.
+  dash:   A('wf_dash_east.gif')
 };
 
 // Where each one-shot settles into something repeatable.
@@ -90,7 +95,9 @@ const K = {
   ak:       pool('ak',       'akwalk', false),
   akW:      pool('akW',      'akwalk', true),
   pw:       pool('pw',       'pwalk',  false),
-  pwW:      pool('pwW',      'pwalk',  true)
+  pwW:      pool('pwW',      'pwalk',  true),
+  dash:     pool('dash',     'dash',   false),
+  dashW:    pool('dashW',    'dash',   true)
 };
 // The looping tails reuse frames the intros already emitted.
 if (K.burgerin) {
@@ -168,6 +175,14 @@ if (K.gs) {
   add('deathblow',  K.gs.slice(2),  15, 0);
 }
 
+// ---- the dash -------------------------------------------------------------
+// Six frames over the 286ms the dash lasts, same as Eterwolf's, so the clip
+// ends as control comes back.
+if (K.dash) {
+  add('dash',  K.dash.slice(4, 10),  21, 0);
+  add('dashW', K.dashW.slice(4, 10), 21, 0);
+}
+
 // ---- low stance -----------------------------------------------------------
 if (K.crouch) {
   add('crouchin',  K.crouch,          18, 0);
@@ -205,7 +220,7 @@ const mod = {
   longIdleOnce: true,      // two bites, then back to standing
   body, muzzle, muzzles,
   canvasW: CW, canvasH: CH,
-  pending: ['west art (all mirrored east)', 'dash', 'jump', 'land',
+  pending: ['west art (all mirrored east)', 'jump', 'land',
             'a front-facing finisher', 'a real standing firing clip'],
   frames,
   anims

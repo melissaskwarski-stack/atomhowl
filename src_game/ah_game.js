@@ -971,6 +971,17 @@ class BootScene extends Phaser.Scene {
     g.generateTexture('acid', 14, 14);
     g.destroy();
 
+    // speed line — a streak that fades out at both ends, so a row of them
+    // behind a dash reads as air being torn rather than as drawn sticks
+    g = this.make.graphics({ add: false });
+    for (let i = 0; i < 40; i++) {
+      const t = i / 39;
+      g.fillStyle(0xbcd8f0, Math.sin(t * Math.PI) * 0.9);
+      g.fillRect(i * 2, 0, 2, 3);
+    }
+    g.generateTexture('speedline', 80, 3);
+    g.destroy();
+
     // the splat it leaves where it lands
     g = this.make.graphics({ add: false });
     g.fillStyle(0x6ba81f, 0.9);
@@ -1294,6 +1305,9 @@ class GameScene extends Phaser.Scene {
     this.comboUntil = 0;
     this.crouching = false;
     this.longIdleDone = false;
+    this.dashDir = 0;
+    this.dashLanded = true;
+    this.nextGhostAt = 0;
     this._executing = false;     // scene instances are reused across restart()
     this.walkMode = false;       // X toggles; combat runs by default
     this.dropThrough = false;
@@ -2208,6 +2222,7 @@ class GameScene extends Phaser.Scene {
   }
 
   gameOver() {
+    if (this.player) { this.tweens.killTweensOf(this.player); this.player.setRotation(0); }
     this.dead = true;
     this.player.setTintFill(0x661a10);
     this.player.setVelocityX(0);
@@ -2292,6 +2307,44 @@ class GameScene extends Phaser.Scene {
     return heroHas(this.hero, want) ? want : (moving ? 'runshoot' : 'shoot');
   }
 
+  // A puff of ground dust, used at both ends of a dash.
+  dashDust(x, dir, big) {
+    const n = big ? 4 : 3;
+    for (let i = 0; i < n; i++) {
+      const d = this.add.image(x - dir * i * 13, GROUND_Y - 6 - Math.random() * 10, 'puff')
+        .setDepth(6).setAlpha(0.5).setScale(big ? 1.5 : 1.1).setTint(0x9a8b7a);
+      this.tweens.add({ targets: d, alpha: 0, scale: (big ? 3.2 : 2.3),
+        x: d.x - dir * (20 + Math.random() * 26), duration: 340 + Math.random() * 160,
+        onComplete: () => d.destroy() });
+    }
+  }
+
+  // Streaks of torn air behind him, at the height of his body.
+  dashLines(x, y, dir) {
+    for (let i = 0; i < 5; i++) {
+      const ln = this.add.image(x - dir * (30 + Math.random() * 70),
+                                y - 46 + Math.random() * 78, 'speedline')
+        .setDepth(9).setAlpha(0.6).setFlipX(dir < 0)
+        .setScale(0.7 + Math.random() * 0.9, 1);
+      this.tweens.add({ targets: ln, alpha: 0, x: ln.x - dir * 130,
+        duration: 220 + Math.random() * 140, onComplete: () => ln.destroy() });
+    }
+  }
+
+  // One frame of motion blur: the sprite exactly as it is now, smeared along
+  // the direction it is travelling and left behind to fade.
+  dashGhost() {
+    const p = this.player;
+    const g = this.add.image(p.x, p.y, p.texture.key, p.frame.name)
+      .setDepth(7).setAlpha(0.42).setFlipX(p.flipX)
+      .setOrigin(p.originX, p.originY)
+      .setRotation(p.rotation)
+      .setTint(0x8fc4ee)
+      .setScale(p.scaleX * DASH_STRETCH, p.scaleY * (2 - DASH_STRETCH));
+    this.tweens.add({ targets: g, alpha: 0, scaleX: p.scaleX * (DASH_STRETCH + 0.5),
+      duration: DASH_GHOST_FADE, onComplete: () => g.destroy() });
+  }
+
   dash() {
     const time = this.time.now;
     if (time < this.nextDashAt || this.dead) return;
@@ -2314,16 +2367,14 @@ class GameScene extends Phaser.Scene {
     this.player.setVelocityX(dir * 760);
     this.player.setVelocityY(0);
 
-    // afterimages
-    for (let i = 0; i < 3; i++) {
-      this.time.delayedCall(i * 50, () => {
-        if (this.dead) return;
-        const ghost = this.add.image(this.player.x, this.player.y, this.player.texture.key)
-          .setDepth(7).setAlpha(0.3).setFlipX(this.player.flipX).setTint(0x46688a)
-          .setScale(this.player.scaleX, this.player.scaleY);
-        this.tweens.add({ targets: ghost, alpha: 0, duration: 240, onComplete: () => ghost.destroy() });
-      });
-    }
+    // he goes in leaning, and the blur trail starts on the next frame
+    this.dashDir = dir;
+    this.dashLanded = false;
+    this.nextGhostAt = 0;
+    if (this.realHero) this.player.setRotation(dir * DASH_LEAN);
+    this.dashDust(this.player.x, dir, false);
+    this.dashLines(this.player.x, this.player.y, dir);
+    this.cameras.main.shake(90, 0.003);
   }
 
   // ================= PRESENTATION HELPERS =================
@@ -2446,6 +2497,25 @@ class GameScene extends Phaser.Scene {
     this.dropThrough = (this.keys.S.isDown || this.keys.DOWN.isDown);
     const wantCrouch = this.dropThrough && onGround && heroHas(this.hero, 'crouch');
     if (wantCrouch !== this.crouching) this.setCrouch(wantCrouch);
+
+    // Motion blur while he travels: a copy of the frame he is actually on,
+    // smeared along the direction of travel, left behind to fade. Laid down on
+    // a short interval rather than per frame so the trail looks the same
+    // whatever rate the display runs at.
+    if (this.realHero) {
+      if (time < this.dashAnimUntil) {
+        if (time >= (this.nextGhostAt || 0)) {
+          this.nextGhostAt = time + DASH_GHOST_MS;
+          this.dashGhost();
+        }
+      } else if (this.dashDir && !this.dashLanded) {
+        // out the far end: plant, kick up dust, and let the lean unwind
+        this.dashLanded = true;
+        this.dashDust(this.player.x, this.dashDir, true);
+        this.tweens.add({ targets: this.player, rotation: 0, duration: 130, ease: 'Sine.easeOut' });
+        this.dashDir = 0;
+      }
+    }
 
     const dashing = time < this.dashUntil;
     if (!dashing) {
@@ -2771,6 +2841,17 @@ const COMBO_FOR_DEATHBLOW = COMBO_ACTIONS.length - 1;
 // exactly what it looked like. A real crouch-walk needs a clip with both
 // legs in it; until there is one, prone holds still.
 const CROUCH_SPEED = 0;
+
+// ---- how a dash reads ----------------------------------------------------
+// The move itself is 280ms of travel, which on its own looks like the sprite
+// teleporting. What sells it is the trail: copies of the very frames he passed
+// through, stretched along the direction of travel and fading behind him, which
+// is what motion blur actually is. Plus the lean going in and the dust coming
+// out the other end.
+const DASH_LEAN     = 0.17;   // ~10 degrees into the run
+const DASH_GHOST_MS = 26;     // one blur copy this often while he travels
+const DASH_GHOST_FADE = 260;
+const DASH_STRETCH  = 1.42;   // ghosts smeared along the dash, squashed across
 const CROUCH_BODY  = 0.51;   // measured: prone is 114px against a 222px stand
 
 // Plays `action` on `hero`, chaining through its intro when the action is
