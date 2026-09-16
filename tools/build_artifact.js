@@ -124,11 +124,14 @@ h1 span{color:var(--faint); letter-spacing:.08em; font-weight:600; float:right}
   <span><b>CROUCH</b> <span class="k">S</span></span>
   <span><b>DASH</b> <span class="k">SHIFT</span></span>
   <span><b>FIRE</b> <span class="k">LMB</span> / <span class="k">K</span></span>
+  <span><b>AIM 45&deg;</b> <span class="k">UP</span> + FIRE</span>
   <span><b>WEAPON</b> <span class="k">E</span></span>
   <span><b>SWORD</b> <span class="k">F</span> / <span class="k">RMB</span></span>
   <span><b>SANDBOX</b> <span class="k">F9</span></span>
   <span><b>RESTART STAGE</b> <span class="k">R</span></span>
   <span><b>MUTE</b> <span class="k">M</span></span>
+  <span><b>MENU</b> <span class="k">ESC</span></span>
+  <span><b>PROP EDITOR</b> <span class="k">\\</span> drag &middot; <span class="k">&#96;</span> export</span>
 </div>
 ` + order.map(f =>
   // charset on every tag: these are separate files now, and a script without
