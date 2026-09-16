@@ -3206,7 +3206,14 @@ class CharSelectScene extends Phaser.Scene {
 
   _brackets(g, x, y, w, h, colour, alpha) {
     const L = x - w / 2, R = x + w / 2, T = y - h / 2, B = y + h / 2, a = 34;
-    g.lineStyle(4, colour, alpha);
+    // Glow layer — outer halo
+    g.lineStyle(10, colour, alpha * 0.25);
+    [[L, T, 1, 1], [R, T, -1, 1], [L, B, 1, -1], [R, B, -1, -1]].forEach(([px, py, dx, dy]) => {
+      g.beginPath(); g.moveTo(px + dx * a, py); g.lineTo(px, py);
+      g.lineTo(px, py + dy * a); g.strokePath();
+    });
+    // Main bracket — bright core
+    g.lineStyle(5, colour, alpha);
     [[L, T, 1, 1], [R, T, -1, 1], [L, B, 1, -1], [R, B, -1, -1]].forEach(([px, py, dx, dy]) => {
       g.beginPath(); g.moveTo(px + dx * a, py); g.lineTo(px, py);
       g.lineTo(px, py + dy * a); g.strokePath();
