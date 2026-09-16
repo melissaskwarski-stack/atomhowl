@@ -115,8 +115,11 @@ fs.writeFileSync(p('build/scene_assets.js'), sceneBlock);
 const MEDIA_SRC = {
   menuVideo: [['public/assets/main_menu_video.webm', 'video/webm'],
               ['public/assets/main_menu_video.mp4',  'video/mp4']],
-  menuMusic: [['public/assets/Atom_howl_intro_web.mp3', 'audio/mpeg'],
-              ['public/assets/Atom_howl_intro.mp3',     'audio/mpeg']]
+  // 96k mono: it is a looping bed under a menu, and the stereo master was
+  // 4.3MB of the page once base64'd.
+  menuMusic: [['public/assets/Atom_howl_intro_lite.mp3', 'audio/mpeg'],
+              ['public/assets/Atom_howl_intro_web.mp3',  'audio/mpeg'],
+              ['public/assets/Atom_howl_intro.mp3',      'audio/mpeg']]
 };
 const media = {};
 for (const [key, candidates] of Object.entries(MEDIA_SRC)) {
