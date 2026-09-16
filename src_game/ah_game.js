@@ -1367,6 +1367,10 @@ class GameScene extends Phaser.Scene {
     this.input.keyboard.on('keydown', wake);
     this.input.keyboard.on('keydown-M', () => Sfx.toggleMute());
     this.input.keyboard.on('keydown-R', () => { if (this.dead) this.scene.restart(); });
+    this.input.keyboard.on('keydown-ESC', () => {
+      this.cameras.main.fadeOut(300, 0, 0, 0);
+      this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('MenuScene'));
+    });
     this.input.on('pointerdown', (p) => {
       if (p.rightButtonDown()) this.swordAttack();
     });
@@ -3743,6 +3747,12 @@ class WalkScene extends Phaser.Scene {
       console.log('/* Exported props config: */');
       console.log(JSON.stringify(exported.props, null, 2));
       console.log('/* Paste into scene config as: props: [ ... ] */');
+    });
+
+    // ESC returns to menu
+    this.input.keyboard.on('keydown-ESC', () => {
+      this.cameras.main.fadeOut(300, 0, 0, 0);
+      this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('MenuScene'));
     });
 
     // exit zones (xFrac → world x)
