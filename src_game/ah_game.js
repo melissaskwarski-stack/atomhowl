@@ -1215,6 +1215,7 @@ class GameScene extends Phaser.Scene {
   constructor(key) { super(key || 'GameScene'); }
 
   create() {
+    stopMusic(200);
     const cam = this.cameras.main;
     this.physics.world.setBounds(0, 0, WORLD_W, WORLD_H);
     cam.setBounds(0, 0, WORLD_W, WORLD_H);
@@ -3389,17 +3390,17 @@ class IntroDialogueScene extends Phaser.Scene {
     this._nameX = { l: x + w * 0.192, r: x + w * 0.771 };
 
     this._name = this.add.text(this._nameX.l, y + h * 0.18, '', {
-      fontFamily: F_UI, fontSize: '12px', fontStyle: '700', color: '#f5c169',
-      stroke: '#070605', strokeThickness: 3
+      fontFamily: F_UI, fontSize: '19px', fontStyle: '700', color: '#f5c169',
+      stroke: '#070605', strokeThickness: 4
     }).setOrigin(0.5, 0.5).setDepth(22);
-    if (this._name.setLetterSpacing) this._name.setLetterSpacing(1.5);
+    if (this._name.setLetterSpacing) this._name.setLetterSpacing(2);
 
     // The line sits on dark scratched metal, so it gets a soft drop shadow to
     // lift it off the plate — a stroke would thicken type this small.
     this._body = this.add.text(x + w / 2, y + h * 0.38, '', {
-      fontFamily: F_TXT, fontSize: '22px', color: '#f3ecdf', align: 'center',
-      wordWrap: { width: w * 0.76 }, lineSpacing: 6
-    }).setOrigin(0.5, 0).setDepth(22);
+      fontFamily: F_TXT, fontSize: '23px', color: '#f3ecdf', align: 'center',
+      wordWrap: { width: w * 0.8 }, lineSpacing: 7
+    }).setOrigin(0.5, 0.5).setDepth(22);
     this._body.setShadow(0, 2, '#000000', 4, false, true);
 
     this._more = this.add.text(x + w * 0.5, y + h * 0.86, '▼', {
@@ -4025,6 +4026,7 @@ class WalkScene extends Phaser.Scene {
 class BunkerScene extends WalkScene {
   constructor() { super('BunkerScene'); }
   create() {
+    stopMusic(200);
     this.cameras.main.fadeIn(450, 0, 0, 0);
     this.buildWalk({
       bgKey: 'scene_bunker',
