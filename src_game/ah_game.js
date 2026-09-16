@@ -2929,7 +2929,12 @@ function driveWalker(scene, p, keys, onGround) {
   const wantJump = Phaser.Input.Keyboard.JustDown(keys.W)
                 || Phaser.Input.Keyboard.JustDown(keys.SPACE)
                 || Phaser.Input.Keyboard.JustDown(keys.UP);
-  if (wantJump && onGround) { p.setVelocityY(-640); Sfx.ensure(); Sfx.jump(); }
+  if (wantJump && onGround) {
+    p.setVelocityY(-640);
+    // Forward momentum during jump: natural platformer feel
+    p.setVelocityX((move || p._facing) * 140);
+    Sfx.ensure(); Sfx.jump();
+  }
 
   const hero = p._hero;
   // same landing beat as combat: only after real air time
@@ -4152,15 +4157,13 @@ class JumpScene extends WalkScene {
       // it and you land on top instead, which still gets you over.
       props: [
         { xFrac: 0.26, kind: 'rubble', h: 134 },
-        { xFrac: 0.55, kind: 'rubble', h: 140 },
-        { xFrac: 0.82, kind: 'rubble', h: 136 }
+        { xFrac: 0.68, kind: 'rubble', h: 136 }
       ],
       beats: [
         { at: 0,    say: [['ETERWOLF', 'Road is buried. We go over it.']],
                     tip: 'PRESS  W  OR  SPACE  TO JUMP' },
-        { at: 0.18, tip: 'TOO HIGH TO STEP OVER — RUN AT IT AND JUMP' },
-        { at: 0.48, tip: 'AGAIN. HOLD SHIFT, THEN JUMP' },
-        { at: 0.90, say: [['ETERWOLF', 'Good. That is as far as it goes.']],
+        { at: 0.20, tip: 'TOO HIGH TO STEP OVER — RUN AT IT AND JUMP' },
+        { at: 0.60, say: [['ETERWOLF', 'Good. That is as far as it goes.']],
                     tip: 'THAT IS EVERYTHING BUILT SO FAR' }
       ],
       exits: [
