@@ -4102,6 +4102,7 @@ class ExitScene extends WalkScene {
       title: 'OUTSIDE — the village road',
       castSwitch: true, canReset: true, noLongIdle: true,
       foreground: true, fgHeight: 165, fgDrop: 74,
+      props: [],
       beats: [
         { at: 0,    say: [['ETERWOLF', 'So this is what is left of it.']],
                     tip: 'HOLD  A  OR  D  TO WALK' },
