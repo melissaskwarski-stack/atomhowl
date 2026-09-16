@@ -3626,12 +3626,14 @@ class WalkScene extends Phaser.Scene {
     // Props. Rubble is solid, so it is something to jump onto; logs sit in
     // front of everything at a touch more than world speed, which is what
     // makes them read as being close to the camera rather than in the scene.
-    (cfg.props || []).forEach(pr => {
+    this.propImages = [];
+    (cfg.props || []).forEach((pr, prIdx) => {
       const x = pr.xFrac * WW;
       if (pr.kind === 'log') {
         const im = this.add.image(x, groundY + (pr.yOff || 26), 'log_prop')
           .setOrigin(0.5, 1).setDepth(34).setScale(pr.scale || 1.7);
         im.setScrollFactor(1.08, 1);
+        this.propImages.push({ im, pr, idx: prIdx, groundY, WW });
         return;
       }
       // The painted pile if it is in the build, the drawn one if not. The
@@ -3642,15 +3644,17 @@ class WalkScene extends Phaser.Scene {
       // he clears ~136px from a standing jump, so anything near that has to be
       // run at — which is the point of the obstacle
       let sc;
+      let im;
       if (painted) {
-        const im = this.add.image(x, groundY + 6, 'scene_rubble').setOrigin(0.5, 1).setDepth(3);
+        im = this.add.image(x, groundY + 6, 'scene_rubble').setOrigin(0.5, 1).setDepth(3);
         sc = wantH / im.height;
         im.setScale(sc);
         sc = im.displayWidth / 104;          // express it the way the box below wants
       } else {
         sc = pr.scale || 1.6;
-        this.add.image(x, groundY + 4, 'rubble_prop').setOrigin(0.5, 1).setDepth(3).setScale(sc);
+        im = this.add.image(x, groundY + 4, 'rubble_prop').setOrigin(0.5, 1).setDepth(3).setScale(sc);
       }
+      this.propImages.push({ im, pr, idx: prIdx, groundY, WW });
       if (pr.solid !== false) {
         // A separate invisible box rather than a body on the image. Giving a
         // STATIC body an offset moves the body instead of insetting it, so the
@@ -3690,6 +3694,48 @@ class WalkScene extends Phaser.Scene {
     const wake = () => Sfx.ensure();
     this.input.on('pointerdown', wake);
     this.input.keyboard.on('keydown', wake);
+
+    // Level editor: drag props and export config
+    this._editorMode = false;
+    this._draggedProp = null;
+    this.input.keyboard.on('keydown-BACKSLASH', () => {
+      this._editorMode = !this._editorMode;
+      console.log(`Editor mode ${this._editorMode ? 'ON' : 'OFF'}`);
+      this.propImages.forEach(p => {
+        p.im.setAlpha(this._editorMode ? 1 : 1);
+        p.im.setInteractive(this._editorMode ? { draggable: true, useHandCursor: true } : { enabled: false });
+      });
+    });
+    this.propImages.forEach(p => {
+      p.im.on('pointerdown', (ptr, localX, localY, evt) => {
+        if (!this._editorMode) return;
+        this._draggedProp = p;
+        evt.stopPropagation();
+      });
+    });
+    this.input.on('pointermove', (ptr) => {
+      if (!this._draggedProp) return;
+      const p = this._draggedProp;
+      p.im.x = Phaser.Math.Clamp(ptr.worldX, 0, p.WW);
+      p.pr.xFrac = p.im.x / p.WW;
+    });
+    this.input.on('pointerup', () => {
+      if (!this._draggedProp) return;
+      const p = this._draggedProp;
+      console.log(`Moved prop ${p.idx} to xFrac: ${p.pr.xFrac.toFixed(3)}`);
+      this._draggedProp = null;
+    });
+    this.input.keyboard.on('keydown-GRAVE', () => {
+      if (!this._editorMode) return;
+      const cfg = this.cfg;
+      const exported = {
+        ...cfg,
+        props: this.propImages.map(p => ({ ...p.pr, xFrac: p.pr.xFrac }))
+      };
+      console.log('/* Exported props config: */');
+      console.log(JSON.stringify(exported.props, null, 2));
+      console.log('/* Paste into scene config as: props: [ ... ] */');
+    });
 
     // exit zones (xFrac → world x)
     // markers float above the (now much taller) player's head
