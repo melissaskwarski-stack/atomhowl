@@ -204,7 +204,13 @@ function makeCutter(CW, CH) {
 // the character's own skin, which in these renders is exactly that bright and
 // that warm. So no colour test at all; just continuity. A real barrel is
 // several columns deep, a speck is not.
-function muzzleTip(d, i, CW, CH) {
+// `mirror` says the frame the game will DRAW is the mirror of this source —
+// which is how a west-drawn clip supplies the east-facing pose. It flips the
+// search: the barrel is the forward-most column, and forward is the other way
+// round in the source. Measuring a west clip without it walks in from the right
+// and finds his back, which is how the run-and-shoot muzzle ended up level with
+// his hip instead of at the end of the gun.
+function muzzleTip(d, i, CW, CH, mirror) {
   const b = d.boxes[i], f = d.frames[i], W = d.W;
   const waist = Math.round(b.minY + (b.maxY - b.minY) * 0.6);
 
@@ -217,16 +223,23 @@ function muzzleTip(d, i, CW, CH) {
 
   // the forward-most column that is the END OF SOMETHING SOLID: it and the
   // three behind it all carry pixels
+  const solid = x => col[x] >= 2;
   let mx = -1;
-  for (let x = W - 1; x >= 3; x--) {
-    if (col[x] >= 2 && col[x - 1] >= 2 && col[x - 2] >= 2 && col[x - 3] >= 2) { mx = x; break; }
+  if (mirror) {
+    for (let x = 0; x <= W - 4; x++)
+      if (solid(x) && solid(x + 1) && solid(x + 2) && solid(x + 3)) { mx = x; break; }
+  } else {
+    for (let x = W - 1; x >= 3; x--)
+      if (solid(x) && solid(x - 1) && solid(x - 2) && solid(x - 3)) { mx = x; break; }
   }
   if (mx < 0) return null;
 
   // the bore is the middle of what the barrel draws in its last few columns
+  const x0 = mirror ? mx : Math.max(0, mx - 4);
+  const x1 = mirror ? Math.min(W - 1, mx + 4) : mx;
   let lo = 1e9, hi = -1;
   for (let y = b.minY; y < waist; y++)
-    for (let x = Math.max(0, mx - 4); x <= mx; x++)
+    for (let x = x0; x <= x1; x++)
       if (f[(y * W + x) * 4 + 3] > 30) { if (y < lo) lo = y; if (y > hi) hi = y; }
   const my = Math.round((lo + hi) / 2);
 
@@ -236,7 +249,8 @@ function muzzleTip(d, i, CW, CH) {
                : Math.max.apply(null, d.boxes.map(v => v.maxY));
   const ox = Math.floor((CW - w) / 2);
   const oy = (CH - h - 2) - (ground - b.maxY);
-  return { x: ox + (mx - b.minX), y: oy + (my - b.minY) };
+  const lx = mirror ? (w - 1 - (mx - b.minX)) : (mx - b.minX);
+  return { x: ox + lx, y: oy + (my - b.minY) };
 }
 
 module.exports = { decodeGif, stripMatte, bbox, loadClips, shareX, canvasFor, makeCutter, leadIn, muzzleTip, PNG };

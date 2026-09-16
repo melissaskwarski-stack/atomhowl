@@ -44,7 +44,17 @@ const SRC = {
   // four standing frames, then the lean at 4, the push-off widening 116 -> 205
   // through 5-8, and 9 coming back down. Frames 4-9 are the whole move; the
   // rest is a sprint cycle he already has.
-  dash:   A('wf_dash_east.gif')
+  dash:   A('wf_dash_east.gif'),
+  // A real vertical hop at last — 21 frames, and the feet actually leave the
+  // floor: planted through 5, off the ground at 6, rising to an apex at 10-11
+  // (boots 82px up from where they started) and back down by 16. Before this
+  // he had no jump art at all and fell back to the run cycle, which pumped his
+  // legs in mid-air.
+  jump:   A('wf_jump_east.gif'),
+  // Running with the pistol held up at roughly 45 degrees, and walking while
+  // firing it flat. Both are east-only, mirrored here like the rest of him.
+  p45:    A('wf_pistol45_east.gif'),
+  pfire:  A('wf_pistolfire_east.gif')
 };
 
 // Where each one-shot settles into something repeatable.
@@ -54,7 +64,7 @@ const LOOP_FROM = { aim: 7 };
 const CHEW = [4, 5, 6, 5];
 // The arm swings wide in the aim and the burger comes up across the body, so
 // both would shimmy if each frame were centred on its own silhouette.
-const SHARE_X = ['aim', 'burger', 'sword', 'crouch'];
+const SHARE_X = ['aim', 'burger', 'sword', 'crouch', 'jump', 'p45', 'pfire'];
 
 const clips = L.loadClips(SRC);
 if (!clips.idle) { console.error('need the idle clip'); process.exit(1); }
@@ -97,7 +107,13 @@ const K = {
   pw:       pool('pw',       'pwalk',  false),
   pwW:      pool('pwW',      'pwalk',  true),
   dash:     pool('dash',     'dash',   false),
-  dashW:    pool('dashW',    'dash',   true)
+  dashW:    pool('dashW',    'dash',   true),
+  jump:     pool('jump',     'jump',   false),
+  jumpW:    pool('jumpW',    'jump',   true),
+  p45:      pool('p45',      'p45',    false),
+  p45W:     pool('p45W',     'p45',    true),
+  pfire:    pool('pfire',    'pfire',  false),
+  pfireW:   pool('pfireW',   'pfire',  true)
 };
 // The looping tails reuse frames the intros already emitted.
 if (K.burgerin) {
@@ -125,13 +141,26 @@ const muzzle = {
 };
 // Per-weapon muzzles in canvas pixels — see the note in lib/clipcut.js.
 const muzzles = {};
-const mz = (name, clip, frame) => {
+// `mirror` when the clip is drawn facing west and the east pose is its mirror.
+// Every muzzle is stored as the EAST-facing canvas position; the game negates
+// the x offset for west, so measuring one side is enough.
+// `names` may be several keys for one measurement — the game looks the muzzle
+// up by the action it is playing, and falls back to the weapon.
+const mz = (names, clip, frame, mirror) => {
   if (!clips[clip]) return;
-  const m = L.muzzleTip(clips[clip], frame, CW, CH);
-  if (m) { muzzles[name] = m; console.log(`muzzle ${name}: canvas ${m.x},${m.y}`); }
+  const m = L.muzzleTip(clips[clip], frame, CW, CH, mirror);
+  if (!m) return;
+  [].concat(names).forEach(n => { muzzles[n] = m; });
+  console.log(`muzzle ${[].concat(names).join('/')}: canvas ${m.x},${m.y}`);
 };
-mz('pistol', 'aim', 7);
-mz('ak', 'akwalk', 11);
+// Keyed by the ACTION as well as the weapon — see the note in the Eterwolf
+// tool. Each running pose holds the gun somewhere the standing draw does not.
+mz(['pistol', 'shoot', 'shootin'], 'aim', 7);
+mz(['ak', 'akshoot', 'akshootin', 'akrunshoot'], 'akwalk', 11);
+// Measured on a frame that is actually firing, so the tip is the barrel with
+// the flash on it rather than a hand mid-swing.
+mz(['runshoot', 'runshootin'], 'pfire', 7);
+mz(['shoot45', 'shoot45in'], 'p45', 20);
 
 const A_ = (keys, fps, repeat) => ({ fps, repeat: repeat === undefined ? -1 : repeat, keys });
 const anims = {};
@@ -152,8 +181,11 @@ add('burgerinW', K.burgerinW, 10, 0);
 add('burger',    K.burger,    6, 1);
 add('burgerW',   K.burgerW,   6, 1);
 // the arm-extend, standing in for a draw-and-fire
-add('shootin',   K.shootin,   14, 0);
-add('shootinW',  K.shootinW,  14, 0);
+// The draw must finish inside the weapon cooldown (150ms for the pistol), or
+// bullets leave while the arm is still coming up and appear to fire from his
+// hip. Seven frames at 44fps is 159ms.
+add('shootin',   K.shootin.slice(0, 3),   44, 0);
+add('shootinW',  K.shootinW.slice(0, 3),  44, 0);
 add('shoot',     K.shoot,     10);
 add('shootW',    K.shootW,    10);
 
@@ -198,8 +230,8 @@ if (K.crouch) {
 // He raises it over the first three frames and his legs repeat on a 10-frame
 // stride after that (measured), so the loop is frames 11-20.
 if (K.ak) {
-  add('akshootin',   K.ak.slice(0, 11),   24, 0);
-  add('akshootinW',  K.akW.slice(0, 11),  24, 0);
+  add('akshootin',   K.ak.slice(0, 11),   42, 0);
+  add('akshootinW',  K.akW.slice(0, 11),  42, 0);
   add('akrunshoot',  K.ak.slice(11),      14);
   add('akrunshootW', K.akW.slice(11),     14);
   add('akshoot',     K.ak.slice(11, 13),  10);
@@ -207,11 +239,48 @@ if (K.ak) {
 }
 
 // ---- walking with the pistol up ------------------------------------------
-if (K.pw) {
-  add('runshootin',  K.pw,           20, 0);
-  add('runshootinW', K.pwW,          20, 0);
+// The draw is two frames at 30fps — the arm has to be out before the first
+// bullet leaves, or the shot appears to come from his hip. Everything after
+// is the stride, which loops.
+if (K.pfire) {
+  // Real walk-and-fire art: the muzzle flashes on frames 7, 15 and 22, so the
+  // barrel is genuinely extended for the whole loop rather than swinging.
+  add('runshootin',  K.pfire.slice(0, 3),   30, 0);
+  add('runshootinW', K.pfireW.slice(0, 3),  30, 0);
+  add('runshoot',    K.pfire.slice(2, 16),  12);
+  add('runshootW',   K.pfireW.slice(2, 16), 12);
+} else if (K.pw) {
+  add('runshootin',  K.pw.slice(0, 3),  30, 0);
+  add('runshootinW', K.pwW.slice(0, 3), 30, 0);
   add('runshoot',    K.pw.slice(2),  11);
   add('runshootW',   K.pwW.slice(2), 11);
+}
+
+// ---- the 45-degree shot ---------------------------------------------------
+// Running with the pistol held up and forward. Held on UP, so it needs to
+// reach the raised pose immediately: two frames of draw, then the settled
+// stride on a loop.
+if (K.p45) {
+  add('shoot45in',  K.p45.slice(0, 3),   30, 0);
+  add('shoot45inW', K.p45W.slice(0, 3),  30, 0);
+  add('shoot45',    K.p45.slice(14, 27),  13);
+  add('shoot45W',   K.p45W.slice(14, 27), 13);
+}
+
+// ---- the jump -------------------------------------------------------------
+// Cut by where the boots actually are: planted through 5, off the ground at 6,
+// rising to 7-9, hanging at 10-11, falling 12-16, down and recovering after.
+// The crouch frames are not played — physics leaves the floor the instant the
+// key goes down, so a squat drawn in mid-air reads as a glitch.
+if (K.jump) {
+  add('jump',      [K.jump[6], K.jump[7], K.jump[8], K.jump[9]],      18, 0);
+  add('jumpW',     [K.jumpW[6], K.jumpW[7], K.jumpW[8], K.jumpW[9]],  18, 0);
+  add('jumpapex',  [K.jump[10], K.jump[11]],    10, 0);
+  add('jumpapexW', [K.jumpW[10], K.jumpW[11]],  10, 0);
+  add('jumpfall',  [K.jump[12], K.jump[13], K.jump[14]],     14, 0);
+  add('jumpfallW', [K.jumpW[12], K.jumpW[13], K.jumpW[14]],  14, 0);
+  add('land',      [K.jump[16], K.jump[17], K.jump[18]],     18, 0);
+  add('landW',     [K.jumpW[16], K.jumpW[17], K.jumpW[18]],  18, 0);
 }
 
 const mod = {
@@ -223,11 +292,29 @@ const mod = {
   longIdleOnce: true,      // two bites, then back to standing
   body, muzzle, muzzles,
   canvasW: CW, canvasH: CH,
-  pending: ['west art (all mirrored east)', 'jump', 'land',
+  pending: ['west art (all mirrored east)',
             'a front-facing finisher', 'a real standing firing clip'],
   frames,
   anims
 };
+
+// Every clip pools all of its frames, but the animations only ever slice parts
+// out — the dash keeps 6 of 21, the crouch 10 of 29, and the replaced sword
+// beats leave whole clips behind. Anything no animation names is dead weight in
+// a page that ships every frame as base64, so it is dropped here instead of
+// each cut having to be hand-trimmed back at the source.
+(function pruneFrames() {
+  const used = new Set();
+  Object.values(mod.anims).forEach(a => (a.keys || []).forEach(k => used.add(k)));
+  let dropped = 0, bytes = 0;
+  for (const k of Object.keys(mod.frames)) {
+    if (used.has(k)) continue;
+    bytes += mod.frames[k].length;
+    delete mod.frames[k];
+    dropped++;
+  }
+  if (dropped) console.log(`pruned ${dropped} unreferenced frames (${Math.round(bytes / 1024)}KB)`);
+})();
 
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, 'window.WF = ' + JSON.stringify(mod) + ';\n');

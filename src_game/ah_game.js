@@ -744,6 +744,9 @@ const ACTION_FALLBACK = {
   // the draws, so a character without one simply skips straight to firing
   shootin:     ['shootin', 'shoot', 'idle'],
   akshootin:   ['akshootin', 'shootin', 'akshoot', 'shoot', 'idle'],
+  shoot45:     ['shoot45', 'runshoot', 'shoot', 'idle'],
+  death:       ['death', 'falldown', 'idle'],
+  shoot45in:   ['shoot45in', 'shoot45', 'runshootin', 'shootin', 'shoot', 'idle'],
   runshootin:  ['runshootin', 'runshoot', 'shootin', 'shoot', 'idle'],
   akrunshootin: ['akrunshootin', 'akshootin', 'runshootin', 'akrunshoot', 'shoot', 'idle']
 };
@@ -915,7 +918,8 @@ class BootScene extends Phaser.Scene {
         this.anims.create({
           key: 'turn-' + n,
           frames: f.map((_, i) => ({ key: `rot_${n}_${i}` })),
-          frameRate: 5, repeat: -1
+          // A slow turn — this is a character being presented, not a spin.
+          frameRate: 2.5, repeat: -1
         });
       }
     }
@@ -1409,7 +1413,7 @@ class GameScene extends Phaser.Scene {
     const bufferJump = () => { this.jumpBufferedAt = this.time.now; };
     this.input.keyboard.on('keydown-SPACE', bufferJump);
     this.input.keyboard.on('keydown-W', bufferJump);
-    this.input.keyboard.on('keydown-UP', bufferJump);
+    // UP is the up-aim in combat, not a second jump key.
 
     // ---------- atmosphere overlays ----------
     this.grain = this.add.tileSprite(640, 360, 1280, 720, 'grain_0')
@@ -1932,14 +1936,24 @@ class GameScene extends Phaser.Scene {
     // straight ahead, so a bullet on any other line left a barrel that was not
     // pointing there.
     const base = this.facing > 0 ? 0 : Math.PI;
-    const angle = base + (Math.random() - 0.5) * W.spread;
+    // Up-aim tilts the line to match the pose. Screen Y runs down, so up is
+    // negative going right and positive going left.
+    const up45 = this.aimUp && this.weapon === 'pistol' && heroHas(this.hero, 'shoot45');
+    const tilt = up45 ? (this.facing > 0 ? -Math.PI / 4 : Math.PI / 4) : 0;
+    const angle = base + tilt + (Math.random() - 0.5) * W.spread;
     let muzzleX, muzzleY;
     if (this.realHero) {
       // The barrel itself, measured off the frame this weapon fires on and
       // stored in canvas pixels. Turning it into a world position against the
       // sprite's own origin keeps it right whatever the origin is set to.
       const art = this.hero.art;
-      const mp = art.muzzles && art.muzzles[this.weapon];
+      // By the POSE he is in, not just the weapon he is holding. The gun sits
+      // in a different place standing, running and shooting up at 45 degrees,
+      // and every one of those was firing from the standing muzzle — which is
+      // why the bullet did not leave the barrel. The weapon is the fallback for
+      // a pose that was never measured.
+      const mp = art.muzzles &&
+        (art.muzzles[this.player._curAction] || art.muzzles[this.weapon]);
       if (mp && art.canvasW) {
         muzzleX = this.player.x +
           this.facing * (mp.x - art.canvasW / 2) * this.player.scaleX;
@@ -2257,8 +2271,17 @@ class GameScene extends Phaser.Scene {
   gameOver() {
     if (this.player) { this.tweens.killTweensOf(this.player); this.player.setRotation(0); }
     this.dead = true;
-    this.player.setTintFill(0x661a10);
     this.player.setVelocityX(0);
+    // Real death art if the character has it — knocked off his feet, ending
+    // flat on his back, and the clip holds on that last frame because the
+    // update loop stops driving the sprite once he is down. A character with
+    // no death clip keeps the old red silhouette.
+    if (this.realHero && heroHas(this.hero, 'death')) {
+      playAction(this.player, this.hero, 'death', this.facing);
+      this.curAnim = heroAnim(this.hero, 'death', this.facing);
+    } else {
+      this.player.setTintFill(0x661a10);
+    }
     this.arm.setVisible(false);
     this.bossBarBg.setVisible(false);
     this.bossBarFill.setVisible(false);
@@ -2268,7 +2291,7 @@ class GameScene extends Phaser.Scene {
     const ov = this.add.rectangle(640, 360, 1280, 720, 0x000000, 0.62).setScrollFactor(0).setDepth(80);
     ov.setAlpha(0);
     this.tweens.add({ targets: ov, alpha: 1, duration: 600 });
-    this.add.text(640, 300, 'ETERWOLF DOWN', {
+    this.add.text(640, 300, ((this.hero && this.hero.name) || 'ETERWOLF') + ' DOWN', {
       fontFamily: 'Courier New, monospace', fontSize: '58px', color: '#c93b2a',
       stroke: '#0d0a08', strokeThickness: 8
     }).setOrigin(0.5).setScrollFactor(0).setDepth(81);
@@ -2336,6 +2359,12 @@ class GameScene extends Phaser.Scene {
   // when a character has no art for the rifle.
   gunAction(moving) {
     const w = WEAPONS[this.weapon] || WEAPONS.pistol;
+    // Holding UP points the gun up and forward. There is one 45-degree pose per
+    // character and it is drawn with the pistol, so the rifle falls back to its
+    // own flat cycle rather than borrowing a pose holding the wrong gun.
+    if (this.aimUp && this.weapon === 'pistol' && heroHas(this.hero, 'shoot45')) {
+      return 'shoot45';
+    }
     const want = moving ? w.runAction : w.shootAction;
     return heroHas(this.hero, want) ? want : (moving ? 'runshoot' : 'shoot');
   }
@@ -2503,12 +2532,16 @@ class GameScene extends Phaser.Scene {
       this.landUntil = time + LAND_MS;
     }
     this.airSince = onGround ? 0 : (this.airSince || time);
-    if (onGround) { this.lastGrounded = time; this.jumpsUsed = 0; }
+    if (onGround) { this.lastGrounded = time; this.jumpsUsed = 0; resetAirPhase(this.player); }
 
     // ----- aim -----
     const pointer = this.input.activePointer;
     const world = cam.getWorldPoint(pointer.x, pointer.y);
     this.aimAngle = Phaser.Math.Angle.Between(this.player.x, this.player.y - 14, world.x, world.y);
+
+    // Holding UP tips the shot 45 degrees up — Contra's control, and the pose
+    // is drawn for it. Jump stays on W and SPACE, so UP costs nothing here.
+    this.aimUp = this.keys.UP.isDown;
 
     // ----- fire intent (needed by facing + anim state machine) -----
     const firing = (pointer.isDown && pointer.button === 0 && !pointer.rightButtonDown())
@@ -2606,7 +2639,7 @@ class GameScene extends Phaser.Scene {
       } else {
         let want;
         if (time < this.dashAnimUntil) want = 'dash';   // the burst owns the sprite
-        else if (!onGround) want = airAction(this.hero, this.player.body.velocity.y);
+        else if (!onGround) want = airAction(this.hero, this.player.body.velocity.y, this.player);
         else if (time < this.landUntil) want = 'land';
         else if (this.crouching) want = 'crouch';
         else if (firing) want = this.gunAction(moving);
@@ -2826,6 +2859,7 @@ const ACTION_INTRO = {
   guitar:   'guitarin',
   shoot:    'shootin',
   runshoot: 'runshootin',
+  shoot45:  'shoot45in',
   burger:   'burgerin'      // Wolffel digs it out of his side pocket first
 };
 
@@ -2835,12 +2869,26 @@ const ACTION_INTRO = {
 // and a second jump restarts the rise. Anything without the phase art gets
 // the plain jump frame.
 const AIR_APEX_VY = 140;
-function airAction(hero, vy) {
+const AIR_PHASE = ['jump', 'jumpapex', 'jumpfall'];
+// The phase only ever moves FORWARD through one airborne period. Picking it
+// from the vertical speed alone lets it flip back and forth whenever that speed
+// wobbles across a threshold — clipping a ledge, a collision resolving, the
+// forward push at take-off — and because switching phase restarts the clip from
+// frame 0, every wobble showed as a stutter in mid-air. A jump is one arc:
+// rise, hang, fall. Ratcheting it guarantees at most two clean cuts.
+function airAction(hero, vy, p) {
   if (!heroHas(hero, 'jumpapex')) return 'jump';
-  return vy < -AIR_APEX_VY ? 'jump' : vy > AIR_APEX_VY ? 'jumpfall' : 'jumpapex';
+  const want = vy < -AIR_APEX_VY ? 0 : vy > AIR_APEX_VY ? 2 : 1;
+  if (!p) return AIR_PHASE[want];
+  p._airPhase = p._airPhase === undefined ? want : Math.max(p._airPhase, want);
+  return AIR_PHASE[p._airPhase];
 }
-// How long the landing squash holds before he stands or runs.
-const LAND_MS = 110;
+// Cleared the moment he is back on the floor, so the next jump starts at the
+// rise again instead of inheriting the last one's fall.
+function resetAirPhase(p) { if (p) p._airPhase = undefined; }
+// How long the landing squash holds before he stands or runs. Long enough for
+// a three-frame landing to actually play.
+const LAND_MS = 150;
 
 // ---- guns ----------------------------------------------------------------
 // Two weapons, same bullet, different feel: the pistol is quick and precise,
@@ -2942,6 +2990,7 @@ function driveWalker(scene, p, keys, onGround) {
   if (onGround && p._airSince && now - p._airSince > 160 && heroHas(hero, 'land')) {
     p._landUntil = now + LAND_MS;
   }
+  if (onGround) resetAirPhase(p);
   p._airSince = onGround ? 0 : (p._airSince || now);
 
   heroFlip(p, hero, p._facing);
@@ -2966,7 +3015,7 @@ function driveWalker(scene, p, keys, onGround) {
     // picking himself up owns the sprite until it finishes
     if (now < (p._downUntil || 0)) { p.setVelocityX(0); return move; }
 
-    const want = !onGround ? airAction(hero, p.body.velocity.y)
+    const want = !onGround ? airAction(hero, p.body.velocity.y, p)
                : now < (p._landUntil || 0) ? 'land'
                : moving    ? (sprint ? 'run' : 'walk')
                : bored     ? (hero.longIdle || 'idle') : 'idle';
@@ -3170,7 +3219,7 @@ class CharSelectScene extends Phaser.Scene {
 
     this.slots = [
       this._slot(370, 390, 'PLAYER 1', 'ETERWOLF', 'eterwolf', true),
-      this._slot(910, 390, 'PLAYER 2', 'WOLFFEL', 'wolffel', false)
+      this._slot(910, 390, 'PLAYER 2', 'WOLFFEL', 'wolffel', true)
     ];
     this._cursor = 0;
     this._paint();
@@ -3261,7 +3310,7 @@ class CharSelectScene extends Phaser.Scene {
     }
 
     const zone = this.add.zone(x, y, BW, BH).setInteractive({ useHandCursor: true });
-    const self = { panel, art, label, lock, unlocked, x, y, w: BW, h: BH };
+    const self = { panel, art, label, lock, unlocked, id, x, y, w: BW, h: BH };
     zone.on('pointerover', () => {
       this._cursor = this.slots.indexOf(self);
       Sfx.ensure(); Sfx.hover(); this._paint();
@@ -3294,11 +3343,14 @@ class CharSelectScene extends Phaser.Scene {
     Sfx.ensure();
     if (!slot.unlocked) {
       Sfx.deny();
-      this._note.setText('WOLFFEL is not available yet — Player 2 is coming soon.').setAlpha(1);
+      this._note.setText(slot.label.text + ' is not available yet.').setAlpha(1);
       this.tweens.add({ targets: this._note, alpha: 0, duration: 500, delay: 1900 });
       return;
     }
     Sfx.select();
+    // Carry the choice forward. Without this the screen was decorative — every
+    // stage still started whoever GameState happened to be holding.
+    if (slot.id && castById(slot.id)) GameState.castId = slot.id;
     this.cameras.main.fadeOut(700, 0, 0, 0);
     this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('IntroDialogueScene'));
   }

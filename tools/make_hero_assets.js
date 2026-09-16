@@ -43,9 +43,19 @@ const SRC = {
   // --- melee: a katana with real art on three sides, and an energy blade ---
   katana:     A + 'Idle_v3_katana_east.gif',
   katanaW:    A + 'Idle_v3_katana_west.gif',
-  katanaF:    A + 'Idle_v3_katana_front.gif',
+  // The fourth beat used to turn him to face the camera, which broke the line
+  // of the fight — he was swinging at the player rather than at what he was
+  // fighting. This is the replacement: 25 frames drawn facing west, a draw
+  // through 12, the arc itself with its trail on 13-15, and the blade held out
+  // after. Mirrored for east like the rest.
+  katana2W:   A + 'Idle_v3_katana2_west.gif',
   esword:     A + 'Idle_v3_esword_east.gif',
   eswordF:    A + 'Idle_v3_esword_front.gif',
+  // Knocked off his feet and killed: standing through 4, the stagger at 5, off
+  // the ground at 6-7 and flat on his back by 8. Plays once and holds there.
+  death:      A + 'Idle_v3_death_se.gif',
+  // Running with the pistol up at about 45 degrees.
+  p45:        A + 'Idle_v3_pistol45_east.gif',
   // --- low stance ---
   // 29 frames of crouch AND slide. Only the crouch is wanted: he stands
   // through 0-1, bends from 2, and is settled from 8 (frames 8-11 are
@@ -83,8 +93,8 @@ const FREEZE_BELOW = { guitar: 0.52 };
 // supplies that.
 // The swords throw an arc far wider than the body and the crouch drops the
 // silhouette, so both would slide if each frame were centred on its own bounds.
-const SHARE_X = ['jump', 'katana', 'katanaW', 'katanaF', 'esword', 'eswordF',
-                 'crouch', 'crouchwalk', 'falldown'];
+const SHARE_X = ['jump', 'katana', 'katanaW', 'katana2W', 'esword',
+                 'eswordF', 'crouch', 'crouchwalk', 'falldown', 'death', 'p45'];
 
 // Bursts: the physics launches the instant the key goes down, so a clip that
 // opens on two or three frames of the character still standing reads as him
@@ -189,10 +199,16 @@ const K = {
   jumpW:     clips.jump ? pool('jumpW', 'jump', true)  : null,  // east only — mirror
   katana:    clips.katana  ? pool('katana',  'katana',  false) : null,
   katanaW:   clips.katanaW ? pool('katanaW', 'katanaW', false) : null,  // real west art
-  katanaF:   clips.katanaF ? pool('katanaF', 'katanaF', false) : null,
+  // drawn west; east is the mirror
+  katana2W:  clips.katana2W ? pool('katana2W', 'katana2W', false) : null,
+  katana2:   clips.katana2W ? pool('katana2',  'katana2W', true)  : null,
   esword:    clips.esword  ? pool('esword',  'esword',  false) : null,
   eswordW:   clips.esword  ? pool('eswordW', 'esword',  true)  : null,
   eswordF:   clips.eswordF ? pool('eswordF', 'eswordF', false) : null,
+  death:     clips.death ? pool('death',  'death', false) : null,
+  deathW:    clips.death ? pool('deathW', 'death', true)  : null,
+  p45:       clips.p45 ? pool('p45',  'p45', false) : null,
+  p45W:      clips.p45 ? pool('p45W', 'p45', true)  : null,
   crouch:    clips.crouch  ? pool('crouch',  'crouch',  false) : null,
   crouchW:   clips.crouch  ? pool('crouchW', 'crouch',  true)  : null,
   falldown:  clips.falldown ? pool('falldown',  'falldown', false) : null,
@@ -230,13 +246,28 @@ const muzzle = {
 // actually fires on. The game turns these into a world position against the
 // sprite's own origin, so they stay right whatever the origin is set to.
 const muzzles = {};
-const mz = (name, clip, frame) => {
+// `mirror` when the clip is drawn facing west and the east pose is its mirror.
+// Every muzzle is stored as the EAST-facing canvas position; the game negates
+// the x offset for west, so measuring one side is enough.
+// `names` may be several keys for one measurement — the game looks the muzzle
+// up by the action it is playing, and falls back to the weapon.
+const mz = (names, clip, frame, mirror) => {
   if (!clips[clip]) return;
-  const m = L.muzzleTip(clips[clip], frame, CW, CH);
-  if (m) { muzzles[name] = m; console.log(`muzzle ${name}: canvas ${m.x},${m.y}`); }
+  const m = L.muzzleTip(clips[clip], frame, CW, CH, mirror);
+  if (!m) return;
+  [].concat(names).forEach(n => { muzzles[n] = m; });
+  console.log(`muzzle ${[].concat(names).join('/')}: canvas ${m.x},${m.y}`);
 };
-mz('pistol', 'pistol', 7 + (LOOP_FROM.pistol ? 0 : 0));
-mz('ak', 'akwalk', 9);
+// Keyed by the ACTION the game is playing as well as by the weapon: the gun
+// sits somewhere quite different on a standing draw, a run and a 45-degree
+// shot, and firing all three from the standing muzzle is what put bullets
+// somewhere around his chest.
+mz(['pistol', 'shoot', 'shootin'], 'pistol', 7);
+mz(['ak', 'akshoot', 'akshootin', 'akrunshoot'], 'akwalk', 9);
+// runshoot is drawn facing WEST, so the barrel is the LEFT-most column of the
+// source — mirror, or the search walks in from the right and finds his back.
+mz(['runshoot', 'runshootin'], 'runshootW', 10, true);
+mz(['shoot45', 'shoot45in'], 'p45', 12);
 
 const A_ = (keys, fps, repeat) => ({ fps, repeat: repeat === undefined ? -1 : repeat, keys });
 const mid = a => [a[Math.min(2, a.length - 1)]];
@@ -265,8 +296,15 @@ const mod = {
     runinW:     A_(K.runinW,    22, 0),
     guitarin:   A_(K.guitarin,  11, 0),
     guitarinW:  A_(K.guitarinW, 11, 0),
-    shootin:    A_(K.pistolin,  26, 0),   // snap the pistol out, not a slow draw
-    shootinW:   A_(K.pistolinW, 26, 0),
+    // The draw has to be OVER before the first bullet. Firing is gated on the
+    // weapon cooldown, not on this clip, so every frame the arm is still on its
+    // way up is a frame a bullet can leave from his hip. The pistol's cooldown
+    // is 150ms, so the draw is cut to fit inside it.
+    // Three frames is the whole extend; the rest of the draw was the arm
+    // drifting into place after the gun was already up, and the prune step
+    // drops the frames nothing plays.
+    shootin:    A_(K.pistolin.slice(0, 3),  44, 0),
+    shootinW:   A_(K.pistolinW.slice(0, 3), 44, 0),
     // settled tails
     run:        A_(K.run,       14),
     runW:       A_(K.runW,      14),
@@ -274,8 +312,10 @@ const mod = {
     guitarW:    A_(K.guitarW,   7),
     shoot:      A_(K.pistol,    10),    // arm out, recoil
     shootW:     A_(K.pistolW,   10),
-    runshootin:  A_(K.runshootin,  15, 0),   // draws the pistol at a run
-    runshootinW: A_(K.runshootinW, 15, 0),
+    // Same again, and this one was the worst of them: eight frames at 15fps is
+    // over half a second of arm swinging up while bullets are already leaving.
+    runshootin:  A_(K.runshootin.slice(0, 3),  44, 0),
+    runshootinW: A_(K.runshootinW.slice(0, 3), 44, 0),
     runshoot:   A_(K.runshoot,  15),   // settled run-and-fire cycle
     runshootW:  A_(K.runshootW, 15),
     // A dash is not a short run. Played straight, these six frames are a
@@ -307,11 +347,14 @@ const mod = {
       sword3:  A_(K.esword.slice(0, 13),  34, 0),       // hit 3: the energy flurry
       sword3W: A_(K.eswordW.slice(0, 13), 34, 0)
     } : {}),
-    // Hit 4 turns him to face the camera. There is one front-facing katana, so
-    // it serves both sides — mirroring a front view would only swap his hands.
-    ...(K.katanaF ? {
-      sword4:  A_(K.katanaF.slice(0, 12), 32, 0),
-      sword4W: A_(K.katanaF.slice(0, 12), 32, 0)
+    // Hit 4 is the big one. It used to turn him to face the camera, which
+    // pointed the swing out of the screen instead of at what he was fighting;
+    // this is the side-on replacement. The draw is skipped — by the fourth
+    // beat the blade is already out — so it opens on the raised pose at 7 and
+    // runs through the arc on 13-15 into a short follow-through.
+    ...(K.katana2 ? {
+      sword4:  A_(K.katana2.slice(7, 19),  32, 0),
+      sword4W: A_(K.katana2W.slice(7, 19), 32, 0)
     } : {}),
     // The finisher is drawn facing the camera, which is exactly where the
     // execution's pan and zoom puts it.
@@ -345,8 +388,8 @@ const mod = {
     // repeat on a 12-frame stride after that (measured, not guessed), so the
     // loop is exactly frames 9-20 and the walk does not limp.
     ...(K.akwalk ? {
-      akshootin:   A_(K.akwalk.slice(0, 9),   24, 0),
-      akshootinW:  A_(K.akwalkW.slice(0, 9),  24, 0),
+      akshootin:   A_(K.akwalk.slice(0, 9),   42, 0),
+      akshootinW:  A_(K.akwalkW.slice(0, 9),  42, 0),
       akrunshoot:  A_(K.akwalk.slice(9),      14),
       akrunshootW: A_(K.akwalkW.slice(9),     14),
       akshoot:     A_(K.akwalk.slice(9, 11),  10),
@@ -370,9 +413,42 @@ const mod = {
     } : {
       jump:       A_(mid(K.run),  10, 0),
       jumpW:      A_(mid(K.runW), 10, 0)
-    })
+    }),
+    // Knocked off his feet. The standing frames at the head are dropped — he
+    // is already dead by the time this plays — so it opens on the stagger and
+    // holds on the last frame, flat on his back, until the scene restarts.
+    ...(K.death ? {
+      death:  A_(K.death.slice(4),  12, 0),
+      deathW: A_(K.deathW.slice(4), 12, 0)
+    } : {}),
+    // Firing on the run with the pistol up at 45 degrees. Two frames of draw
+    // at 30fps so the arm is up before the first bullet, then the stride.
+    ...(K.p45 ? {
+      shoot45in:  A_(K.p45.slice(0, 3),   30, 0),
+      shoot45inW: A_(K.p45W.slice(0, 3),  30, 0),
+      shoot45:    A_(K.p45.slice(6, 20),  13),
+      shoot45W:   A_(K.p45W.slice(6, 20), 13)
+    } : {})
   }
 };
+
+// Every clip pools all of its frames, but the animations only ever slice parts
+// out — the dash keeps 6 of 21, the crouch 10 of 29, and the replaced sword
+// beats leave whole clips behind. Anything no animation names is dead weight in
+// a page that ships every frame as base64, so it is dropped here instead of
+// each cut having to be hand-trimmed back at the source.
+(function pruneFrames() {
+  const used = new Set();
+  Object.values(mod.anims).forEach(a => (a.keys || []).forEach(k => used.add(k)));
+  let dropped = 0, bytes = 0;
+  for (const k of Object.keys(mod.frames)) {
+    if (used.has(k)) continue;
+    bytes += mod.frames[k].length;
+    delete mod.frames[k];
+    dropped++;
+  }
+  if (dropped) console.log(`pruned ${dropped} unreferenced frames (${Math.round(bytes / 1024)}KB)`);
+})();
 
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, 'window.EW = ' + JSON.stringify(mod) + ';\n');
