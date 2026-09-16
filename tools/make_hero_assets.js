@@ -272,10 +272,14 @@ const mod = {
     runshootinW: A_(K.runshootinW, 15, 0),
     runshoot:   A_(K.runshoot,  15),   // settled run-and-fire cycle
     runshootW:  A_(K.runshootW, 15),
-    // Six frames over the 290ms the dash actually lasts, so the clip ends as
-    // control comes back rather than playing on over a normal run.
-    dash:       A_(K.dash,      21, 0),
-    dashW:      A_(K.dashW,     21, 0),
+    // A dash is not a short run. Played straight, these six frames are a
+    // stride and the legs cycle through it, which is what a run looks like
+    // however fast it goes. So the clip is rebuilt as a held pose: one frame
+    // of him leaning in, the committed stretch held for two thirds of the
+    // move, and one frame coming down. The body stays still and the blur
+    // trail carries the speed — which is what a dash actually is.
+    dash:  A_([K.dash[1], K.dash[4], K.dash[4], K.dash[4], K.dash[4], K.dash[5]], 21, 0),
+    dashW: A_([K.dashW[1], K.dashW[4], K.dashW[4], K.dashW[4], K.dashW[4], K.dashW[5]], 21, 0),
 
     // ---- melee ----------------------------------------------------------
     // The katana clip is draw (0-5), slash with the arc (6-8), then a guard

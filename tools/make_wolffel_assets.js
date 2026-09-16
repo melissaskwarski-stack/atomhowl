@@ -178,9 +178,12 @@ if (K.gs) {
 // ---- the dash -------------------------------------------------------------
 // Six frames over the 286ms the dash lasts, same as Eterwolf's, so the clip
 // ends as control comes back.
+// Held, not cycled: frames 4-9 played straight are a running stride and the
+// legs pump through it. One frame of the lean (5), the airborne stretch (7)
+// held, and one coming down (9). The blur trail carries the speed.
 if (K.dash) {
-  add('dash',  K.dash.slice(4, 10),  21, 0);
-  add('dashW', K.dashW.slice(4, 10), 21, 0);
+  add('dash',  [K.dash[5], K.dash[7], K.dash[7], K.dash[7], K.dash[7], K.dash[9]],  21, 0);
+  add('dashW', [K.dashW[5], K.dashW[7], K.dashW[7], K.dashW[7], K.dashW[7], K.dashW[9]], 21, 0);
 }
 
 // ---- low stance -----------------------------------------------------------
