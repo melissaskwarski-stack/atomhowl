@@ -62,7 +62,6 @@ const SCENE_SRC = {
   exit:      ['public/assets/tutorial_exit.png', 'tutorial_exit.png'],
   jump:      ['public/assets/tutorial_jump.png', 'tutorial_jump.png'],
   rubble:    ['public/assets/rubble_pile.png', 'rubble to jump.png'],
-  fglogs:    ['public/assets/foreground_logs.png'],
   bunker:    ['public/assets/bunker_wide.png', 'public/assets/bunker2.png', 'bunker2.png', 'bunker.png'],
   city:      ['public/assets/city.png', 'city.png', 'city-1.png'],
   shop:      ['shops.png', 'public/assets/shops.png'],

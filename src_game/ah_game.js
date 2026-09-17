@@ -2831,23 +2831,38 @@ function makeWalker(scene, x, groundY, targetH, castId) {
   const H = targetH || 190;
   const hero = castById(castId || DEFAULT_CAST);
   let p;
+  // How far the bottom of the physics body sits below the sprite's centre.
+  // Arcade scales a body with its sprite, so this is the declared offset plus
+  // height, measured from the origin, times the scale. Derived rather than read
+  // back off body.bottom: the body's own position is only recomputed on the
+  // next physics step, so reading it during construction gives a stale answer.
+  let footDrop;
   if (hero) {
-    // Dropped in from a height that scales with him: a fixed offset put a
-    // taller character's feet inside the floor slab, and arcade separation
-    // then pushed him out through the BOTTOM and he fell out of the room.
-    p = scene.physics.add.sprite(x, groundY - H * 0.75, hero.pre + '_idle_0');
-    const B = hero.art.body;
+    const B = hero.art.body, sc = heroScale(hero, H, H / 224);
+    p = scene.physics.add.sprite(x, groundY, hero.pre + '_idle_0');
     p.body.setSize(B.w, B.h).setOffset(B.x, B.y);
-    p.setScale(heroScale(hero, H, H / 224));
+    p.setScale(sc);
     p.play(hero.pre + '-idle');
     p._real = true;
     p._hero = hero;
+    footDrop = (B.y + B.h - p.originY * hero.art.canvasH) * sc;
   } else {
-    p = scene.physics.add.sprite(x, groundY - 80, 'hero_idle_0');
+    p = scene.physics.add.sprite(x, groundY, 'hero_idle_0');
     p.body.setSize(22, 60).setOffset(10, 6);
     p.play('hero-idle');
     p._real = false;
+    footDrop = (6 + 60 - p.originY * p.frame.height);
   }
+  // Standing on the floor, not dropped onto it. He used to spawn three quarters
+  // of his own height up and fall in, which the scene fades in on: the stage
+  // opens with the character dropping before you can move him. That height was
+  // guarding against something real — a fixed offset put a taller character's
+  // feet INSIDE the slab, and arcade separation then shoved him out through the
+  // bottom and he fell out of the room — but the answer is to put his feet
+  // exactly on the floor line rather than to fall in from above it. The extra
+  // pixel keeps him resting on the slab instead of touching it, since a body
+  // that starts flush can still register as overlapping.
+  p.setPosition(x, groundY - footDrop - 1);
   p.setCollideWorldBounds(true);
   p.setDepth(10);
   p._facing = 1;
@@ -3394,7 +3409,6 @@ const INTRO_LINES = [
   { who: 'WOLFFEL',  text: "..." },
   { who: 'ETERWOLF', text: "..." },
   { who: 'ETERWOLF', text: "Ok, let's get out.", vox: 'bunker_06' },
-  { who: 'ETERWOLF', text: "Looks like we're in some sort of bunker." },
   { who: 'ETERWOLF', text: "Let's look around for a way to get out." }
 ];
 
@@ -3518,7 +3532,9 @@ class IntroDialogueScene extends Phaser.Scene {
 
     // The line sits on dark scratched metal, so it gets a soft drop shadow to
     // lift it off the plate — a stroke would thicken type this small.
-    this._body = this.add.text(x + w / 2, y + h * 0.38, '', {
+    // Vertically centred in the band between the name plate (0.18) and the
+    // advance arrow (0.86) rather than sitting up against the top edge.
+    this._body = this.add.text(x + w / 2, y + h * 0.52, '', {
       fontFamily: F_TXT, fontSize: '23px', color: '#f3ecdf', align: 'center',
       wordWrap: { width: w * 0.8 }, lineSpacing: 7
     }).setOrigin(0.5, 0.5).setDepth(22);
@@ -3741,23 +3757,6 @@ class WalkScene extends Phaser.Scene {
       dark.setOrigin(0.5, 0);
     });
 
-    // A band of burnt logs along the very front, tiled across the world and
-    // scrolling faster than it. Parallax is the whole trick: something moving
-    // past quicker than the ground reads as being between you and the scene,
-    // which is what gives a flat painting depth.
-    if (cfg.foreground && this.textures.exists('scene_fglogs')) {
-      const src = this.textures.get('scene_fglogs').getSourceImage();
-      const fgH = cfg.fgHeight || 190;
-      const sc = fgH / src.height;
-      const tileW = src.width * sc;
-      // it scrolls 1.18x, so it has to cover the world plus the extra it travels
-      const span = WW + this.cameras.main.width * 0.4;
-      for (let x = -tileW * 0.3; x < span; x += tileW - 6) {
-        this.add.image(x, groundY + (cfg.fgDrop != null ? cfg.fgDrop : 62), 'scene_fglogs')
-          .setOrigin(0, 1).setDepth(36).setScale(sc)
-          .setScrollFactor(1.18, 1);
-      }
-    }
 
     // Props. Rubble is solid, so it is something to jump onto; logs sit in
     // front of everything at a touch more than world speed, which is what
@@ -4225,7 +4224,6 @@ class ExitScene extends WalkScene {
       worldW: 'auto', groundFrac: 0.755, startXFrac: 0.05, charH: 200, bgZoom: 1.2,
       title: 'OUTSIDE — the village road',
       castSwitch: true, canReset: true, noLongIdle: true,
-      foreground: true, fgHeight: 165, fgDrop: 74,
       props: [],
       beats: [
         { at: 0,    say: [['ETERWOLF', 'So this is what is left of it.']],
@@ -4266,7 +4264,6 @@ class JumpScene extends WalkScene {
       worldW: 'auto', groundFrac: 0.755, startXFrac: 0.04, charH: 200, bgZoom: 1.2,
       title: 'THE BURNT STREET',
       castSwitch: true, canReset: true, noLongIdle: true,
-      foreground: true, fgHeight: 175, fgDrop: 78,
       // No holes: this stage teaches one thing. Three heaps in the road, each
       // tall enough that a standing jump will not clear it — he reaches about
       // 136px straight up, so 128 means running at it.
