@@ -3213,7 +3213,9 @@ class CharSelectScene extends Phaser.Scene {
     const W = 1280, H = 720;
     this.cameras.main.setBackgroundColor('#0a0807');
     this.cameras.main.fadeIn(600, 0, 0, 0);
-    startMusic();
+    // The menu theme belongs to the menu. Leaving it — even as far as the
+    // character select — fades it out; coming back to MenuScene starts it again.
+    stopMusic(600);
 
     if (this.textures.exists('scene_bunker')) {
       const bg = this.add.image(W / 2, H / 2, 'scene_bunker').setDepth(-20);
@@ -3454,7 +3456,7 @@ class IntroDialogueScene extends Phaser.Scene {
     const W = 1280, H = 720;
     this.cameras.main.setBackgroundColor('#0a0807');
     this.cameras.main.fadeIn(900, 0, 0, 0);
-    startMusic();
+    stopMusic(400);
 
     if (this.textures.exists('scene_bunker')) {
       const bg = this.add.image(W / 2, H / 2, 'scene_bunker').setDepth(-20);
@@ -3540,18 +3542,41 @@ class IntroDialogueScene extends Phaser.Scene {
     }).setOrigin(0.5, 0.5).setDepth(22);
     this._body.setShadow(0, 2, '#000000', 4, false, true);
 
-    this._more = this.add.text(x + w * 0.5, y + h * 0.86, '▼', {
-      fontFamily: F_UI, fontSize: '13px', color: '#f2b13c'
-    }).setOrigin(0.5, 1).setDepth(22).setAlpha(0);
-    this.tweens.add({
-      targets: this._more, y: y + h * 0.86 - 5, yoyo: true, repeat: -1, duration: 620
-    });
+    // The advance marker is drawn, not a font glyph: it has to match the gold
+    // triangle the panel art already carries in its corner, and a '\u25bc' at
+    // any font size is a different shape sitting in the middle of the bar. Both
+    // panels were measured for it — the triangle is 32x16 at x0.862/y0.814 in
+    // the 880px-wide left panel and 35x17 at x0.798/y0.782 in the right — so
+    // this lands on top of it and reads as that triangle lifting.
+    this._more = this.add.graphics().setDepth(23).setAlpha(0);
+    this._drawMore('l');
+    this.tweens.add({ targets: this._more, y: -4, yoyo: true, repeat: -1, duration: 620 });
 
     this._hint = this.add.text(W / 2, H - 8, 'SPACE / CLICK — NEXT      ESC — SKIP', {
       fontFamily: F_UI, fontSize: '9px', fontStyle: '500', color: '#6b5a48'
     }).setOrigin(0.5, 1).setDepth(22);
 
     this._ui.push(this._name, this._body, this._hint);
+  }
+
+  // Where the panel art's own corner triangle sits, per side: centre as a
+  // fraction of the panel and size in the source art's pixels.
+  static get MORE_TRI() {
+    return { l: { xf: 0.862, yf: 0.814, w: 32, h: 16 },
+             r: { xf: 0.798, yf: 0.782, w: 35, h: 17 } };
+  }
+
+  _drawMore(side) {
+    const t = IntroDialogueScene.MORE_TRI[side] || IntroDialogueScene.MORE_TRI.l;
+    const P = this._panel;
+    const sc = P.w / 880;                       // panel art is 880px wide
+    const cw = t.w * sc, ch = t.h * sc;
+    const cx = P.x + P.w * t.xf, cy = P.y + P.h * t.yf;
+    this._more.clear();
+    this._more.fillStyle(0xffd98a, 1);
+    this._more.fillTriangle(cx - cw / 2, cy - ch / 2,
+                            cx + cw / 2, cy - ch / 2,
+                            cx,          cy + ch / 2);
   }
 
   // Figures stand at the screen edges at full height and run off the bottom
@@ -3605,6 +3630,7 @@ class IntroDialogueScene extends Phaser.Scene {
       this._frame.setTexture('ui_panel_' + side).setDisplaySize(this._panel.w, this._panel.h);
     }
     this._name.setX(this._nameX[side]);
+    this._drawMore(side);        // the corner triangle moves with the panel art
 
     if (line.wake) this._awake = true;
 
