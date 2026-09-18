@@ -3399,7 +3399,8 @@ const SLEEPER = 'WOLFFEL';        // out cold until the line that wakes him
 // A file per line needs no seeking, and dropping the gaps between lines makes
 // it smaller than the take was.
 //
-// The take stops after "Ok, let's get out." — the last two lines are silent.
+// The scene ends on the last line of the recording, so every spoken line here
+// is voiced; the two "..." beats carry no audio by design.
 const INTRO_LINES = [
   { who: 'ETERWOLF', text: "Mk, what happened? Where are we?", vox: 'bunker_01' },
   { who: 'ETERWOLF', text: "Wake up, Feli.", vox: 'bunker_02' },
@@ -3408,8 +3409,7 @@ const INTRO_LINES = [
   { who: 'WOLFFEL',  text: "No...", vox: 'bunker_05' },
   { who: 'WOLFFEL',  text: "..." },
   { who: 'ETERWOLF', text: "..." },
-  { who: 'ETERWOLF', text: "Ok, let's get out.", vox: 'bunker_06' },
-  { who: 'ETERWOLF', text: "Let's look around for a way to get out." }
+  { who: 'ETERWOLF', text: "Ok, let's get out.", vox: 'bunker_06' }
 ];
 
 // ---- dialogue voice ------------------------------------------------------
