@@ -964,7 +964,7 @@ class BootScene extends Phaser.Scene {
     }
 
     primeMusic();                       // fetch and decode before the menu opens
-    whenFontsReady(() => this.scene.start('MenuScene'));
+    whenFontsReady(() => this.scene.start('StartScene'));
   }
 
   _makeEffectTextures() {
@@ -3330,6 +3330,111 @@ function driveWalker(scene, p, keys, onGround) {
 // ================================================================== //
 //  MENU                                                               //
 // ================================================================== //
+// ================================================================== //
+//  START GATE — "press any button"                                    //
+//                                                                     //
+//  This exists for two reasons, both of them browser rules rather than //
+//  design choices.                                                    //
+//                                                                     //
+//  A controller is invisible to the page until a button on it has been //
+//  pressed — navigator.getGamepads() returns four nulls no matter how  //
+//  plugged in it is. And a page cannot start sound until it has had a  //
+//  real interaction, which a synthetic event from the pad does not     //
+//  count as. One screen that waits for a press solves both: whatever   //
+//  you press, the page is now activated and the pad is now visible.    //
+//                                                                     //
+//  It also reports what it can see, because "my controller does not    //
+//  work" has several possible causes and they are not distinguishable  //
+//  from inside the game without saying which one applies.              //
+// ================================================================== //
+class StartScene extends Phaser.Scene {
+  constructor() { super('StartScene'); }
+
+  create() {
+    const W = 1280, H = 720;
+    this.cameras.main.setBackgroundColor('#0a0807');
+    this.cameras.main.fadeIn(500, 0, 0, 0);
+
+    if (this.textures.exists('scene_bunker')) {
+      const bg = this.add.image(W / 2, H / 2, 'scene_bunker').setDepth(-20);
+      bg.setScale(Math.max(W / bg.width, H / bg.height)).setTint(0x2a241e);
+    }
+    this.add.rectangle(W / 2, H / 2, W, H, 0x0a0807, 0.62).setDepth(-10);
+
+    this.add.text(W / 2, 250, 'ATOMHOWL', {
+      fontFamily: F_UI, fontSize: '82px', fontStyle: '700', color: '#f0e6d4',
+      stroke: '#070605', strokeThickness: 8
+    }).setOrigin(0.5).setDepth(10);
+
+    this.add.rectangle(W / 2, 306, 360, 2, 0xf2b13c, 0.85).setDepth(10);
+
+    this._prompt = this.add.text(W / 2, 372, 'PRESS ANY BUTTON', {
+      fontFamily: F_UI, fontSize: '26px', fontStyle: '700', color: '#f2b13c',
+      stroke: '#070605', strokeThickness: 5
+    }).setOrigin(0.5).setDepth(10);
+    this.tweens.add({ targets: this._prompt, alpha: 0.35, yoyo: true, repeat: -1, duration: 780 });
+
+    this.add.text(W / 2, 414, 'keyboard, mouse or controller', {
+      fontFamily: F_UI, fontSize: '13px', fontStyle: '600', color: '#8a7660'
+    }).setOrigin(0.5).setDepth(10);
+
+    // The controller read-out. Live, so plugging in or pressing a pad button
+    // changes it while you watch — which is the whole point.
+    this._pad = this.add.text(W / 2, 560, '', {
+      fontFamily: 'Courier New, monospace', fontSize: '14px', color: '#7d6c55',
+      align: 'center', lineSpacing: 5
+    }).setOrigin(0.5).setDepth(10);
+
+    const go = () => this._go();
+    this.input.keyboard.on('keydown', go);
+    this.input.on('pointerdown', go);
+    this._t0 = this.time.now;
+  }
+
+  // What the page can and cannot see, in the order the causes are worth
+  // ruling out.
+  _diagnose() {
+    const api = typeof navigator.getGamepads === 'function';
+    if (!api) {
+      return ['CONTROLLER: this browser exposes no gamepad API',
+              'Try Chrome or Edge.'];
+    }
+    let pads = [];
+    try { pads = Array.from(navigator.getGamepads()).filter(Boolean); } catch (e) {
+      return ['CONTROLLER: the page is not allowed to read gamepads',
+              'Open the game in its own tab rather than embedded.'];
+    }
+    if (Pad.connected || pads.length) {
+      const name = (Pad.id || (pads[0] && pads[0].id) || 'controller').slice(0, 46);
+      return ['CONTROLLER FOUND', name, 'Press a button on it to continue.'];
+    }
+    const framed = (function () { try { return window.self !== window.top; } catch (e) { return true; } })();
+    const out = ['CONTROLLER: none seen yet'];
+    out.push('A pad stays invisible to the browser until you');
+    out.push('press one of its buttons. Press one now.');
+    if (framed) {
+      out.push('');
+      out.push('Still nothing? This page is embedded. Open it in');
+      out.push('its own tab, or use the downloaded atomhowl.html.');
+    }
+    return out;
+  }
+
+  update() {
+    if (this._pad) this._pad.setText(this._diagnose().join('\n'));
+  }
+
+  _go() {
+    if (this._done) return;
+    this._done = true;
+    // A real press is what grants the page permission to make noise.
+    Sfx.ensure();
+    startMusic();
+    this.cameras.main.fadeOut(280, 0, 0, 0);
+    this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('MenuScene'));
+  }
+}
+
 class MenuScene extends Phaser.Scene {
   constructor() { super('MenuScene'); }
 
@@ -5049,7 +5154,7 @@ window.__game = new Phaser.Game({
   backgroundColor: '#0a0807',
   scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
   physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
-  scene: [BootScene, MenuScene, CharSelectScene, IntroDialogueScene,
+  scene: [BootScene, StartScene, MenuScene, CharSelectScene, IntroDialogueScene,
           BunkerScene, ExitScene, JumpScene,
           CityScene, ShopFrontScene, ShopScene, GameScene, DebugScene]
 });
