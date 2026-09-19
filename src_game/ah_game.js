@@ -3053,9 +3053,12 @@ const PAD_MAP = {
   1:  'F',       // B      sword
   2:  'K',       // X      fire / open door
   3:  'E',       // Y      swap weapon / open door
-  4:  'SHIFT',   // LB     dash in combat, sprint in the walking stages
   5:  'Q',       // RB     nuke
   9:  'ESC',     // Start  back to the menu / skip the cutscene
+  // Clicking the left stick, where a sprint lives in most games — your thumb is
+  // already on the stick that is doing the running. It was LB, which meant
+  // moving and sprinting were on opposite hands.
+  10: 'SHIFT',   // L3     sprint in the walking stages, dash in combat
   12: 'UP', 13: 'DOWN', 14: 'LEFT', 15: 'RIGHT'
 };
 const PAD_LABEL = {
