@@ -164,6 +164,7 @@ h1 span{color:var(--faint); letter-spacing:.08em; font-weight:600; float:right}
   <span><b>MUTE</b> <span class="k">N</span></span>
   <span><b>MENU</b> <span class="k">ESC</span></span>
   <span><b>PROP EDITOR</b> <span class="k">M</span> toggle &middot; drag &middot; <span class="k">O</span> export</span>
+  <span><b>CONTROLLER</b> <span class="k">F10</span> tester &middot; Xbox pad supported</span>
 </div>
 ` + order.map(f => {
   // charset on every tag: these are separate files now, and a script without

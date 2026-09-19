@@ -2564,7 +2564,9 @@ class GameScene extends Phaser.Scene {
 
     // Holding UP tips the shot 45 degrees up — Contra's control, and the pose
     // is drawn for it. Jump stays on W and SPACE, so UP costs nothing here.
-    this.aimUp = this.keys.UP.isDown;
+    // UP on the keyboard, or the right stick shoved up on a pad. Gated to the
+    // pistol downstream, where shoot45 already lives.
+    this.aimUp = this.keys.UP.isDown || Pad.rsUp;
 
     // ----- fire intent (needed by facing + anim state machine) -----
     const firing = (pointer.isDown && pointer.button === 0 && !pointer.rightButtonDown())
@@ -3004,6 +3006,264 @@ const COMBAT_SPEED = 340;
 // Fallback for a character that does not state its own.
 const IDLE_LONG_MS = 5000;
 
+// ------------------------------------------------------------------ //
+//  GAMEPAD                                                            //
+//  The pad does not get an input path of its own. It types.           //
+//                                                                     //
+//  Every action in this game is already reachable from the keyboard —  //
+//  through polled `key.isDown`, through `JustDown`, and through thirty //
+//  or so `keydown-<KEY>` handlers spread across nine scenes. Rather    //
+//  than teach all of that about a second input device, the pad reads   //
+//  the browser's gamepad each frame and dispatches synthetic           //
+//  KeyboardEvents on `window`, which is exactly where Phaser's         //
+//  KeyboardManager listens. Phaser does not check `isTrusted`, so one  //
+//  dispatch lights up all three mechanisms at once and every scene —   //
+//  including the debug sandbox — gets pad support for free.            //
+//                                                                     //
+//  The alternative, OR-ing a pad check into every read site, needs a   //
+//  dozen edits plus a duplicate of every handler body, and any scene   //
+//  added later has to remember to do it.                              //
+// ------------------------------------------------------------------ //
+
+// keyCode is what Phaser dispatches on; `code` and `key` are filled in so the
+// events look like the real thing to anything else listening.
+const PAD_KEYS = {
+  SPACE: [32, 'Space',      ' '],
+  F:     [70, 'KeyF',       'f'],
+  K:     [75, 'KeyK',       'k'],
+  E:     [69, 'KeyE',       'e'],
+  SHIFT: [16, 'ShiftLeft',  'Shift'],
+  Q:     [81, 'KeyQ',       'q'],
+  ESC:   [27, 'Escape',     'Escape'],
+  UP:    [38, 'ArrowUp',    'ArrowUp'],
+  DOWN:  [40, 'ArrowDown',  'ArrowDown'],
+  LEFT:  [37, 'ArrowLeft',  'ArrowLeft'],
+  RIGHT: [39, 'ArrowRight', 'ArrowRight']
+};
+
+// Standard-mapping button index -> the key it impersonates. Because it is a
+// key and not an action, each button inherits whatever that key means in the
+// scene you are in: E swaps weapon in combat and opens a door in a walking
+// stage, which is the keyboard's own behaviour rather than a special case.
+//
+// This table is the whole mapping. Remapping later is editing it and nothing
+// else.
+const PAD_MAP = {
+  0:  'SPACE',   // A      jump / confirm
+  1:  'F',       // B      sword
+  2:  'K',       // X      fire / open door
+  3:  'E',       // Y      swap weapon / open door
+  4:  'SHIFT',   // LB     dash in combat, sprint in the walking stages
+  5:  'Q',       // RB     nuke
+  9:  'ESC',     // Start  back to the menu / skip the cutscene
+  12: 'UP', 13: 'DOWN', 14: 'LEFT', 15: 'RIGHT'
+};
+const PAD_LABEL = {
+  0: 'A', 1: 'B', 2: 'X', 3: 'Y', 4: 'LB', 5: 'RB', 6: 'LT', 7: 'RT',
+  8: 'Back', 9: 'Start', 10: 'L3', 11: 'R3',
+  12: 'D-up', 13: 'D-down', 14: 'D-left', 15: 'D-right', 16: 'Guide'
+};
+
+// A stick resting near the threshold would otherwise chatter on and off every
+// frame, so it takes more push to latch than to hold.
+const PAD_LATCH = 0.35, PAD_RELEASE = 0.25;
+// The 45-degree aim is a deliberate shove, not a drift.
+const PAD_AIM = 0.5;
+// Directions repeat while held, like browser key repeat, so a list scrolls.
+// Action buttons must NOT repeat: a repeating A would re-arm the jump buffer
+// and a repeating Y would cycle weapons while you held it.
+const PAD_REPEAT_DELAY = 400, PAD_REPEAT_EVERY = 120;
+
+const Pad = {
+  connected: false,
+  id: '',
+  mapping: '',
+  rsUp: false,          // right stick pushed up — the 45-degree shot
+  axes: [0, 0, 0, 0],
+  buttons: [],
+  _held: {},            // key name -> true while the pad is holding it
+  _repeatAt: {},        // key name -> when it may repeat next
+  _woke: false,
+
+  read() {
+    if (!navigator.getGamepads) return null;
+    const list = navigator.getGamepads();
+    for (let i = 0; i < list.length; i++) if (list[i] && list[i].connected) return list[i];
+    return null;
+  },
+
+  // `keyCode` cannot be set through the KeyboardEvent init dictionary — it is a
+  // legacy accessor — and Phaser 3 dispatches on exactly that. Defining it after
+  // construction is what makes any of this work.
+  emit(name, type) {
+    const d = PAD_KEYS[name];
+    if (!d) return;
+    const ev = new KeyboardEvent(type, { code: d[1], key: d[2], bubbles: true });
+    Object.defineProperty(ev, 'keyCode', { get: () => d[0] });
+    Object.defineProperty(ev, 'which',   { get: () => d[0] });
+    window.dispatchEvent(ev);
+  },
+
+  // Let go of everything. Called when the pad vanishes and when the window
+  // loses focus — without it a key the pad was holding stays down forever and
+  // the character walks into a wall until you tap that key yourself.
+  release() {
+    for (const k in this._held) this.emit(k, 'keyup');
+    this._held = {};
+    this._repeatAt = {};
+    this.rsUp = false;
+  },
+
+  update(now) {
+    const gp = this.read();
+    if (!gp) {
+      if (this.connected) { this.connected = false; this.release(); }
+      return;
+    }
+    if (!this.connected) {
+      this.connected = true;
+      this.id = gp.id || 'gamepad';
+      this.mapping = gp.mapping || '(non-standard)';
+      PadHUD.flash();
+    }
+    this.buttons = gp.buttons;
+    this.axes = gp.axes;
+
+    const want = {};
+    for (const i in PAD_MAP) {
+      const b = gp.buttons[i];
+      if (b && (b.pressed || b.value > 0.5)) want[PAD_MAP[i]] = true;
+    }
+
+    // The left stick folds into the same four direction keys the d-pad uses, so
+    // nothing downstream has to know which one you pushed.
+    const ax = i => gp.axes[i] || 0;
+    const lat = (v, k) => (this._held[k] ? v > PAD_RELEASE : v > PAD_LATCH);
+    if (lat(-ax(0), 'LEFT'))  want.LEFT  = true;
+    if (lat( ax(0), 'RIGHT')) want.RIGHT = true;
+    if (lat(-ax(1), 'UP'))    want.UP    = true;
+    if (lat( ax(1), 'DOWN'))  want.DOWN  = true;
+
+    // Right stick is the one thing that cannot be a key: it has to stay analog
+    // so it can be gated to the pistol downstream.
+    this.rsUp = ax(3) < -PAD_AIM && Math.hypot(ax(2), ax(3)) > PAD_AIM;
+
+    for (const k in want) {
+      if (!this._held[k]) {
+        this.emit(k, 'keydown');
+        this._repeatAt[k] = now + PAD_REPEAT_DELAY;
+      } else if (PAD_KEYS[k] && (k === 'UP' || k === 'DOWN' || k === 'LEFT' || k === 'RIGHT')
+                 && now >= this._repeatAt[k]) {
+        this.emit(k, 'keydown');
+        this._repeatAt[k] = now + PAD_REPEAT_EVERY;
+      }
+      if (!this._woke) { this._woke = true; padWake(); }
+    }
+    for (const k in this._held) if (!want[k]) this.emit(k, 'keyup');
+    this._held = want;
+
+    if (PadHUD.on) PadHUD.draw();
+  }
+};
+
+// A synthetic keydown reaches the audio-unlock listeners, but an untrusted
+// event confers no user activation, so the browser may still refuse to start
+// sound for someone playing on the pad alone from a cold load. Retrying costs
+// nothing and catches the case where the page was already activated.
+function padWake() {
+  try { Sfx.ensure(); } catch (e) {}
+  try { startMusic(); } catch (e) {}
+}
+
+// ---- the tester ----------------------------------------------------------
+// Every button and both sticks, live, with the key each one is typing. The
+// point is that "is my controller working" answers itself: press something and
+// watch it light up, instead of deducing a mis-binding from how the game plays.
+const PadHUD = {
+  on: false, scene: null, box: null, txt: null, _hideAt: 0,
+
+  scn() {
+    const g = window.__game;
+    if (!g) return null;
+    const live = g.scene.getScenes(true);
+    return live.length ? live[live.length - 1] : null;
+  },
+
+  toggle() { this.on ? this.hide() : this.show(); },
+
+  show() {
+    const s = this.scn();
+    if (!s || !s.add) return;
+    this.hide();
+    this.scene = s;
+    this.box = s.add.rectangle(14, 14, 470, 250, 0x070605, 0.90)
+      .setOrigin(0, 0).setScrollFactor(0).setDepth(200)
+      .setStrokeStyle(1, 0xf2b13c, 0.7);
+    this.txt = s.add.text(26, 24, '', {
+      fontFamily: 'Courier New, monospace', fontSize: '12px', color: '#d9c7a8'
+    }).setScrollFactor(0).setDepth(201);
+    this.on = true;
+    this.draw();
+  },
+
+  hide() {
+    if (this.box) this.box.destroy();
+    if (this.txt) this.txt.destroy();
+    this.box = this.txt = this.scene = null;
+    this.on = false;
+  },
+
+  // Shown for a moment when a pad first appears, so you know it was seen.
+  flash() {
+    if (this.on) return;
+    this.show();
+    this._hideAt = Date.now() + 3200;
+  },
+
+  draw() {
+    // The scene can change underneath it (a stage transition), and Phaser
+    // destroys its objects with it, so rebuild on a different scene.
+    if (this.scene !== this.scn()) { const was = this.on; this.hide(); if (was) this.show(); return; }
+    if (!this.txt) return;
+    if (this._hideAt && Date.now() > this._hideAt) { this._hideAt = 0; this.hide(); return; }
+
+    const L = [];
+    if (!Pad.connected) {
+      L.push('NO CONTROLLER SEEN YET');
+      L.push('');
+      L.push('Press any button on the pad.');
+      L.push('A connected controller stays invisible to');
+      L.push('the browser until a button is pressed, so');
+      L.push('plugged in but untouched looks like absent.');
+    } else {
+      L.push('PAD  ' + Pad.id.slice(0, 44));
+      L.push('mapping: ' + Pad.mapping);
+      L.push('');
+      let row = '';
+      for (let i = 0; i < Pad.buttons.length; i++) {
+        const b = Pad.buttons[i];
+        const down = b && (b.pressed || b.value > 0.5);
+        const name = PAD_LABEL[i] || ('b' + i);
+        const key = PAD_MAP[i] ? '>' + PAD_MAP[i] : '';
+        row += (down ? '[' + name + key + ']' : ' ' + name + key + ' ');
+        if ((i + 1) % 4 === 0) { L.push(row); row = ''; }
+      }
+      if (row) L.push(row);
+      L.push('');
+      const f = v => (v < 0 ? '' : '+') + v.toFixed(2);
+      L.push('L stick ' + f(Pad.axes[0] || 0) + ' , ' + f(Pad.axes[1] || 0) +
+             '   -> move / crouch');
+      L.push('R stick ' + f(Pad.axes[2] || 0) + ' , ' + f(Pad.axes[3] || 0) +
+             '   -> 45' + String.fromCharCode(176) + ' aim ' + (Pad.rsUp ? '** ON **' : '(push up)'));
+      L.push('');
+      L.push('holding: ' + (Object.keys(Pad._held).join(' ') || '-'));
+    }
+    L.push('');
+    L.push('F10 closes this');
+    this.txt.setText(L.join('\n'));
+  }
+};
+
 function driveWalker(scene, p, keys, onGround) {
   let move = 0;
   if (keys.A.isDown || keys.LEFT.isDown)  move -= 1;
@@ -3129,9 +3389,11 @@ class MenuScene extends Phaser.Scene {
     };
     this.input.keyboard.on('keydown-DOWN', () => move(1));
     this.input.keyboard.on('keydown-UP', () => move(-1));
-    this.input.keyboard.on('keydown-ENTER', () => {
-      Sfx.ensure(); Sfx.select(); items[this._cursor][1]();
-    });
+    // SPACE as well as ENTER: the other two menus already take both, and the
+    // pad's A button types SPACE, so without this it could not confirm here.
+    const activate = () => { Sfx.ensure(); Sfx.select(); items[this._cursor][1](); };
+    this.input.keyboard.on('keydown-ENTER', activate);
+    this.input.keyboard.on('keydown-SPACE', activate);
     this.input.on('pointerdown', () => Sfx.ensure());
 
     this._toastTxt = this.add.text(86, 604, '', {
@@ -3870,7 +4132,7 @@ class WalkScene extends Phaser.Scene {
     this.cameras.main.setDeadzone(160, 100);
 
     // input
-    this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,SHIFT,M,E,ENTER,R');
+    this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,SHIFT,M,E,ENTER,R,K');
     this.input.keyboard.on('keydown-N', () => Sfx.toggleMute());
     if (cfg.canReset) this.input.keyboard.on('keydown-R', () => this.resetStage());
     if (cfg.castSwitch) this._buildCastSwitch();
@@ -4189,7 +4451,10 @@ class WalkScene extends Phaser.Scene {
     }
 
     // exit prompts + trigger
+    // K as well, so the pad's X — the button that does things in combat —
+    // also opens a door out here.
     const enterPressed = Phaser.Input.Keyboard.JustDown(this.keys.E)
+                      || Phaser.Input.Keyboard.JustDown(this.keys.K)
                       || Phaser.Input.Keyboard.JustDown(this.keys.UP)
                       || Phaser.Input.Keyboard.JustDown(this.keys.W);
     this.exitMarkers.forEach(({ m, lbl, glow, ex }) => {
@@ -4787,6 +5052,32 @@ window.__game = new Phaser.Game({
   scene: [BootScene, MenuScene, CharSelectScene, IntroDialogueScene,
           BunkerScene, ExitScene, JumpScene,
           CityScene, ShopFrontScene, ShopScene, GameScene, DebugScene]
+});
+
+// ---- gamepad ----
+// Exposed so the pad can be inspected from the browser console while tuning a
+// mapping — `Pad.connected`, `Pad.axes`, `Pad._held` — and so the tests can
+// drive it without reaching into the closure.
+window.Pad = Pad;
+window.PadHUD = PadHUD;
+
+// One poll for the whole game. `prestep` runs before any scene's update, so a
+// button pressed this frame is already "held" by the time driveWalker and
+// GameScene.update read the keyboard. No scene has to opt in, which is the
+// point — a scene added later gets pad support without knowing it exists.
+window.__game.events.on('prestep', (time) => {
+  try { Pad.update(time); } catch (e) {}
+});
+
+// Letting go of the window while the pad holds a direction would otherwise
+// leave that key down forever, and the character walks off on his own when you
+// come back.
+window.addEventListener('blur', () => { try { Pad.release(); } catch (e) {} });
+
+window.addEventListener('keydown', e => {
+  if (e.key !== 'F10') return;
+  e.preventDefault();
+  try { PadHUD.toggle(); } catch (err) {}
 });
 
 })();
