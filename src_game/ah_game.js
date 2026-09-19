@@ -1064,6 +1064,20 @@ class BootScene extends Phaser.Scene {
     g.generateTexture('puff', 16, 16);
     g.destroy();
 
+    // Doorway glow: a soft warm oval, taller than it is wide, drawn as stacked
+    // rings so it falls off smoothly instead of showing a hard edge. Added to
+    // the scene with ADD blending, so it lights the door rather than covering
+    // it — which is the point of using it in place of a marker hanging in the
+    // air above the frame.
+    g = this.make.graphics({ add: false });
+    for (let i = 26; i > 0; i--) {
+      g.fillStyle(0xf2b13c, 0.030 * (1 - i / 28));
+      g.fillEllipse(70, 110, i * 5.2, i * 8.2);
+    }
+    g.fillStyle(0xffd98a, 0.10); g.fillEllipse(70, 110, 46, 80);
+    g.generateTexture('doorglow', 140, 220);
+    g.destroy();
+
     // spawn warning marker
     g = this.make.graphics({ add: false });
     g.fillStyle(0xb9d96a, 1);
@@ -3522,9 +3536,10 @@ class IntroDialogueScene extends Phaser.Scene {
       this._ui.push(g);
     }
 
-    // Name plate centres measured off each frame: left art 0.087–0.297,
-    // right art 0.620–0.921.
-    this._nameX = { l: x + w * 0.192, r: x + w * 0.771 };
+    // Measured off the artwork, then checked against a render: the name plate is
+    // the raised badge at the top, and the name sits on the centre of its face.
+    // The old left value, 0.192, sat the name 40px off its own plate.
+    this._nameX = { l: x + w * 0.2489, r: x + w * 0.7727 };
 
     this._name = this.add.text(this._nameX.l, y + h * 0.18, '', {
       fontFamily: F_UI, fontSize: '19px', fontStyle: '700', color: '#f5c169',
@@ -3725,9 +3740,16 @@ class WalkScene extends Phaser.Scene {
     // background art scaled to fill 720 height; world width follows the art
     if (this.textures.exists(cfg.bgKey)) {
       const img = this.add.image(0, 0, cfg.bgKey).setOrigin(0, 0).setDepth(-20);
-      const s = (H / img.height) * zoom;
+      // Some paintings carry dead space along the bottom — the village road has
+      // 121 near-black rows under the picture, 15.8% of its height. Pinning the
+      // image's bottom edge to the screen put that band across the lower fifth
+      // of the frame. `bgContentFrac` says where the picture actually stops, and
+      // the scale is taken from THAT rather than the file's height, so the
+      // content fills the view and the dead rows fall off below it.
+      const cf = cfg.bgContentFrac || 1;
+      const s = (H / (img.height * cf)) * zoom;
       img.setScale(s);
-      img.y = H - img.height * s;
+      img.y = H - img.height * s * cf;
       this.bgWidth = Math.round(img.width * s);
       if (cfg.worldW === 'auto') WW = this.bgWidth;
       if (this.bgWidth < WW) {
@@ -3909,7 +3931,20 @@ class WalkScene extends Phaser.Scene {
     this.markerY = groundY - 250;
     this.exits = (cfg.exits || []).map(ex => ({ ...ex, x: ex.xFrac != null ? ex.xFrac * WW : ex.x }));
     this.exitMarkers = this.exits.map(ex => {
-      const m = this.add.text(ex.x, this.markerY, ex.arrow || '▲', {
+      // `glow` lights the doorway itself instead of hanging a marker over it —
+      // the door is the thing you walk into, so it is the thing that should
+      // read as live. `silent` is for an exit that is just the edge of the
+      // stage: nothing is drawn and you simply walk off it.
+      let glow = null;
+      if (ex.glow) {
+        glow = this.add.image(ex.x, groundY - (ex.glowH || 80), 'doorglow')
+          .setDepth(6).setBlendMode(Phaser.BlendModes.ADD).setAlpha(0)
+          .setScale(ex.glowScale || 1);
+      }
+      if (ex.silent) return { m: null, lbl: null, glow, ex };
+      // A glowing door does not also need a caret bobbing over it; noArrow keeps
+      // the label and drops the marker.
+      const m = ex.noArrow ? null : this.add.text(ex.x, this.markerY, ex.arrow || '▲', {
         fontFamily: 'Courier New, monospace', fontSize: '34px', color: '#f2b13c',
         stroke: '#0d0a08', strokeThickness: 5
       }).setOrigin(0.5).setDepth(30).setAlpha(0);
@@ -3917,7 +3952,7 @@ class WalkScene extends Phaser.Scene {
         fontFamily: 'Courier New, monospace', fontSize: '15px', color: '#d9c7a8',
         stroke: '#0d0a08', strokeThickness: 4
       }).setOrigin(0.5).setDepth(30).setAlpha(0);
-      return { m, lbl, ex };
+      return { m, lbl, glow, ex };
     });
 
     // Phaser reuses a scene instance, so these survive a restart and leave
@@ -3974,17 +4009,20 @@ class WalkScene extends Phaser.Scene {
   // character is chosen when the sprite is built.
   _buildCastSwitch() {
     if (CAST.length < 2) return;
+    // Up under the title rather than along the bottom. A stage whose floor sits
+    // low in the frame — the village road puts it at y646 — had these buttons
+    // landing on the character's own feet.
     let x = 22;
-    this.add.text(x, 664, 'PLAY', {
+    this.add.text(x, 63, 'PLAY', {
       fontFamily: F_UI, fontSize: '11px', fontStyle: '700', color: '#7d6c55'
     }).setScrollFactor(0).setDepth(45);
     x += 40;
     this._castBtns = [];
     CAST.forEach(c => {
-      const t = this.add.text(x + 10, 660, c.name, {
+      const t = this.add.text(x + 10, 59, c.name, {
         fontFamily: F_UI, fontSize: '13px', fontStyle: '700'
       }).setScrollFactor(0).setDepth(46);
-      const box = this.add.rectangle(x, 657, t.width + 20, 22, 0x1b1611, 0.95)
+      const box = this.add.rectangle(x, 56, t.width + 20, 22, 0x1b1611, 0.95)
         .setOrigin(0, 0).setScrollFactor(0).setDepth(45)
         .setStrokeStyle(1, 0x4a3b2a).setInteractive({ useHandCursor: true });
       box.on('pointerover', () => { if (c.id !== this.castId) t.setColor('#f2b13c'); });
@@ -4000,7 +4038,7 @@ class WalkScene extends Phaser.Scene {
       x += t.width + 26;
     });
     this._paintCast();
-    this.add.text(x + 14, 660, 'R  RESTART STAGE', {
+    this.add.text(x + 14, 59, 'R  RESTART STAGE', {
       fontFamily: F_UI, fontSize: '11px', fontStyle: '600', color: '#7d6c55'
     }).setScrollFactor(0).setDepth(45);
   }
@@ -4043,14 +4081,20 @@ class WalkScene extends Phaser.Scene {
     this._sayQueue = [];
     this._sayUntil = 0;
 
-    this._sayName = this.add.text(640, 604, '', {
-      fontFamily: F_UI, fontSize: '11px', fontStyle: '700', color: '#f5c169'
-    }).setOrigin(0.5, 1).setScrollFactor(0).setDepth(41).setAlpha(0);
+    // Speech floats over the speaker's head rather than sitting in a bar along
+    // the bottom of the screen. Only one of the brothers is ever on stage out
+    // here, so the line belongs to him and should read as coming from him — a
+    // caption pinned to the viewport does not. These follow the player in
+    // world space (no scrollFactor 0), and _runBeats keeps them over his head.
+    this._sayName = this.add.text(0, 0, '', {
+      fontFamily: F_UI, fontSize: '11px', fontStyle: '700', color: '#f5c169',
+      stroke: '#0d0a08', strokeThickness: 4
+    }).setOrigin(0.5, 1).setDepth(41).setAlpha(0);
 
-    this._sayText = this.add.text(640, 632, '', {
+    this._sayText = this.add.text(0, 0, '', {
       fontFamily: F_TXT, fontSize: '19px', color: '#efe6d6', align: 'center',
-      wordWrap: { width: 720 }, lineSpacing: 5
-    }).setOrigin(0.5, 1).setScrollFactor(0).setDepth(41).setAlpha(0);
+      wordWrap: { width: 420 }, lineSpacing: 5
+    }).setOrigin(0.5, 1).setDepth(41).setAlpha(0);
     this._sayText.setShadow(0, 2, '#000000', 5, false, true);
 
     this._tip = this.add.text(640, 96, '', {
@@ -4089,12 +4133,29 @@ class WalkScene extends Phaser.Scene {
     if (now >= this._sayUntil) {
       if (this._sayQueue.length) {
         const [who, text] = this._sayQueue.shift();
-        this._sayName.setText(who).setAlpha(1);
+        // 'PLAYER' is whichever brother was chosen, so a line that either of
+        // them would say does not have to be written twice.
+        const speaker = who === 'PLAYER'
+          ? ((castById(this.castId) || {}).name || 'ETERWOLF')
+          : who;
+        this._sayName.setText(speaker).setAlpha(1);
         this._sayText.setText(text).setAlpha(1);
         this._sayUntil = now + 1600 + text.length * 45;
       } else if (this._sayText.alpha > 0) {
         this.tweens.add({ targets: [this._sayName, this._sayText], alpha: 0, duration: 300 });
       }
+    }
+
+    // Keep the line over his head. Clamped to the camera so a line spoken near
+    // either end of the room does not run off the side of the screen.
+    if (this._sayText.alpha > 0 || this._sayName.alpha > 0) {
+      const cam = this.cameras.main;
+      const head = this.player.y - this.player.displayHeight * 0.52;
+      const half = Math.max(this._sayText.width, this._sayName.width) / 2 + 12;
+      const x = Phaser.Math.Clamp(this.player.x,
+                                  cam.scrollX + half, cam.scrollX + cam.width - half);
+      this._sayText.setPosition(x, head);
+      this._sayName.setPosition(x, head - this._sayText.height - 4);
     }
   }
 
@@ -4131,18 +4192,32 @@ class WalkScene extends Phaser.Scene {
     const enterPressed = Phaser.Input.Keyboard.JustDown(this.keys.E)
                       || Phaser.Input.Keyboard.JustDown(this.keys.UP)
                       || Phaser.Input.Keyboard.JustDown(this.keys.W);
-    this.exitMarkers.forEach(({ m, lbl, ex }) => {
+    this.exitMarkers.forEach(({ m, lbl, glow, ex }) => {
       // a combat exit that needs the weapon stays locked until it's picked up
       const locked = ex.needWeapon && !GameState.hasWeapon;
       // hideLocked exits don't exist at all until unlocked (no marker, no message)
-      if (locked && ex.hideLocked) { m.setAlpha(0); lbl.setAlpha(0); return; }
+      if (locked && ex.hideLocked) {
+        if (m) m.setAlpha(0);
+        if (lbl) lbl.setAlpha(0);
+        if (glow) glow.setAlpha(0);
+        return;
+      }
       const near = Math.abs(this.player.x - ex.x) < (ex.w || 90);
       const a = near ? 1 : 0;
-      m.setAlpha(a); lbl.setAlpha(a);
+      if (m) m.setAlpha(a);
+      if (lbl) lbl.setAlpha(a);
+      // The doorway breathes the whole time so it reads as the way on even
+      // from across the room, and brightens as he reaches it.
+      if (glow) {
+        const pulse = 0.5 + Math.sin(this.time.now * 0.0035) * 0.16;
+        glow.setAlpha(near ? pulse + 0.30 : pulse * 0.62);
+      }
       if (near) {
-        m.y = this.markerY + Math.sin(this.time.now * 0.006) * 6;
-        lbl.setText(locked ? 'GRAB THE WEAPON FIRST' : ex.label);
-        lbl.setColor(locked ? '#c93b2a' : '#d9c7a8');
+        if (m) m.y = this.markerY + Math.sin(this.time.now * 0.006) * 6;
+        if (lbl) {
+          lbl.setText(locked ? 'GRAB THE WEAPON FIRST' : ex.label);
+          lbl.setColor(locked ? '#c93b2a' : '#d9c7a8');
+        }
         // auto exits fire just by running into them; others want E/W/up
         if (!locked && (ex.auto || enterPressed) && !this._transitioning) this.goExit(ex);
       }
@@ -4178,7 +4253,7 @@ class WalkScene extends Phaser.Scene {
     this._transitioning = true;
     this.player.setVelocityX(0);
     Sfx.ensure(); Sfx.dash();
-    this.cameras.main.fadeOut(450, 0, 0, 0);
+    this.cameras.main.fadeOut(ex.fadeMs || 450, 0, 0, 0);
     this.cameras.main.once('camerafadeoutcomplete', () => {
       const target = ex.kind === 'combat' ? 'GameScene' : ex.target;
       this.scene.start(target, ex.spawnXFrac != null ? { spawnXFrac: ex.spawnXFrac } : undefined);
@@ -4210,7 +4285,8 @@ class BunkerScene extends WalkScene {
                     tip: 'PRESS  E  AT THE DOOR' }
       ],
       exits: [
-        { xFrac: 0.90, w: 180, label: 'OUT THE BLAST DOOR', target: 'ExitScene' }
+        { xFrac: 0.90, w: 180, label: 'EXIT THE BUNKER', target: 'ExitScene',
+          glow: true, noArrow: true, glowH: 110, glowScale: 1.25 }
       ],
       drawFallback(WW) {
         const g = this.add.graphics().setDepth(-20);
@@ -4247,19 +4323,28 @@ class ExitScene extends WalkScene {
     this.cameras.main.fadeIn(600, 0, 0, 0);
     this.buildWalk({
       bgKey: 'scene_exit',
-      worldW: 'auto', groundFrac: 0.755, startXFrac: 0.05, charH: 200, bgZoom: 1.2,
+      // The painting's bottom 15.8% is dead black, so the scale is taken from
+      // the picture instead of the file and zoom drops to 1 — the content then
+      // fills the frame exactly and the brothers walk low in it, the way a road
+      // is usually framed.
+      worldW: 'auto', groundFrac: 0.755, bgContentFrac: 0.8411,
+      startXFrac: 0.135, charH: 200, bgZoom: 1.0,
       title: 'OUTSIDE — the village road',
       castSwitch: true, canReset: true, noLongIdle: true,
       props: [],
       beats: [
-        { at: 0,    say: [['ETERWOLF', 'So this is what is left of it.']],
+        // 'PLAYER' so the line belongs to whichever brother was chosen.
+        { at: 0,    say: [['PLAYER', '¡Hijole! What happened out here?']],
                     tip: 'HOLD  A  OR  D  TO WALK' },
         { at: 0.30, tip: 'HOLD  SHIFT  WHILE WALKING TO RUN — it is much faster' },
-        { at: 0.70, say: [['ETERWOLF', 'Road keeps going. Come on.']],
+        { at: 0.70, say: [['PLAYER', 'Road keeps going. Come on.']],
                     tip: 'KEEP GOING RIGHT' }
       ],
       exits: [
-        { xFrac: 0.985, w: 90, label: 'ON UP THE ROAD ▶', target: 'JumpScene', auto: true }
+        // The end of the stage is just the end of the road: no caret, no label,
+        // walk into it and it fades on.
+        { xFrac: 0.985, w: 90, target: 'JumpScene', auto: true,
+          silent: true, fadeMs: 1000 }
       ],
       drawFallback(WW) {
         const g = this.add.graphics().setDepth(-20);
