@@ -659,6 +659,31 @@ const WORLD_W = 2400;
 const WORLD_H = 720;
 const GROUND_Y = 648;          // top surface of the street
 const GRAVITY = 1500;
+
+// ---- how big is a person, and therefore everything else --------------------
+// A stage says how many screen pixels one metre is on the plane the brothers
+// walk on, and their height falls out of it. That is the whole rule: measure
+// one thing in the painting you know the real size of, and the character is
+// scaled to match it.
+//
+// The village road was calibrated on the blast doorway the brothers walk out
+// of — 345px from the road to the lintel. At 167 px/m that doorway is 2.07m,
+// which is a standard door, and the brothers come out at 300px. Before this
+// they were 200px, which made that same doorway 3.1m and them about 1.2m: the
+// reason they read as children against their own street.
+//
+// The bunker was measured separately, off the bunk-bed spacing (~205px between
+// mattresses, so ~1m), and already sat at the right scale, so it keeps the
+// exact size it had.
+const HUMAN_M = 1.8;
+// Growing the character without growing his stride and his jump just makes him
+// heavy: the jump is a fixed number of pixels, so a taller man clears less of
+// himself with it. Speeds, jump and gravity are therefore scaled alongside, and
+// this is the scale they were originally tuned at (a 200px man, so 111 px/m).
+// Scaling velocity AND gravity by the same factor leaves every airborne
+// duration identical and simply makes the arc bigger, so the motion is the one
+// that was tuned, seen larger.
+const PHYS_BASE_PX_PER_M = 111;
 // The row of main.png where the painted street's lit edge drops away into the
 // dark foreground — measured as the strongest lit-to-dark step across the width
 // (595 on the left, 602 on the right). The painting is scaled so this row lands
@@ -3274,15 +3299,18 @@ function driveWalker(scene, p, keys, onGround) {
   if (keys.D.isDown || keys.RIGHT.isDown) move += 1;
   if (move !== 0) p._facing = move;
   const sprint = !!(keys.SHIFT && keys.SHIFT.isDown);
-  p.setVelocityX(move * (sprint ? RUN_SPEED : WALK_SPEED));
+  // Everything here is in the stage's own scale: a bigger man takes bigger
+  // strides and a bigger leap, so the motion reads the same at any size.
+  const k = scene.playScale || 1;
+  p.setVelocityX(move * (sprint ? RUN_SPEED : WALK_SPEED) * k);
 
   const wantJump = Phaser.Input.Keyboard.JustDown(keys.W)
                 || Phaser.Input.Keyboard.JustDown(keys.SPACE)
                 || Phaser.Input.Keyboard.JustDown(keys.UP);
   if (wantJump && onGround) {
-    p.setVelocityY(-640);
+    p.setVelocityY(-640 * k);
     // Forward momentum during jump: natural platformer feel
-    p.setVelocityX((move || p._facing) * 140);
+    p.setVelocityX((move || p._facing) * 140 * k);
     Sfx.ensure(); Sfx.jump();
   }
 
@@ -4106,6 +4134,20 @@ class WalkScene extends Phaser.Scene {
     // part nobody needs to see.
     const zoom = cfg.bgZoom || 1;
 
+    // The stage's scale. `pxPerM` is measured off the painting — pick something
+    // in it whose real size you know and count its pixels — and everything that
+    // has a real-world size follows from it: the brothers, how far they jump,
+    // how fast they walk, how tall a wall is. A stage that does not declare one
+    // keeps the old hand-tuned charH.
+    this.pxPerM = cfg.pxPerM || null;
+    // Motion scales with them unless a stage pins it. The bunker pins it,
+    // because its pacing was already right and nothing there is jumped over.
+    this.playScale = cfg.playScale != null ? cfg.playScale
+                   : (this.pxPerM ? this.pxPerM / PHYS_BASE_PX_PER_M : 1);
+    // Gravity has to scale with the velocities or the arc changes shape rather
+    // than just getting bigger.
+    this.physics.world.gravity.y = GRAVITY * this.playScale;
+
     this.cameras.main.setBackgroundColor('#0a0807');
 
     // background art scaled to fill 720 height; world width follows the art
@@ -4205,7 +4247,11 @@ class WalkScene extends Phaser.Scene {
       // factor, since the source painting's own pixel size is not meaningful
       // here.
       const painted = this.textures.exists('scene_wallblue');
-      const wantH = (pr.h || 130);
+      // `m` is the wall's height in metres, which is the honest way to say it —
+      // it then stands the same against the brothers whatever the stage's
+      // scale. `h` in raw pixels still works for a stage without a scale.
+      const wantH = pr.m != null && this.pxPerM ? Math.round(pr.m * this.pxPerM)
+                                                : (pr.h || 130);
       let sc;
       let im;
       if (painted) {
@@ -4242,7 +4288,10 @@ class WalkScene extends Phaser.Scene {
     const spawnFrac = data.spawnXFrac != null ? data.spawnXFrac : cfg.startXFrac;
     const startX = spawnFrac != null ? spawnFrac * WW : (cfg.startX || 160);
     // The cast scales with the room, or he would shrink as the art grows.
-    const charH = (cfg.charH || 190) * zoom;
+    // Derived from the stage's own scale where it has one, so the brothers are
+    // the size the painting says a person is.
+    const charH = this.pxPerM ? Math.round(HUMAN_M * this.pxPerM)
+                              : (cfg.charH || 190) * zoom;
     this.castId = data.cast || GameState.castId || DEFAULT_CAST;
     GameState.castId = this.castId;
     this.player = makeWalker(this, startX, groundY, charH, this.castId);
@@ -4310,8 +4359,10 @@ class WalkScene extends Phaser.Scene {
     });
 
     // exit zones (xFrac → world x)
-    // markers float above the (now much taller) player's head
-    this.markerY = groundY - 250;
+    // Markers float above the player's head, so the clearance has to come from
+    // how tall he actually is. A flat 250px was fine when he was 200px and put
+    // the label across his chest the moment he grew to 300.
+    this.markerY = groundY - charH - 46;
     this.exits = (cfg.exits || []).map(ex => ({ ...ex, x: ex.xFrac != null ? ex.xFrac * WW : ex.x }));
     this.exitMarkers = this.exits.map(ex => {
       // `glow` lights the doorway itself instead of hanging a marker over it —
@@ -4661,7 +4712,12 @@ class BunkerScene extends WalkScene {
       // frame and blast door put a standing man at roughly 280px. It is also
       // shown zoomed in, so the room is walked through and revealed rather
       // than taken in at a glance; the floor line follows the zoom by fraction.
-      worldW: 'auto', groundFrac: 0.872, startXFrac: 0.06, charH: 280, bgZoom: 1.35,
+      // 210 px/m measured off the bunk beds (~205px between mattresses). That
+      // puts the brothers at 378px, which is the size they already were — this
+      // stage was right, so it is pinned rather than re-derived. playScale 1
+      // keeps its pacing untouched; nothing in here is jumped over.
+      worldW: 'auto', groundFrac: 0.872, startXFrac: 0.06, bgZoom: 1.35,
+      pxPerM: 210, playScale: 1,
       title: 'THE BUNKER — quarantine shelter',
       castSwitch: true, canReset: true, noLongIdle: true,
       beats: [
@@ -4713,8 +4769,11 @@ class ExitScene extends WalkScene {
       // the picture instead of the file and zoom drops to 1 — the content then
       // fills the frame exactly and the brothers walk low in it, the way a road
       // is usually framed.
+      // 167 px/m, measured off the blast doorway they walk out of: 345px from
+      // road to lintel, which at this scale is a 2.07m door. They come out at
+      // 300px instead of the 200px that made them look like children.
       worldW: 'auto', groundFrac: 0.755, bgContentFrac: 0.8411,
-      startXFrac: 0.135, charH: 200, bgZoom: 1.0,
+      startXFrac: 0.135, bgZoom: 1.0, pxPerM: 167,
       title: 'OUTSIDE — the village road',
       castSwitch: true, canReset: true, noLongIdle: true,
       // Foreground dressing, placed close to the bunker door where the scene
@@ -4724,8 +4783,8 @@ class ExitScene extends WalkScene {
       // two together are why he passes behind it instead of in front. xFrac
       // moves it, scale sizes it, yOff settles it into the ground; tune freely.
       props: [
-        { kind: 'fg', tex: 'deadlog',   xFrac: 0.055, scale: 0.42, yOff: 10 },
-        { kind: 'fg', tex: 'deadplant', xFrac: 0.10,  scale: 0.36, yOff: 4 }
+        { kind: 'fg', tex: 'deadlog',   xFrac: 0.055, scale: 0.63, yOff: 14 },
+        { kind: 'fg', tex: 'deadplant', xFrac: 0.10,  scale: 0.54, yOff: 6 }
       ],
       beats: [
         // 'PLAYER' so the line belongs to whichever brother was chosen.
@@ -4767,7 +4826,12 @@ class JumpScene extends WalkScene {
     this.cameras.main.fadeIn(600, 0, 0, 0);
     this.buildWalk({
       bgKey: 'scene_jump',
-      worldW: 'auto', groundFrac: 0.755, startXFrac: 0.04, charH: 200, bgZoom: 1.2,
+      // Same 167 px/m as the village road. The two paintings are displayed at
+      // within 1% of each other (864px against 856px) and the brothers walk
+      // straight from one into the other, so they have to be the same size in
+      // both — they were 200px and 240px before, which popped on the change.
+      worldW: 'auto', groundFrac: 0.755, startXFrac: 0.04, bgZoom: 1.2,
+      pxPerM: 167,
       title: 'THE BURNT STREET',
       castSwitch: true, canReset: true, noLongIdle: true,
       // No holes: this stage teaches one thing. A single broken wall sits near
@@ -4776,7 +4840,7 @@ class JumpScene extends WalkScene {
       // crosses it, and jumps down the far side, rather than needing to clear
       // it in one bound the way the old rubble heaps did.
       props: [
-        { xFrac: 0.5, kind: 'wall', h: 130 }
+        { xFrac: 0.5, kind: 'wall', m: 1.17 }
       ],
       beats: [
         { at: 0,    say: [['ETERWOLF', 'Road is buried. We go over it.']],
