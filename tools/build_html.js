@@ -61,7 +61,11 @@ const SCENE_SRC = {
   // it takes 2.2MB out of the page as well.
   exit:      ['public/assets/tutorial_exit.png', 'tutorial_exit.png'],
   jump:      ['public/assets/tutorial_jump.png', 'tutorial_jump.png'],
-  rubble:    ['public/assets/rubble_pile.png', 'rubble to jump.png'],
+  wallblue:  ['public/assets/wall_blue.png'],
+  // Foreground dressing — anything dropped in here shows up as window.SCENES.X
+  // and can be used from a stage's props as { kind:'fg', tex:'X', ... }.
+  deadplant: ['public/assets/dead_plant.png'],
+  deadlog:   ['public/assets/dead_log.png'],
   bunker:    ['public/assets/bunker_wide.png', 'public/assets/bunker2.png', 'bunker2.png', 'bunker.png'],
   city:      ['public/assets/city.png', 'city.png', 'city-1.png'],
   shop:      ['shops.png', 'public/assets/shops.png'],

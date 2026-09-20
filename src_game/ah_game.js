@@ -1000,7 +1000,8 @@ class BootScene extends Phaser.Scene {
     g.generateTexture('log_prop', 192, 56);
     g.destroy();
 
-    // A heap of broken masonry, stacked so it has a top to land on.
+    // A stub wall block, stacked so it has a flat top to land on — used only
+    // if the painted wall art failed to load.
     g = this.make.graphics({ add: false });
     const blocks = [[0,44,120,36],[14,26,92,22],[30,10,62,20],[8,34,40,14],[74,30,44,16]];
     blocks.forEach(([x, y, w, h], i) => {
@@ -1009,7 +1010,7 @@ class BootScene extends Phaser.Scene {
       g.fillStyle(0x433a2c, 0.9); g.fillRect(x, y, w, 3);
     });
     g.fillStyle(0x4a4032, 0.8); g.fillRect(30, 10, 62, 3);
-    g.generateTexture('rubble_prop', 120, 80);
+    g.generateTexture('wall_prop', 120, 80);
     g.destroy();
 
     // speed line — a streak that fades out at both ends, so a row of them
@@ -4176,48 +4177,60 @@ class WalkScene extends Phaser.Scene {
     });
 
 
-    // Props. Rubble is solid, so it is something to jump onto; logs sit in
-    // front of everything at a touch more than world speed, which is what
-    // makes them read as being close to the camera rather than in the scene.
+    // Props. A wall is solid, so it is something to climb onto and cross;
+    // 'fg'/'log' sit in front of everything at a touch more than world speed,
+    // which is what makes them read as being close to the camera rather than
+    // in the scene — the player draws at depth 10, so anything past that
+    // depth covers him where the two overlap, which is the whole trick.
     this.propImages = [];
     (cfg.props || []).forEach((pr, prIdx) => {
       const x = pr.xFrac * WW;
-      if (pr.kind === 'log') {
-        const im = this.add.image(x, groundY + (pr.yOff || 26), 'log_prop')
-          .setOrigin(0.5, 1).setDepth(34).setScale(pr.scale || 1.7);
-        im.setScrollFactor(1.08, 1);
+      if (pr.kind === 'log' || pr.kind === 'fg') {
+        // 'fg' takes any scene-loaded image by name (pr.tex, e.g. 'deadlog' for
+        // the texture 'scene_deadlog') so a custom upload drops in the same way
+        // the built-in log prop does — position with xFrac, size with scale,
+        // nudge the footing with yOff. No collision: it is a painted layer, not
+        // an obstacle.
+        const texKey = pr.tex ? ('scene_' + pr.tex) : 'log_prop';
+        const im = this.add.image(x, groundY + (pr.yOff || 26), texKey)
+          .setOrigin(0.5, 1).setDepth(pr.depth != null ? pr.depth : 34)
+          .setScale(pr.scale || 1.7);
+        if (pr.flip) im.setFlipX(true);
+        im.setScrollFactor(pr.scrollFactor != null ? pr.scrollFactor : 1.08, 1);
         this.propImages.push({ im, pr, idx: prIdx, groundY, WW });
         return;
       }
-      // The painted pile if it is in the build, the drawn one if not. The
-      // painting is 2128px of content, so it is sized by the height it should
-      // stand rather than by a raw scale factor.
-      const painted = this.textures.exists('scene_rubble');
-      const wantH = (pr.h || 112);
-      // he clears ~136px from a standing jump, so anything near that has to be
-      // run at — which is the point of the obstacle
+      // The painted wall if it is in the build, the drawn stand-in if not. The
+      // art is sized by the height it should stand rather than by a raw scale
+      // factor, since the source painting's own pixel size is not meaningful
+      // here.
+      const painted = this.textures.exists('scene_wallblue');
+      const wantH = (pr.h || 130);
       let sc;
       let im;
       if (painted) {
-        im = this.add.image(x, groundY + 6, 'scene_rubble').setOrigin(0.5, 1).setDepth(3);
+        im = this.add.image(x, groundY + 6, 'scene_wallblue').setOrigin(0.5, 1).setDepth(3);
         sc = wantH / im.height;
         im.setScale(sc);
-        sc = im.displayWidth / 104;          // express it the way the box below wants
       } else {
-        sc = pr.scale || 1.6;
-        im = this.add.image(x, groundY + 4, 'rubble_prop').setOrigin(0.5, 1).setDepth(3).setScale(sc);
+        sc = wantH / 80;
+        im = this.add.image(x, groundY + 4, 'wall_prop').setOrigin(0.5, 1).setDepth(3).setScale(sc);
       }
       this.propImages.push({ im, pr, idx: prIdx, groundY, WW });
       if (pr.solid !== false) {
         // A separate invisible box rather than a body on the image. Giving a
         // STATIC body an offset moves the body instead of insetting it, so the
-        // collision ended up somewhere the heap was not and he fell straight
+        // collision ended up somewhere the wall was not and he fell straight
         // through. A rectangle placed by hand is the same thing the floor
         // slabs do, and it lands where it is put.
-        const bw = painted ? 104 * sc * 0.62 : 104 * sc;
-        // The heap's own height, near enough: at 0.78 the collision stood 90px
-        // against a 137px jump, so he stepped over it without trying.
-        const bh = painted ? wantH * 0.93 : 70 * sc;
+        //
+        // This is meant to be climbed onto and walked across, not cleared in
+        // one bound — the box spans nearly the full painted width so there is
+        // real ground up there, and its height is well under the ~137px a
+        // standing jump reaches, so landing on top is the reliable outcome
+        // rather than a narrow miss.
+        const bw = im.displayWidth * 0.94;
+        const bh = wantH * 0.90;
         const box = this.add.rectangle(x, groundY + 4 - bh / 2, bw, bh, 0x000000, 0).setDepth(-1);
         this.physics.add.existing(box, true);
         this.solidsW.push(box);
@@ -4704,7 +4717,16 @@ class ExitScene extends WalkScene {
       startXFrac: 0.135, charH: 200, bgZoom: 1.0,
       title: 'OUTSIDE — the village road',
       castSwitch: true, canReset: true, noLongIdle: true,
-      props: [],
+      // Foreground dressing, placed close to the bunker door where the scene
+      // is darkest and nobody actually walks. 'fg' draws above the player
+      // (depth 34 against his 10) and scrolls a touch faster than the world
+      // (scrollFactor 1.08), which is what sells "closer to the camera" — the
+      // two together are why he passes behind it instead of in front. xFrac
+      // moves it, scale sizes it, yOff settles it into the ground; tune freely.
+      props: [
+        { kind: 'fg', tex: 'deadlog',   xFrac: 0.055, scale: 0.42, yOff: 10 },
+        { kind: 'fg', tex: 'deadplant', xFrac: 0.10,  scale: 0.36, yOff: 4 }
+      ],
       beats: [
         // 'PLAYER' so the line belongs to whichever brother was chosen.
         { at: 0,    say: [['PLAYER', '¡Hijole! What happened out here?']],
@@ -4748,22 +4770,19 @@ class JumpScene extends WalkScene {
       worldW: 'auto', groundFrac: 0.755, startXFrac: 0.04, charH: 200, bgZoom: 1.2,
       title: 'THE BURNT STREET',
       castSwitch: true, canReset: true, noLongIdle: true,
-      // No holes: this stage teaches one thing. Three heaps in the road, each
-      // tall enough that a standing jump will not clear it — he reaches about
-      // 136px straight up, so 128 means running at it.
-      // He clears 137px straight up and covers 256px of ground jumping at a
-      // walk against 478px at a run. So a heap this tall has to be jumped
-      // properly, and this wide has to be run at to clear in one — walk into
-      // it and you land on top instead, which still gets you over.
+      // No holes: this stage teaches one thing. A single broken wall sits near
+      // the middle of the road — tall enough that he cannot just walk through
+      // it, low enough that a jump lands him cleanly on top. He climbs on,
+      // crosses it, and jumps down the far side, rather than needing to clear
+      // it in one bound the way the old rubble heaps did.
       props: [
-        { xFrac: 0.26, kind: 'rubble', h: 134 },
-        { xFrac: 0.68, kind: 'rubble', h: 136 }
+        { xFrac: 0.5, kind: 'wall', h: 130 }
       ],
       beats: [
         { at: 0,    say: [['ETERWOLF', 'Road is buried. We go over it.']],
                     tip: 'PRESS  W  OR  SPACE  TO JUMP' },
-        { at: 0.20, tip: 'TOO HIGH TO STEP OVER — RUN AT IT AND JUMP' },
-        { at: 0.60, say: [['ETERWOLF', 'Good. That is as far as it goes.']],
+        { at: 0.35, tip: 'JUMP ONTO THE WALL, WALK ACROSS, JUMP DOWN THE OTHER SIDE' },
+        { at: 0.65, say: [['ETERWOLF', 'Good. That is as far as it goes.']],
                     tip: 'THAT IS EVERYTHING BUILT SO FAR' }
       ],
       exits: [
