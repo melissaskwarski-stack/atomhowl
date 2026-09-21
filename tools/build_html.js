@@ -62,6 +62,12 @@ const SCENE_SRC = {
   exit:      ['public/assets/tutorial_exit.png', 'tutorial_exit.png'],
   jump:      ['public/assets/tutorial_jump.png', 'tutorial_jump.png'],
   wallblue:  ['public/assets/wall_blue.png'],
+  // The bridge stage: the valley behind it, the span intact, and the same span
+  // broken in two. The two spans are scaled from one identical canvas so they
+  // sit exactly on top of each other and the swap does not jump.
+  bridgebg:     ['public/assets/bridge_bg.jpg'],
+  bridgespan:   ['public/assets/bridge_span.png'],
+  bridgebroken: ['public/assets/bridge_span_broken.png'],
   // ---- FOREGROUND LIST -------------------------------------------------
   // Add a line here to make a picture usable as foreground dressing. The name
   // on the left is what you then write as tex:'<name>' in a stage's props.
@@ -154,13 +160,16 @@ const media = {};
 for (const [key, candidates] of Object.entries(MEDIA_SRC)) {
   const hits = candidates.filter(([rel]) => fs.existsSync(p(rel)));
   if (!hits.length) { console.log(`media "${key}" MISSING — scene falls back`); continue; }
-  // One encode per container is enough once inlined; a second costs megabytes
-  // in the page for a format the first already covers.
-  const seen = new Set();
-  media[key] = hits.filter(([, mime]) => !seen.has(mime) && seen.add(mime))
-                   .map(([rel, mime]) => toDataUri(p(rel), mime));
-  const kb = Math.round(media[key].reduce((n, u) => n + u.length, 0) / 1024);
-  console.log(`media "${key}" <- ${hits.map(h => path.basename(h[0])).join(', ')} (${kb}KB inline)`);
+  // Only the first encode goes in. The rest are the same clip again in
+  // another container, and inlined that is megabytes of page for a format the
+  // first already plays — the menu video's H.264 twin alone is 1.7MB base64,
+  // and it exists only for Safari. The hosted build ships every encode, since
+  // there the browser fetches the one it wants and the others cost nothing.
+  media[key] = [toDataUri(p(hits[0][0]), hits[0][1])];
+  const kb = Math.round(media[key][0].length / 1024);
+  const rest = hits.slice(1).map(h => path.basename(h[0]));
+  console.log(`media "${key}" <- ${path.basename(hits[0][0])} (${kb}KB inline)` +
+    (rest.length ? `  [${rest.join(', ')} left out of the single file]` : ''));
 }
 const mediaBlock = `/* Streamed media paths */ window.MEDIA = ${JSON.stringify(media)};`;
 

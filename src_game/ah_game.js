@@ -659,6 +659,9 @@ const WORLD_W = 2400;
 const WORLD_H = 720;
 const GROUND_Y = 648;          // top surface of the street
 const GRAVITY = 1500;
+// How long a character stands before moving on to its next idle pose.
+// Only a fallback: each one states its own step in its art.
+const IDLE_LONG_MS = 5000;
 
 // ---- how big is a person, and therefore everything else --------------------
 // A stage says how many screen pixels one metre is on the plane the brothers
@@ -744,6 +747,13 @@ const CAST = [];
     // some long idles are a one-off (two bites of a burger), others carry on
     // until you move (strumming a guitar)
     d.longIdleOnce = !!d.art.longIdleOnce;
+    // Standing still is a sequence, not a single pose. A character may name
+    // its own order; one that does not gets the old two-step behaviour —
+    // plain idle, then its flourish — so nothing has to change to keep working.
+    d.idleChain = (d.art.idleChain && d.art.idleChain.length)
+                ? d.art.idleChain.slice()
+                : ['idle', d.longIdle].filter(Boolean);
+    d.idleStepMs = d.art.idleStepMs || d.longIdleMs || IDLE_LONG_MS;
     d.dir = !!d.art.directional;
     CAST.push(d);
   });
@@ -784,6 +794,28 @@ const ACTION_FALLBACK = {
   runshootin:  ['runshootin', 'runshoot', 'shootin', 'shoot', 'idle'],
   akrunshootin: ['akrunshootin', 'akshootin', 'runshootin', 'akrunshoot', 'shoot', 'idle']
 };
+// Which standing pose belongs this far into a rest.
+//
+// Wolffel settles side-on the moment he stops, turns three-quarters on eight
+// seconds later, and eight after that digs the burger out of his pocket. The
+// chain and the step are the character's, so this is the only place that has
+// to know how a long stand is paced.
+//
+// Two things pull him back off the end of it: `done`, once a one-shot
+// flourish has played out, and `allowLong` false, which is a stage saying the
+// flourish does not belong here at all. Both walk back past the flourish
+// rather than to the front of the chain, so he keeps whatever quiet pose he
+// had reached.
+function idlePose(hero, restSince, now, done, allowLong) {
+  const chain = hero && hero.idleChain;
+  if (!chain || !chain.length) return 'idle';
+  let max = chain.length - 1;
+  if (done || allowLong === false)
+    while (max > 0 && chain[max] === hero.longIdle) max--;
+  const step = hero.idleStepMs || IDLE_LONG_MS;
+  let i = restSince ? Math.floor((now - restSince) / step) : 0;
+  return chain[Math.max(0, Math.min(i, max))];
+}
 function heroHas(hero, action) { return !!(hero && hero.art.anims[action]); }
 function heroAction(hero, action) {
   if (!hero) return action;
@@ -2681,8 +2713,6 @@ class GameScene extends Phaser.Scene {
           !this.player.anims.isPlaying) {
         this.longIdleDone = true;
       }
-      const bored = this.restSince && this.aliveEnemies() === 0 &&
-                    time - this.restSince > ((this.hero.longIdleMs) || IDLE_LONG_MS);
 
       // sword swing owns the sprite until it finishes
       if (time < this.swordAnimUntil) {
@@ -2698,8 +2728,10 @@ class GameScene extends Phaser.Scene {
         // back to an empty-handed idle between swings.
         else if (time < this.comboUntil && heroHas(this.hero, 'swordguard')) want = 'swordguard';
         else if (moving) want = this.walkMode ? 'walk' : 'run';
-        else if (bored && !this.longIdleDone) want = this.hero.longIdle || 'idle';
-        else want = 'idle';
+        // Nothing left to shoot and he finds something to do with his hands;
+        // with the street still live he only gets the quiet poses.
+        else want = idlePose(this.hero, this.restSince, time, this.longIdleDone,
+                             this.aliveEnemies() === 0);
         const key = heroAnim(this.hero, want, this.facing);
         // There is no armed walk in the art, so walking and firing borrows the
         // run-and-gun cycle slowed to the ground speed, which keeps the feet
@@ -3029,9 +3061,6 @@ const RUN_SPEED    = 560;
 // Combat runs by default (X drops it to the walk); the exploration sprint is
 // faster still because there is nothing there to run into.
 const COMBAT_SPEED = 340;
-// Fallback for a character that does not state its own.
-const IDLE_LONG_MS = 5000;
-
 // ------------------------------------------------------------------ //
 //  GAMEPAD                                                            //
 //  The pad does not get an input path of its own. It types.           //
@@ -3346,7 +3375,11 @@ function driveWalker(scene, p, keys, onGround) {
   if (keys.A.isDown || keys.LEFT.isDown)  move -= 1;
   if (keys.D.isDown || keys.RIGHT.isDown) move += 1;
   if (move !== 0) p._facing = move;
-  const sprint = !!(keys.SHIFT && keys.SHIFT.isDown);
+  // A stage can take the sprint away. The bridge does, and has to: a
+  // sprinting single jump carries 452px here and a walking double only 416,
+  // so with the sprint available there is no gap width that a double jump can
+  // cross and a single cannot — the stage would teach nothing.
+  const sprint = !!(keys.SHIFT && keys.SHIFT.isDown) && !(scene.cfg && scene.cfg.noSprint);
   // Everything here is in the stage's own scale: a bigger man takes bigger
   // strides and a bigger leap, so the motion reads the same at any size.
   const k = scene.playScale || 1;
@@ -3355,11 +3388,22 @@ function driveWalker(scene, p, keys, onGround) {
   const wantJump = Phaser.Input.Keyboard.JustDown(keys.W)
                 || Phaser.Input.Keyboard.JustDown(keys.SPACE)
                 || Phaser.Input.Keyboard.JustDown(keys.UP);
-  if (wantJump && onGround) {
+  // Touching down clears the count, so the second jump is only ever available
+  // once he has left the floor.
+  if (onGround) p._jumpsUsed = 0;
+  const maxJumps = (scene.cfg && scene.cfg.doubleJump) ? 2 : 1;
+  if (wantJump && (p._jumpsUsed || 0) < maxJumps) {
+    // The air jump starts from a standstill vertically rather than adding to
+    // whatever he had left, or a jump tapped at the top of the arc barely
+    // registers while one tapped while falling throws him miles.
     p.setVelocityY(-640 * k);
     // Forward momentum during jump: natural platformer feel
     p.setVelocityX((move || p._facing) * 140 * k);
+    p._jumpsUsed = (p._jumpsUsed || 0) + 1;
     Sfx.ensure(); Sfx.jump();
+    // Restart the jump art on the second one so it reads as a fresh push
+    // rather than continuing the fall.
+    if (p._jumpsUsed > 1 && p._real) { p._airPhase = undefined; p._curAnim = ''; }
   }
 
   const hero = p._hero;
@@ -3382,12 +3426,10 @@ function driveWalker(scene, p, keys, onGround) {
   // A tutorial stage says what it teaches and nothing else — no taking the
   // guitar off his back halfway through learning to jump.
   const allowLong = !(scene.cfg && scene.cfg.noLongIdle);
-  const boredAt = (hero && hero.longIdleMs) || IDLE_LONG_MS;
   if (hero && hero.longIdleOnce && p._curAnim &&
       p._curAnim.indexOf('-' + hero.longIdle) === 2 && !p.anims.isPlaying) {
     p._longIdleDone = true;
   }
-  const bored = allowLong && p._restSince && !p._longIdleDone && now - p._restSince > boredAt;
 
   if (p._real) {
     // picking himself up owns the sprite until it finishes
@@ -3396,7 +3438,7 @@ function driveWalker(scene, p, keys, onGround) {
     const want = !onGround ? airAction(hero, p.body.velocity.y, p)
                : now < (p._landUntil || 0) ? 'land'
                : moving    ? (sprint ? 'run' : 'walk')
-               : bored     ? (hero.longIdle || 'idle') : 'idle';
+               : idlePose(hero, p._restSince, now, p._longIdleDone, allowLong);
     const key = heroAnim(hero, want, p._facing);
     if (p._curAnim !== key) { playAction(p, hero, want, p._facing); p._curAnim = key; }
   } else {
@@ -4926,9 +4968,9 @@ class JumpScene extends WalkScene {
       // crosses it, and jumps down the far side, rather than needing to clear
       // it in one bound the way the old rubble heaps did.
       props: [
-        // 0.9m — waist-high on a 1.8m man. It was 1.17m and dominated the
-        // street. topFrac is where its walkable capstone is in the picture.
-        { xFrac: 0.5, kind: 'wall', m: 0.9, topFrac: 0.19 }
+        // 0.72m — about thigh height on a 1.8m man. Came down from 1.17m and
+        // then 0.9m, both of which still dominated the street.
+        { xFrac: 0.5, kind: 'wall', m: 0.72, topFrac: 0.19 }
         // Foreground dressing goes here too — same block as the village road:
         //   { kind: 'fg', tex: 'deadlog', xFrac: 0.2, scale: 0.6, yOff: 10 },
       ],
@@ -4940,7 +4982,8 @@ class JumpScene extends WalkScene {
                     tip: 'THAT IS EVERYTHING BUILT SO FAR' }
       ],
       exits: [
-        { xFrac: 0.99, w: 90, label: 'END OF WHAT IS BUILT ▶', target: 'MenuScene' }
+        { xFrac: 0.99, w: 90, target: 'BridgeScene', auto: true,
+          silent: true, fadeMs: 320 }
       ],
       drawFallback(WW) {
         const g = this.add.graphics().setDepth(-20);
@@ -4952,6 +4995,164 @@ class JumpScene extends WalkScene {
           g.fillStyle(0xd85a1c, 0.35); g.fillRect(x + 140, 320, 40, 52);
         }
         g.fillStyle(0x120d0a, 1); g.fillRect(0, 560, WW, 160);
+      }
+    });
+  }
+}
+
+// ================================================================== //
+//  TUTORIAL 3 — THE BRIDGE (learn the double jump)                   //
+//                                                                    //
+//  The middle span is walked onto, shakes under them, breaks in two   //
+//  and drops into the valley. What is left is a gap too wide for one  //
+//  jump, so the only way across is to jump again in mid-air.          //
+//                                                                    //
+//  Layering, back to front: the burning valley, then the roadway on   //
+//  each side, then the span over the ravine between them.             //
+// ================================================================== //
+class BridgeScene extends WalkScene {
+  constructor() { super('BridgeScene'); }
+  create() {
+    this.cameras.main.fadeIn(600, 0, 0, 0);
+    this.buildWalk({
+      bgKey: 'scene_bridgebg',
+      worldW: 'auto', groundFrac: 0.68, startXFrac: 0.05, bgZoom: 1.0,
+      // Pulled back, so the whole bridge reads in one view — which means the
+      // brothers are smaller here than in the street stages. That is the
+      // framing this set piece wants rather than an inconsistency: 90 px/m
+      // against the street's 167 puts them at 162px. Everything else follows
+      // from it, so the jump shrinks with them and the gap below stays honest.
+      pxPerM: 90,
+      title: 'THE BRIDGE',
+      castSwitch: true, canReset: true, noLongIdle: true,
+      // The whole point of the stage — and the reason the sprint is off, see
+      // the note on the sprint gate in driveWalker.
+      doubleJump: true, noSprint: true,
+      // The ravine, and its width is the whole design. Measured in-game at
+      // this scale, walking: one jump carries 266px, two carry 416px. 330px
+      // sits between them with room either side — a quarter more than one
+      // jump can reach, and a fifth inside what two can, so mistiming the
+      // second press still gets him across.
+      gaps: [{ atFrac: 0.40, wFrac: 0.183 }],
+      bridge: {
+        // The span is placed from the ravine rather than positioned by hand,
+        // so the two cannot drift apart: centred on the hole and a little
+        // wider than it, to land on the roadway at each end.
+        overlap: 1.14,
+        // How far short of the crack it goes, as a fraction of the span's
+        // width — he never gets to set foot on it.
+        triggerFrac: 0.55,
+        // Where the roadway sits inside the picture, measured off the art: the
+        // median top of its painted silhouette. There is sky above the deck and
+        // hanging reinforcement below, so this cannot be assumed.
+        deckFrac: 0.308
+      },
+      beats: [
+        { at: 0, say: [['PLAYER', 'Bridge is still standing. Come on.']],
+                 tip: 'CROSS THE BRIDGE' }
+      ],
+      exits: [
+        { xFrac: 0.985, w: 90, target: 'MenuScene', auto: true,
+          silent: true, fadeMs: 320 }
+      ],
+      drawFallback(WW) {
+        const g = this.add.graphics().setDepth(-20);
+        g.fillStyle(0x1b1410, 1); g.fillRect(0, 0, WW, 720);
+        g.fillStyle(0x7a2c10, 0.6); g.fillRect(0, 260, WW, 200);
+      }
+    });
+    this._armBridge();
+  }
+
+  // The span: drawn over the ravine, solid while it stands, and rigged to come
+  // down the first time someone is standing on it.
+  _armBridge() {
+    const cfg = this.cfg, b = cfg.bridge;
+    if (!b || !this.textures.exists('scene_bridgespan')) return;
+    const WW = this.worldW, gY = this.groundY;
+
+    // Both taken from the hole in the floor, so moving the ravine moves the
+    // bridge with it.
+    const g = (cfg.gaps && cfg.gaps.length) ? cfg.gaps[0] : null;
+    const gx0 = g ? g.atFrac * WW : WW * 0.42;
+    const gx1 = g ? (g.atFrac + g.wFrac) * WW : WW * 0.58;
+    const cx = (gx0 + gx1) / 2;
+    const wantW = (gx1 - gx0) * (b.overlap || 1.14);
+
+    this.span = this.add.image(cx, 0, 'scene_bridgespan').setDepth(4);
+    const sc = wantW / this.span.width;
+    this.span.setScale(sc);
+    // Put the painted roadway exactly on the stage's floor line, so stepping
+    // off the road onto the bridge is level.
+    this.span.y = gY + this.span.displayHeight * (0.5 - b.deckFrac);
+
+    // Solid only across the deck, and only as deep as the roadway — the art
+    // hangs broken reinforcement well below it and none of that is standable.
+    const deckW = wantW * 0.96;
+    const deckTop = gY;
+    this.spanBody = this.add.rectangle(cx, deckTop + 30, deckW, 60, 0x000000, 0).setDepth(-1);
+    this.physics.add.existing(this.spanBody, true);
+    this.solidsW.push(this.spanBody);
+    this.physics.add.collider(this.player, this.spanBody);
+
+    this.bridgeState = 'intact';
+    this._spanX = cx; this._spanW = wantW;
+    // Where the ground stops being solid, and the line he must not cross.
+    this._gapLeft = gx0;
+    this._triggerX = gx0 - (b.triggerFrac != null ? b.triggerFrac : 0.55) * wantW;
+  }
+
+  update() {
+    super.update();
+    if (!this.span || this.bridgeState !== 'intact') return;
+    // It goes while he is still on solid road, short of the crack — he never
+    // gets to set foot on the span.
+    if (this.player.x >= this._triggerX) this._collapse();
+  }
+
+  _collapse() {
+    this.bridgeState = 'shaking';
+    Sfx.ensure();
+    const cx = this._spanX;
+
+    // The ground goes first: an earthquake he feels before he sees what it did.
+    this.cameras.main.shake(1100, 0.007);
+
+    // Then the span shudders on its own, as the warning that it is about to go.
+    this.tweens.add({
+      targets: this.span, x: cx + 5, duration: 55, yoyo: true, repeat: 17,
+      onComplete: () => {
+        this.span.x = cx;
+        this.bridgeState = 'falling';
+        // Swap to the broken picture. Both were scaled from one canvas, so this
+        // lands in exactly the same place and only the cracks change.
+        this.span.setTexture('scene_bridgebroken');
+        this.cameras.main.shake(320, 0.011);
+
+        // It is no longer standable the instant it breaks.
+        if (this.spanBody) {
+          const body = this.spanBody;
+          this.spanBody = null;
+          const i = this.solidsW.indexOf(body);
+          if (i >= 0) this.solidsW.splice(i, 1);
+          body.body.enable = false;
+          body.destroy();
+        }
+        // If he is still on it he goes down with it; _catchFall puts him back
+        // on the near side rather than killing him.
+
+        // Then it drops away and is gone.
+        this.tweens.add({
+          targets: this.span, y: this.span.y + 520, alpha: 0,
+          duration: 900, ease: 'Quad.easeIn',
+          onComplete: () => {
+            this.span.destroy(); this.span = null;
+            this.bridgeState = 'gone';
+            // Only once it is actually gone does he draw the conclusion.
+            this._say([['PLAYER', 'Looks like we have to jump it.']]);
+            this._showTip('JUMP, THEN JUMP AGAIN IN MID-AIR TO CLEAR THE GAP');
+          }
+        });
       }
     });
   }
@@ -5331,7 +5532,7 @@ window.__game = new Phaser.Game({
   scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
   physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
   scene: [BootScene, StartScene, MenuScene, CharSelectScene, IntroDialogueScene,
-          BunkerScene, ExitScene, JumpScene,
+          BunkerScene, ExitScene, JumpScene, BridgeScene,
           CityScene, ShopFrontScene, ShopScene, GameScene, DebugScene]
 });
 

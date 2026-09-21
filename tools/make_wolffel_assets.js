@@ -27,6 +27,9 @@ const A = rel => path.join(ROOT, 'public/assets', rel);
 const OUT = path.join(ROOT, 'build/wf_assets.js');
 
 const SRC = {
+  // Two standing poses, played in order — see the idle chain below.
+  // Side-on, squared up the way the walk leaves him.
+  idle0:  A('wf_idle_side.gif'),
   idle:   A('wf_idle_se.gif'),      // 3/4 view, breathing on the spot
   walk:   A('wf_walk_east.gif'),
   run:    A('wf_sprint_east.gif'),
@@ -64,7 +67,7 @@ const LOOP_FROM = { aim: 7 };
 const CHEW = [4, 5, 6, 5];
 // The arm swings wide in the aim and the burger comes up across the body, so
 // both would shimmy if each frame were centred on its own silhouette.
-const SHARE_X = ['aim', 'burger', 'sword', 'crouch', 'jump', 'p45', 'pfire'];
+const SHARE_X = ['idle0', 'aim', 'burger', 'sword', 'crouch', 'jump', 'p45', 'pfire'];
 
 const clips = L.loadClips(SRC);
 if (!clips.idle) { console.error('need the idle clip'); process.exit(1); }
@@ -88,6 +91,8 @@ const pool = (poolName, clip, mirror) => {
 };
 
 const K = {
+  idle0:    pool('idle0',    'idle0',  false),
+  idle0W:   pool('idle0W',   'idle0',  true),
   idle:     pool('idle',     'idle',   false),
   idleW:    pool('idleW',    'idle',   true),
   walk:     pool('walk',     'walk',   false),
@@ -166,6 +171,8 @@ const A_ = (keys, fps, repeat) => ({ fps, repeat: repeat === undefined ? -1 : re
 const anims = {};
 const add = (name, keys, fps, repeat) => { if (keys) anims[name] = A_(keys, fps, repeat); };
 
+add('idle0',     K.idle0,     5);
+add('idle0W',    K.idle0W,    5);
 add('idle',      K.idle,      5);
 add('idleW',     K.idleW,     5);
 add('walk',      K.walk,      11);
@@ -287,6 +294,12 @@ const mod = {
   charH: ih,
   hiRes: true,             // 3D render, not pixel art — scale fractionally
   directional: true,       // every side has a real key; never flipX
+  // Standing still he works down this list, one step every idleStepMs:
+  // side-on off the end of the walk, then he turns three-quarters on, then
+  // he digs the burger out. The last step is the one-shot flourish, which is
+  // what longIdle names for the scenes that suppress it.
+  idleChain: ['idle0', 'idle', 'burger'].filter(a => anims[a]),
+  idleStepMs: 8000,
   longIdle: 'burger',      // what he does when left alone
   longIdleMs: 8000,
   longIdleOnce: true,      // two bites, then back to standing
