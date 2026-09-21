@@ -3990,15 +3990,19 @@ const SLEEPER = 'WOLFFEL';        // out cold until the line that wakes him
 // The scene ends on the last line of the recording, so every spoken line here
 // is voiced; the two "..." beats carry no audio by design.
 const INTRO_LINES = [
-  { who: 'ETERWOLF', text: "Mk, what happened? Where are we?", vox: 'bunker_01' },
-  { who: 'ETERWOLF', text: "Wake up, Feli.", vox: 'bunker_02' },
-  { who: 'WOLFFEL',  text: "Hmm, what's going on? I'm hungry.", wake: true, vox: 'bunker_03' },
-  { who: 'ETERWOLF', text: "Do you remember how we got here?", vox: 'bunker_04' },
-  { who: 'WOLFFEL',  text: "No...", vox: 'bunker_05' },
+  { who: 'ETERWOLF', text: "Mk, what happened? Where are we?" },
+  { who: 'ETERWOLF', text: "Wake up, Feli." },
+  { who: 'WOLFFEL',  text: "Hmm, what's going on? I'm hungry.", wake: true },
+  { who: 'ETERWOLF', text: "Do you remember how we got here?" },
+  { who: 'WOLFFEL',  text: "No..." },
   { who: 'WOLFFEL',  text: "..." },
   { who: 'ETERWOLF', text: "..." },
-  { who: 'ETERWOLF', text: "Ok, let's get out.", vox: 'bunker_06' }
+  { who: 'ETERWOLF', text: "Ok, let's get out." }
 ];
+// No line names a recording any more — the takes were not worth keeping and
+// the scene reads better typed. Nothing below has been torn out: put a
+// `vox: 'bunker_01'` back on a line and it speaks again, paced to the clip,
+// and the recordings are still in public/assets/voice.
 
 // ---- dialogue voice ------------------------------------------------------
 // One element per clip, kept after first use: re-creating an Audio per line
@@ -4148,13 +4152,17 @@ class IntroDialogueScene extends Phaser.Scene {
     }).setOrigin(0.5, 1).setDepth(22);
 
     // Out of the conversation altogether. ESC has always done this, but only a
-    // line of grey text at the bottom of the screen said so, which is not
-    // something anyone reads while two brothers are talking at them. A button
-    // in the corner is, and the pad's Start reaches it because Start is ESC.
-    this._skip = this.add.text(W - 20, 18, 'SKIP  ▸', {
-      fontFamily: F_UI, fontSize: '12px', fontStyle: '700', color: '#f5c169',
-      backgroundColor: '#1a1410', padding: { x: 12, y: 7 }
-    }).setOrigin(1, 0).setDepth(24).setAlpha(0.85);
+    // line of grey text along the bottom said so, which is not something
+    // anyone reads while two brothers are talking at them. The pad's Start
+    // reaches it too, because Start is ESC.
+    //
+    // Just above the panel's right corner rather than away in the top of the
+    // screen: it belongs to the conversation, so it sits where the
+    // conversation is and where the eye already is.
+    this._skip = this.add.text(x + w, y - 10, 'SKIP  ▸', {
+      fontFamily: F_UI, fontSize: '13px', fontStyle: '700', color: '#f5c169',
+      backgroundColor: '#1a1410', padding: { x: 13, y: 7 }
+    }).setOrigin(1, 1).setDepth(24).setAlpha(0.9);
     this._skip.setInteractive({ useHandCursor: true })
       .on('pointerover', () => this._skip.setColor('#ffffff'))
       .on('pointerout',  () => this._skip.setColor('#f5c169'))
