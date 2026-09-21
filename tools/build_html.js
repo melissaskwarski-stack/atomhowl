@@ -69,16 +69,18 @@ const SCENE_SRC = {
   // The bridge stage, in three layers: the valley behind it, the roadway on
   // each side of the ravine (one picture holding both, with an empty band
   // between them), and the section that spans the band. The stage reads its
-  // own geometry back off these — the lip of the painted roadway is where the
-  // hole in the floor starts — so redrawing them moves the stage with them.
   // The double-jump-and-dash stage: one painting, and the stage reads its
   // ledges off it by fraction.
   dashstage:  ['public/assets/dash_stage.jpg'],
   // The street in front of the shop: a descent onto its pavement and a dark
   // way in under the TIENDA sign.
   shopstreet: ['public/assets/shop_street.jpg'],
+  // The bridge. The backdrop IS the bridge — both roadways, their railings,
+  // the arches and the ivy are painted into it — so the stage reads where
+  // they are instead of drawing a second bridge over the top, which is what
+  // it used to do and why there were two of them at two heights. Only the
+  // span is separate, because it has to break in half and fall.
   bridgebg:   ['public/assets/bridge_bg.jpg'],
-  bridgeends: ['public/assets/bridge_ends.png'],
   bridgespan: ['public/assets/bridge_span.png'],
   // ---- FOREGROUND LIST -------------------------------------------------
   // Add a line here to make a picture usable as foreground dressing. The name
