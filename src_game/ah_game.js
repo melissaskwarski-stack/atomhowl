@@ -5138,9 +5138,35 @@ class JumpScene extends WalkScene {
       props: [
         // 0.72m — about thigh height on a 1.8m man. Came down from 1.17m and
         // then 0.9m, both of which still dominated the street.
-        { xFrac: 0.5, kind: 'wall', m: 0.72, topFrac: 0.19 }
-        // Foreground dressing goes here too — same block as the village road:
-        //   { kind: 'fg', tex: 'deadlog', xFrac: 0.2, scale: 0.6, yOff: 10 },
+        { xFrac: 0.5, kind: 'wall', m: 0.72, topFrac: 0.19 },
+
+        // ---- FOREGROUND DRESSING -------------------------------------------
+        // Dead growth at both ends of the street, close enough to the camera
+        // that the brothers pass BEHIND it — depth 34 against the player's 10,
+        // and 8% faster than the world, which is what sells the distance.
+        //
+        // yOff 212 stands them on the bottom edge of the frame rather than on
+        // the road: the floor line is at 508 and the view ends at 720, and a
+        // thing in front of the camera should run off the bottom of the shot.
+        //
+        // Placed for where you are standing when you see them, not for where
+        // they sit on the painting. Phaser draws a prop at x - scrollX*factor,
+        // so at 1.08 the camera drags it an extra 8% of however far it has
+        // travelled: by the far end of this street that is 82px of leftward
+        // drift, and the log has to be written further RIGHT than the picture
+        // puts it to land at the edge of the frame when you arrive. The plant
+        // needs no such correction — you see it with the camera still at zero.
+        //
+        // The plant twice, the second one mirrored and smaller at the very
+        // edge, so it reads as a clump rather than one repeated cutout.
+        { kind: 'fg', tex: 'deadplant', xFrac: 0.045, scale: 1.55, yOff: 212 },
+        { kind: 'fg', tex: 'deadplant', xFrac: 0.012, scale: 1.25, yOff: 212,
+          flip: true },
+        { kind: 'fg', tex: 'deadlog',   xFrac: 0.985, scale: 1.31, yOff: 212 }
+        // Add your own the same way:
+        //   { kind: 'fg', tex: '<name>', xFrac: 0..1, scale: n, yOff: n, flip: true }
+        // The name is whatever you listed in tools/build_html.js; xFrac moves
+        // it, scale sizes it, yOff settles it, flip mirrors it.
       ],
       beats: [
         { at: 0,    say: [['ETERWOLF', 'Road is buried. We go over it.']],
