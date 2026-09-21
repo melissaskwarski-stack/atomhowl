@@ -4162,7 +4162,9 @@ class IntroDialogueScene extends Phaser.Scene {
     this._skip = this.add.text(x + w, y - 10, 'SKIP  ▸', {
       fontFamily: F_UI, fontSize: '13px', fontStyle: '700', color: '#f5c169',
       backgroundColor: '#1a1410', padding: { x: 13, y: 7 }
-    }).setOrigin(1, 1).setDepth(24).setAlpha(0.9);
+      // Depth 30, above the two of them at 25 — at 24 it was drawing behind
+      // Wolffel's shoulder, which is exactly where it now sits.
+    }).setOrigin(1, 1).setDepth(30).setAlpha(0.9);
     this._skip.setInteractive({ useHandCursor: true })
       .on('pointerover', () => this._skip.setColor('#ffffff'))
       .on('pointerout',  () => this._skip.setColor('#f5c169'))
