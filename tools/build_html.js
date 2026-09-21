@@ -49,8 +49,12 @@ function encodeScene(file) {
   if (!isOpaque(buf)) return toDataUri(file);                          // needs alpha
   fs.mkdirSync(TMP, { recursive: true });
   const dst = path.join(TMP, path.basename(file, path.extname(file)) + '.jpg');
+  // q:v 4 rather than 3. Every backdrop is inlined into the page, and the
+  // page has a 30MB ceiling it has to stay under; across the six painted
+  // stages this is most of half a megabyte for a difference nobody has picked
+  // out on a moving background.
   execFileSync(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-y',
-    '-i', file, '-q:v', '3', dst]);
+    '-i', file, '-q:v', '4', dst]);
   return toDataUri(dst, 'image/jpeg');
 }
 
