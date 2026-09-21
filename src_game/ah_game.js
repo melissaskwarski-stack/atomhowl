@@ -4298,8 +4298,10 @@ class WalkScene extends Phaser.Scene {
     slab(cursor, WW);
     const floor = this.solidsW[0];
 
-    // A gap needs an edge you can see, or it is an invisible pit.
-    gaps.forEach(g => {
+    // A gap needs an edge you can see, or it is an invisible pit — unless the
+    // stage has painted what is down there, in which case the hole should show
+    // it rather than a black slab laid over the top of it.
+    if (cfg.gapShade !== false) gaps.forEach(g => {
       [g.x0, g.x1].forEach((x, i) => {
         const e = this.add.rectangle(x, groundY + 30, 10, 64, 0x0b0907, 0.9).setDepth(2);
         e.setOrigin(i === 0 ? 1 : 0, 0.5);
@@ -4999,54 +5001,138 @@ class JumpScene extends WalkScene {
     });
   }
 }
+// Where the painted bridge actually is inside its picture.
+//
+// The two pictures are drawn on one canvas: the ends art carries the roadway
+// on each side with an empty band between them, and the span art carries the
+// middle section that fills that band. Rather than transcribe their
+// coordinates into constants that quietly rot the next time the art is
+// redrawn, this reads them back off the texture — the lip of each roadway, the
+// row the road surface sits on, and how far the stonework hangs below it.
+//
+// The textures ship as data URIs, so they are same-origin and readable. One
+// scan per texture, cached by key.
+const _bridgeArt = {};
+function bridgeArt(scene, key) {
+  if (_bridgeArt[key] !== undefined) return _bridgeArt[key];
+  let out = null;
+  try {
+    const src = scene.textures.get(key).getSourceImage();
+    const cv = document.createElement('canvas');
+    cv.width = src.width; cv.height = src.height;
+    const cx = cv.getContext('2d');
+    cx.drawImage(src, 0, 0);
+    const d = cx.getImageData(0, 0, src.width, src.height).data;
+    const tops = new Array(src.width).fill(-1);
+    let bottom = -1;
+    for (let x = 0; x < src.width; x++) {
+      for (let y = 0; y < src.height; y++)
+        if (d[(y * src.width + x) * 4 + 3] > 60) { tops[x] = y; break; }
+      for (let y = src.height - 1; y >= 0; y--)
+        if (d[(y * src.width + x) * 4 + 3] > 60) { if (y > bottom) bottom = y; break; }
+    }
+    // The empty band across the middle, if there is one.
+    let g0 = -1, g1 = -1;
+    for (let x = 0; x < src.width; x++) if (tops[x] < 0) { if (g0 < 0) g0 = x; g1 = x; }
+    // The road surface: the median painted top over a strip of real roadway.
+    // The median, not the highest — a lamp post or a parapet should not be
+    // mistaken for the deck.
+    const med = a => { if (!a.length) return 0; a.sort((p, q) => p - q); return a[a.length >> 1]; };
+    const strip = (x0, x1) => {
+      const col = [];
+      for (let x = Math.max(0, x0); x < Math.min(src.width, x1); x++)
+        if (tops[x] >= 0) col.push(tops[x]);
+      return med(col);
+    };
+    const deck = g0 > 0
+      ? Math.round((strip(g0 - 220, g0) + strip(g1 + 1, g1 + 221)) / 2)  // both lips
+      : strip(Math.round(src.width * 0.35), Math.round(src.width * 0.65));
+    out = { w: src.width, h: src.height, g0, g1, deck, bottom };
+  } catch (e) { out = null; }   // tainted or missing: the caller falls back
+  _bridgeArt[key] = out;
+  return out;
+}
 
 // ================================================================== //
 //  TUTORIAL 3 — THE BRIDGE (learn the double jump)                   //
 //                                                                    //
-//  The middle span is walked onto, shakes under them, breaks in two   //
-//  and drops into the valley. What is left is a gap too wide for one  //
-//  jump, so the only way across is to jump again in mid-air.          //
+//  Three layers, back to front: the valley, the roadway on each side  //
+//  of the ravine, and the section that spans it. The span is walked   //
+//  towards, shakes, and crumbles away to nothing, leaving a gap too   //
+//  wide for one jump. The only way across is to jump again in mid-air.//
 //                                                                    //
-//  Layering, back to front: the burning valley, then the roadway on   //
-//  each side, then the span over the ravine between them.             //
+//  Everything here is placed off the art rather than off hand-tuned   //
+//  fractions: the ravine sits exactly where the painted roadway ends. //
 // ================================================================== //
 class BridgeScene extends WalkScene {
   constructor() { super('BridgeScene'); }
+
   create() {
     this.cameras.main.fadeIn(600, 0, 0, 0);
+    const H = 720;
+
+    // ---- the frame, measured off the roadway art ----------------------
+    // The ends art is drawn to nearly fill the view: it is the whole set, not
+    // scenery behind one, and its buildings are what give the ravine its
+    // depth. Everything else is then in its scale.
+    const ends = bridgeArt(this, 'scene_bridgeends');
+    // The stage's scale. 60 px/m keeps the brothers small against the
+    // buildings, which is the framing this set piece wants — the whole bridge
+    // reads in one view rather than one abutment filling the screen.
+    const PX_PER_M = 60;
+    // How wide the ravine can be is not a free choice, and the arithmetic is
+    // not to be trusted for it — this was settled by walking a brother at it
+    // and watching where he lands. At 2.15 of his own heights one jump still
+    // reaches the far lip; at 2.4 it falls in and two jumps carry him over.
+    // So 2.4, the narrowest width that one jump cannot cheat.
+    //
+    // The margin on the far side is wider in play than it looks in a test.
+    // The second jump is worth most at the top of the arc, and a test harness
+    // stepping a headless page cannot press it there the way a player does,
+    // so a measured double jump is the pessimistic one.
+    const ravine = Math.round(2.4 * HUMAN_M * PX_PER_M);
+    // The valley painting, scaled to the height of the view, sets how wide the
+    // stage is. Anything wider and the backdrop runs out and gets mirrored to
+    // cover the rest, which puts a seam and a second burning city in the far
+    // end of the shot.
+    let bgW = 2000;
+    if (this.textures.exists('scene_bridgebg')) {
+      const bg = this.textures.get('scene_bridgebg').getSourceImage();
+      if (bg && bg.height) bgW = Math.round(bg.width * (H / bg.height));
+    }
+    let s = 1, roadL = 900, deckPx = 300, worldW = bgW;
+    if (ends && ends.g0 > 0) {
+      // So the two roadways plus the ravine between them come out exactly as
+      // wide as the painting behind them.
+      const roadArtW = ends.g0 + (ends.w - ends.g1);
+      s = (bgW - ravine) / roadArtW;
+      // Unless that leaves the roadway an odd size in the frame, in which case
+      // the frame wins and the far end is mirrored after all.
+      s = Math.min(Math.max(s, H * 0.55 / ends.h), H * 0.98 / ends.h);
+      roadL = ends.g0 * s;                      // painted road, left lip inward
+      deckPx = ends.deck * s;                   // road surface, from the art's top
+      worldW = Math.round(roadL + ravine + (ends.w - ends.g1) * s);
+    }
+    const gapL = Math.round(roadL);
+    const gapR = gapL + ravine;
+    const groundY = Math.round(H * 0.72);
+
     this.buildWalk({
       bgKey: 'scene_bridgebg',
-      worldW: 'auto', groundFrac: 0.68, startXFrac: 0.05, bgZoom: 1.0,
-      // Pulled back, so the whole bridge reads in one view — which means the
-      // brothers are smaller here than in the street stages. That is the
-      // framing this set piece wants rather than an inconsistency: 90 px/m
-      // against the street's 167 puts them at 162px. Everything else follows
-      // from it, so the jump shrinks with them and the gap below stays honest.
-      pxPerM: 90,
+      worldW, groundY, startXFrac: 0.06, bgZoom: 1.0,
+      pxPerM: PX_PER_M,
       title: 'THE BRIDGE',
       castSwitch: true, canReset: true, noLongIdle: true,
-      // The whole point of the stage — and the reason the sprint is off, see
-      // the note on the sprint gate in driveWalker.
+      // The whole point of the stage — and the reason the sprint is off. A
+      // sprinting single jump outreaches a walking double, so with the sprint
+      // available no ravine width can need two jumps and not one, and the
+      // stage would teach nothing.
       doubleJump: true, noSprint: true,
-      // The ravine, and its width is the whole design. Measured in-game at
-      // this scale, walking: one jump carries 266px, two carry 416px. 330px
-      // sits between them with room either side — a quarter more than one
-      // jump can reach, and a fifth inside what two can, so mistiming the
-      // second press still gets him across.
-      gaps: [{ atFrac: 0.40, wFrac: 0.183 }],
-      bridge: {
-        // The span is placed from the ravine rather than positioned by hand,
-        // so the two cannot drift apart: centred on the hole and a little
-        // wider than it, to land on the roadway at each end.
-        overlap: 1.14,
-        // How far short of the crack it goes, as a fraction of the span's
-        // width — he never gets to set foot on it.
-        triggerFrac: 0.55,
-        // Where the roadway sits inside the picture, measured off the art: the
-        // median top of its painted silhouette. There is sky above the deck and
-        // hanging reinforcement below, so this cannot be assumed.
-        deckFrac: 0.308
-      },
+      gaps: [{ atFrac: gapL / worldW, wFrac: ravine / worldW }],
+      // The ravine is a hole through to the burning valley, and the painting
+      // already shows it. The generic pit shading would lay a black slab over
+      // that view.
+      gapShade: false,
       beats: [
         { at: 0, say: [['PLAYER', 'Bridge is still standing. Come on.']],
                  tip: 'CROSS THE BRIDGE' }
@@ -5061,75 +5147,98 @@ class BridgeScene extends WalkScene {
         g.fillStyle(0x7a2c10, 0.6); g.fillRect(0, 260, WW, 200);
       }
     });
-    this._armBridge();
+
+    this._artScale = s;
+    this._deckPx = deckPx;
+    this._gapL = gapL; this._gapR = gapR;
+    this._drawRoadway(ends);
+    this._armSpan();
   }
 
-  // The span: drawn over the ravine, solid while it stands, and rigged to come
-  // down the first time someone is standing on it.
-  _armBridge() {
-    const cfg = this.cfg, b = cfg.bridge;
-    if (!b || !this.textures.exists('scene_bridgespan')) return;
-    const WW = this.worldW, gY = this.groundY;
+  // The two roadways. One picture holds both, so each is drawn once and
+  // cropped to its own half, then slid until its painted lip lands on the edge
+  // of the hole in the floor.
+  _drawRoadway(ends) {
+    if (!ends || ends.g0 <= 0) return;
+    const s = this._artScale, top = this.groundY - this._deckPx;
+    const piece = (cropX, cropW, lipX, lipAt) => {
+      const img = this.add.image(0, 0, 'scene_bridgeends')
+        .setOrigin(0, 0).setScale(s).setDepth(-6);
+      img.setCrop(cropX, 0, cropW, ends.h);
+      img.x = lipAt - lipX * s;
+      img.y = top;
+      return img;
+    };
+    // left half: its right lip goes on the near edge of the ravine
+    piece(0, ends.g0, ends.g0, this._gapL);
+    // right half: its left lip goes on the far edge
+    piece(ends.g1 + 1, ends.w - ends.g1 - 1, ends.g1 + 1, this._gapR);
+  }
 
-    // Both taken from the hole in the floor, so moving the ravine moves the
-    // bridge with it.
-    const g = (cfg.gaps && cfg.gaps.length) ? cfg.gaps[0] : null;
-    const gx0 = g ? g.atFrac * WW : WW * 0.42;
-    const gx1 = g ? (g.atFrac + g.wFrac) * WW : WW * 0.58;
-    const cx = (gx0 + gx1) / 2;
-    const wantW = (gx1 - gx0) * (b.overlap || 1.14);
+  // The span across the ravine: a slice of the painted middle section, cut to
+  // the width of the hole and stood on the same road line as the two sides, so
+  // walking onto it is level. Solid until it goes.
+  _armSpan() {
+    if (!this.textures.exists('scene_bridgespan')) return;
+    const art = bridgeArt(this, 'scene_bridgespan');
+    if (!art) return;
+    const s = this._artScale;
+    // A little onto each roadway, so there is no seam at the joins.
+    const OVERLAP = 14;
+    const x0 = this._gapL - OVERLAP, wantW = (this._gapR + OVERLAP) - x0;
+    // Taken from the middle of the slab, where it is continuous roadway. Its
+    // painted ends are not used: they are as wide as the whole picture and the
+    // ravine is a fraction of that, so fitting the whole thing in would squash
+    // the rubble to a smear.
+    const sliceW = Math.min(art.w, Math.round(wantW / s));
+    const sliceX = Math.round((art.w - sliceW) / 2);
 
-    this.span = this.add.image(cx, 0, 'scene_bridgespan').setDepth(4);
-    const sc = wantW / this.span.width;
-    this.span.setScale(sc);
-    // Put the painted roadway exactly on the stage's floor line, so stepping
-    // off the road onto the bridge is level.
-    this.span.y = gY + this.span.displayHeight * (0.5 - b.deckFrac);
+    // Above the dark fill and the two edges buildWalk draws down every hole in
+    // the floor — while the span is there the hole is covered, and those are
+    // what should be underneath it. Still well below the player at depth 10.
+    this.span = this.add.image(0, 0, 'scene_bridgespan')
+      .setOrigin(0, 0).setScale(s).setDepth(3);
+    this.span.setCrop(sliceX, 0, sliceW, art.h);
+    this.span.x = x0 - sliceX * s;
+    this.span.y = this.groundY - art.deck * s;
 
-    // Solid only across the deck, and only as deep as the roadway — the art
-    // hangs broken reinforcement well below it and none of that is standable.
-    const deckW = wantW * 0.96;
-    const deckTop = gY;
-    this.spanBody = this.add.rectangle(cx, deckTop + 30, deckW, 60, 0x000000, 0).setDepth(-1);
+    // Solid across the deck only, and only as deep as the road — the art hangs
+    // broken reinforcement well below it and none of that is standable.
+    this.spanBody = this.add.rectangle(x0 + wantW / 2, this.groundY + 30,
+                                       wantW, 60, 0x000000, 0).setDepth(-1);
     this.physics.add.existing(this.spanBody, true);
     this.solidsW.push(this.spanBody);
     this.physics.add.collider(this.player, this.spanBody);
 
     this.bridgeState = 'intact';
-    this._spanX = cx; this._spanW = wantW;
-    // Where the ground stops being solid, and the line he must not cross.
-    this._gapLeft = gx0;
-    this._triggerX = gx0 - (b.triggerFrac != null ? b.triggerFrac : 0.55) * wantW;
+    // It goes while he is still on solid road: far enough along that he is
+    // clearly committed to the crossing, well short of ever standing on it.
+    this._triggerX = this._gapL - 3.4 * HUMAN_M * (this.pxPerM || 60);
   }
 
   update() {
     super.update();
     if (!this.span || this.bridgeState !== 'intact') return;
-    // It goes while he is still on solid road, short of the crack — he never
-    // gets to set foot on the span.
     if (this.player.x >= this._triggerX) this._collapse();
   }
 
   _collapse() {
     this.bridgeState = 'shaking';
     Sfx.ensure();
-    const cx = this._spanX;
+    const sx = this.span.x;
 
     // The ground goes first: an earthquake he feels before he sees what it did.
     this.cameras.main.shake(1100, 0.007);
 
     // Then the span shudders on its own, as the warning that it is about to go.
     this.tweens.add({
-      targets: this.span, x: cx + 5, duration: 55, yoyo: true, repeat: 17,
+      targets: this.span, x: sx + 5, duration: 55, yoyo: true, repeat: 17,
       onComplete: () => {
-        this.span.x = cx;
+        this.span.x = sx;
         this.bridgeState = 'falling';
-        // Swap to the broken picture. Both were scaled from one canvas, so this
-        // lands in exactly the same place and only the cracks change.
-        this.span.setTexture('scene_bridgebroken');
-        this.cameras.main.shake(320, 0.011);
+        this.cameras.main.shake(400, 0.010);
 
-        // It is no longer standable the instant it breaks.
+        // It stops holding weight the instant it starts to go.
         if (this.spanBody) {
           const body = this.spanBody;
           this.spanBody = null;
@@ -5138,13 +5247,14 @@ class BridgeScene extends WalkScene {
           body.body.enable = false;
           body.destroy();
         }
-        // If he is still on it he goes down with it; _catchFall puts him back
-        // on the near side rather than killing him.
 
-        // Then it drops away and is gone.
+        // And then it crumbles rather than dropping out of frame in one piece:
+        // it sinks a little, loses its edges and fades out, the way a concrete
+        // deck gives way. A slab sliding straight down reads as the picture
+        // being moved; this reads as the bridge coming apart.
         this.tweens.add({
-          targets: this.span, y: this.span.y + 520, alpha: 0,
-          duration: 900, ease: 'Quad.easeIn',
+          targets: this.span, y: this.span.y + 90, alpha: 0,
+          duration: 1500, ease: 'Sine.easeIn',
           onComplete: () => {
             this.span.destroy(); this.span = null;
             this.bridgeState = 'gone';
@@ -5153,8 +5263,28 @@ class BridgeScene extends WalkScene {
             this._showTip('JUMP, THEN JUMP AGAIN IN MID-AIR TO CLEAR THE GAP');
           }
         });
+        // Dust off the broken ends, so the fade has something to hide behind.
+        this._dust();
       }
     });
+  }
+
+  // A few puffs lifting off the ravine edges while the span goes.
+  _dust() {
+    const gY = this.groundY;
+    for (let i = 0; i < 14; i++) {
+      const x = this._gapL + Math.random() * (this._gapR - this._gapL);
+      const r = 14 + Math.random() * 26;
+      // In front of the span and the pit shading, behind the brothers.
+      const p = this.add.circle(x, gY + 10 + Math.random() * 40, r, 0x6b5f52, 0.5)
+        .setDepth(5);
+      this.tweens.add({
+        targets: p, y: p.y - 60 - Math.random() * 90, alpha: 0,
+        scale: 1.8 + Math.random(), duration: 1100 + Math.random() * 700,
+        delay: Math.random() * 500, ease: 'Sine.easeOut',
+        onComplete: () => p.destroy()
+      });
+    }
   }
 }
 

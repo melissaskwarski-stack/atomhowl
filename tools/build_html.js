@@ -62,12 +62,14 @@ const SCENE_SRC = {
   exit:      ['public/assets/tutorial_exit.png', 'tutorial_exit.png'],
   jump:      ['public/assets/tutorial_jump.png', 'tutorial_jump.png'],
   wallblue:  ['public/assets/wall_blue.png'],
-  // The bridge stage: the valley behind it, the span intact, and the same span
-  // broken in two. The two spans are scaled from one identical canvas so they
-  // sit exactly on top of each other and the swap does not jump.
-  bridgebg:     ['public/assets/bridge_bg.jpg'],
-  bridgespan:   ['public/assets/bridge_span.png'],
-  bridgebroken: ['public/assets/bridge_span_broken.png'],
+  // The bridge stage, in three layers: the valley behind it, the roadway on
+  // each side of the ravine (one picture holding both, with an empty band
+  // between them), and the section that spans the band. The stage reads its
+  // own geometry back off these — the lip of the painted roadway is where the
+  // hole in the floor starts — so redrawing them moves the stage with them.
+  bridgebg:   ['public/assets/bridge_bg.jpg'],
+  bridgeends: ['public/assets/bridge_ends.png'],
+  bridgespan: ['public/assets/bridge_span.png'],
   // ---- FOREGROUND LIST -------------------------------------------------
   // Add a line here to make a picture usable as foreground dressing. The name
   // on the left is what you then write as tex:'<name>' in a stage's props.
