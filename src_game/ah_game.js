@@ -669,7 +669,18 @@ const GRAVITY = 1500;
 // and a sword swing and a reload look the same.
 //
 // Going closer than this needs bigger source art, not a bigger number.
-const PX_PER_M_MAX = 125;
+//
+// It is a reference, not a rule, and the paintings overrule it. A stage is
+// painted at a scale of its own — the bunker's bunks and the village's blast
+// doorway each say how big a metre is in that picture — and a brother drawn
+// smaller than that stands in the room like a child. Being the right size in
+// the world is worth more than being sharp, so a stage states the scale its
+// art wants and takes the magnification. This number is what that costs:
+// past it, every pixel over 225 is invented.
+//
+// Taller source renders are the one thing that buys both, and the build picks
+// them up with no code change.
+const PX_PER_M_SHARP = 125;
 const PX_PER_M_MIN = 50;
 
 // How long a character stands before moving on to its next idle pose.
@@ -5045,22 +5056,21 @@ class BunkerScene extends WalkScene {
     this.cameras.main.fadeIn(450, 0, 0, 0);
     this.buildWalk({
       bgKey: 'scene_bunker',
-      // This room used to be drawn at 210 px/m, which put the brothers at
-      // 378px — two thirds larger than the 225px of art that exists, so every
-      // frame was being magnified and every frame looked soft. At the ceiling
-      // they are sharp.
+      // The scale this painting is drawn at. The bunks measure ~205px between
+      // mattresses with the art shown at zoom 1.35, which made it 210 px/m
+      // then; at zoom 1 the room is 74% of that and so is its metre — 156. A
+      // brother at 280px stands against these bunks the way a man stands
+      // against a bunk, which he did not at 225.
       //
-      // The room comes down with them as far as it can: zoom 1 is the floor,
-      // because below it the painting stops covering the view and leaves a
-      // black band above the pipes. Even so they are smaller against this room
-      // than they were — 225 against a 720px room where it was 378 against a
-      // 972px one — and closing that gap needs taller source art rather than a
-      // bigger number here.
+      // 1.24x magnification, so he is a little soft here. Drawing the room
+      // smaller instead is not on offer: zoom 1 is the floor, and below it the
+      // painting stops covering the view and leaves a black band above the
+      // pipes.
       //
       // playScale 1 keeps the pacing this stage always had; nothing in here is
-      // jumped over, so the walk does not have to scale with them.
+      // jumped over, so the walk does not have to scale with him.
       worldW: 'auto', groundFrac: 0.872, startXFrac: 0.06, bgZoom: 1.0,
-      pxPerM: PX_PER_M_MAX, playScale: 1,
+      pxPerM: 156, playScale: 1,
       title: 'THE BUNKER — quarantine shelter',
       castSwitch: true, canReset: true, noLongIdle: true,
       beats: [
@@ -5117,12 +5127,11 @@ class ExitScene extends WalkScene {
       // fills the frame exactly and the brothers walk low in it, the way a road
       // is usually framed.
       // 167 px/m is this painting's true scale, measured off the blast doorway
-      // they walk out of: 345px from road to lintel, a 2.07m door. They are
-      // drawn at the ceiling instead, which makes them a little small for the
-      // road and perfectly sharp — a trade this game makes everywhere, since
-      // 167 was magnifying 225px of art by a third.
+      // they walk out of: 345px from road to lintel, a 2.07m door. Drawn any
+      // smaller they are children standing in their own street, so 167, and
+      // the third of magnification that comes with it.
       worldW: 'auto', groundFrac: 0.755, bgContentFrac: 0.8411,
-      startXFrac: 0.135, bgZoom: 1.0, pxPerM: PX_PER_M_MAX,
+      startXFrac: 0.135, bgZoom: 1.0, pxPerM: 167,
       title: 'OUTSIDE — the village road',
       castSwitch: true, canReset: true, noLongIdle: true,
       // Foreground dressing, placed close to the bunker door where the scene
@@ -5149,7 +5158,8 @@ class ExitScene extends WalkScene {
       //  tools/build_html.js, and it can be used here straight away.
       // ------------------------------------------------------------------
       props: [
-        { kind: 'fg', tex: 'deadplant', xFrac: 0.10, scale: 0.54, yOff: 6 }
+        // (nothing here yet — the dead plant that used to sit at 0.10 was
+        //  hanging off the ground and in the way of the door, so it is gone)
       ],
       beats: [
         // 'PLAYER' so the line belongs to whichever brother was chosen.
@@ -5193,16 +5203,16 @@ class JumpScene extends WalkScene {
       bgKey: 'scene_jump',
       // The same scale as the village road, because the brothers walk straight
       // from one into the other and any change in their size pops on the cut.
-      // Both are at the ceiling now.
       //
-      // The wall below is given in metres, and the jump scales with px/m too,
-      // so dropping the scale shrinks the wall and the leap together and the
-      // stage plays exactly as it did — just smaller and sharper.
+      // The wall below is given in metres and the jump scales with px/m too,
+      // so the whole stage moves together with this number and plays the same
+      // at any of them.
+      //
       // He starts clear of the growth at the left end. At 0.04 he spawned
       // inside the dead plant, which draws in front of him — so the stage
       // opened on a man you could not see.
       worldW: 'auto', groundFrac: 0.755, startXFrac: 0.14, bgZoom: 1.2,
-      pxPerM: PX_PER_M_MAX,
+      pxPerM: 167,
       title: 'THE BURNT STREET',
       castSwitch: true, canReset: true, noLongIdle: true,
       // No holes: this stage teaches one thing. A single broken wall sits near

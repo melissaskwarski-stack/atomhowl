@@ -74,6 +74,9 @@ const SCENE_SRC = {
   // The double-jump-and-dash stage: one painting, and the stage reads its
   // ledges off it by fraction.
   dashstage:  ['public/assets/dash_stage.jpg'],
+  // The street in front of the shop: a descent onto its pavement and a dark
+  // way in under the TIENDA sign.
+  shopstreet: ['public/assets/shop_street.jpg'],
   bridgebg:   ['public/assets/bridge_bg.jpg'],
   bridgeends: ['public/assets/bridge_ends.png'],
   bridgespan: ['public/assets/bridge_span.png'],
