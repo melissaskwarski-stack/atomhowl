@@ -5165,7 +5165,10 @@ class JumpScene extends WalkScene {
         { kind: 'fg', tex: 'deadplant', xFrac: 0.045, scale: 1.55, yOff: 212 },
         { kind: 'fg', tex: 'deadplant', xFrac: 0.012, scale: 1.25, yOff: 212,
           flip: true },
-        { kind: 'fg', tex: 'deadlog',   xFrac: 0.985, scale: 1.31, yOff: 212 }
+        // Mirrored: the asset's splintered end points up-left, and the
+        // reference has it pointing up-right, out of the corner of the frame.
+        { kind: 'fg', tex: 'deadlog',   xFrac: 0.985, scale: 1.31, yOff: 212,
+          flip: true }
         // Add your own the same way:
         //   { kind: 'fg', tex: '<name>', xFrac: 0..1, scale: n, yOff: n, flip: true }
         // The name is whatever you listed in tools/build_html.js; xFrac moves
