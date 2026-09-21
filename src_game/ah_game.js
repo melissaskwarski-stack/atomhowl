@@ -659,6 +659,19 @@ const WORLD_W = 2400;
 const WORLD_H = 720;
 const GROUND_Y = 648;          // top surface of the street
 const GRAVITY = 1500;
+// The brothers are 3D renders, not pixel art, and their frames are about
+// 225px tall. Drawn any larger than that the renderer is inventing pixels
+// that were never painted, and the result is soft — which is what a stage at
+// 210 px/m was doing, magnifying them by 1.67. So this is the ceiling: 1.8m
+// at 125 px/m is 225px, one screen pixel per painted pixel, as sharp as they
+// can be. Stages may go smaller — the bridge sits at 60 to take in the whole
+// span — but the floor is around 50, below which the silhouette stops reading
+// and a sword swing and a reload look the same.
+//
+// Going closer than this needs bigger source art, not a bigger number.
+const PX_PER_M_MAX = 125;
+const PX_PER_M_MIN = 50;
+
 // How long a character stands before moving on to its next idle pose.
 // Only a fallback: each one states its own step in its art.
 const IDLE_LONG_MS = 5000;
@@ -1122,18 +1135,28 @@ class BootScene extends Phaser.Scene {
     g.generateTexture('puff', 16, 16);
     g.destroy();
 
-    // Doorway glow: a soft warm oval, taller than it is wide, drawn as stacked
-    // rings so it falls off smoothly instead of showing a hard edge. Added to
-    // the scene with ADD blending, so it lights the door rather than covering
-    // it — which is the point of using it in place of a marker hanging in the
-    // air above the frame.
+    // Doorway glow: the shape of a door, not a lamp on the floor in front of
+    // one. It was an oval, and an oval sitting at the foot of a two-storey
+    // blast door reads as a puddle of light rather than as the door being
+    // live — the door is the thing you walk into, so the door is what should
+    // light up.
+    //
+    // Built as a stack of rectangles each inset one pixel further than the
+    // last, all at the same small alpha. A pixel FEATHER in from the edge is
+    // covered by every rectangle from there inward, so the brightness ramps
+    // evenly over that border and then holds flat across the middle: a lit
+    // slab with soft edges rather than a blob with a hot centre. It is drawn
+    // with ADD blending, so it lifts the painted door instead of covering it.
     g = this.make.graphics({ add: false });
-    for (let i = 26; i > 0; i--) {
-      g.fillStyle(0xf2b13c, 0.030 * (1 - i / 28));
-      g.fillEllipse(70, 110, i * 5.2, i * 8.2);
+    const GW = 180, GH = 360, FEATHER = 44;
+    for (let d = 0; d < FEATHER; d++) {
+      g.fillStyle(0xf2b13c, 0.013);
+      g.fillRoundedRect(d, d, GW - 2 * d, GH - 2 * d, 24);
     }
-    g.fillStyle(0xffd98a, 0.10); g.fillEllipse(70, 110, 46, 80);
-    g.generateTexture('doorglow', 140, 220);
+    // A little more heat through the middle of the slab.
+    g.fillStyle(0xffd98a, 0.07);
+    g.fillRoundedRect(FEATHER, FEATHER, GW - 2 * FEATHER, GH - 2 * FEATHER, 14);
+    g.generateTexture('doorglow', GW, GH);
     g.destroy();
 
     // spawn warning marker
@@ -4273,6 +4296,11 @@ class WalkScene extends Phaser.Scene {
       const s = (H / (img.height * cf)) * zoom;
       img.setScale(s);
       img.y = H - img.height * s * cf;
+      // Where the painting ended up, so anything that belongs to a painted
+      // feature — the blast door's glow — can be placed as a fraction of the
+      // art rather than as a pixel count that goes wrong the moment the zoom
+      // changes.
+      this.bgGeom = { x: 0, y: img.y, w: img.width * s, h: img.height * s };
       this.bgWidth = Math.round(img.width * s);
       if (cfg.worldW === 'auto') WW = this.bgWidth;
       if (this.bgWidth < WW) {
@@ -4498,11 +4526,30 @@ class WalkScene extends Phaser.Scene {
       // the door is the thing you walk into, so it is the thing that should
       // read as live. `silent` is for an exit that is just the edge of the
       // stage: nothing is drawn and you simply walk off it.
+      //
+      // The glow is the size and shape of the painted door, which is why it is
+      // given as `glowFrac` — the door's box as fractions of the backdrop,
+      // read off the picture with a ruler. Fractions rather than pixels
+      // because the backdrop is scaled to the view and to the stage's zoom, so
+      // any pixel count written here would be wrong the next time either
+      // changed. `glowW`/`glowH`/`glowY` in world pixels remain for a stage
+      // with no backdrop to measure against.
       let glow = null;
       if (ex.glow) {
-        glow = this.add.image(ex.x, groundY - (ex.glowH || 80), 'doorglow')
+        let gx = ex.x, gy, gw, gh;
+        const f = ex.glowFrac, bg = this.bgGeom;
+        if (f && bg) {
+          gw = (f.x1 - f.x0) * bg.w;
+          gh = (f.y1 - f.y0) * bg.h;
+          gx = bg.x + (f.x0 + f.x1) / 2 * bg.w;
+          gy = bg.y + (f.y0 + f.y1) / 2 * bg.h;
+        } else {
+          gw = ex.glowW || 150; gh = ex.glowH || 260;
+          gy = groundY - (ex.glowY != null ? ex.glowY : gh / 2);
+        }
+        glow = this.add.image(gx, gy, 'doorglow')
           .setDepth(6).setBlendMode(Phaser.BlendModes.ADD).setAlpha(0)
-          .setScale(ex.glowScale || 1);
+          .setDisplaySize(gw, gh);
       }
       if (ex.silent) return { m: null, lbl: null, glow, ex };
       // A glowing door does not also need a caret bobbing over it; noArrow keeps
@@ -4892,16 +4939,22 @@ class BunkerScene extends WalkScene {
     this.cameras.main.fadeIn(450, 0, 0, 0);
     this.buildWalk({
       bgKey: 'scene_bunker',
-      // bunker_wide.png is painted larger than the other backdrops — the bunk
-      // frame and blast door put a standing man at roughly 280px. It is also
-      // shown zoomed in, so the room is walked through and revealed rather
-      // than taken in at a glance; the floor line follows the zoom by fraction.
-      // 210 px/m measured off the bunk beds (~205px between mattresses). That
-      // puts the brothers at 378px, which is the size they already were — this
-      // stage was right, so it is pinned rather than re-derived. playScale 1
-      // keeps its pacing untouched; nothing in here is jumped over.
-      worldW: 'auto', groundFrac: 0.872, startXFrac: 0.06, bgZoom: 1.35,
-      pxPerM: 210, playScale: 1,
+      // This room used to be drawn at 210 px/m, which put the brothers at
+      // 378px — two thirds larger than the 225px of art that exists, so every
+      // frame was being magnified and every frame looked soft. At the ceiling
+      // they are sharp.
+      //
+      // The room comes down with them as far as it can: zoom 1 is the floor,
+      // because below it the painting stops covering the view and leaves a
+      // black band above the pipes. Even so they are smaller against this room
+      // than they were — 225 against a 720px room where it was 378 against a
+      // 972px one — and closing that gap needs taller source art rather than a
+      // bigger number here.
+      //
+      // playScale 1 keeps the pacing this stage always had; nothing in here is
+      // jumped over, so the walk does not have to scale with them.
+      worldW: 'auto', groundFrac: 0.872, startXFrac: 0.06, bgZoom: 1.0,
+      pxPerM: PX_PER_M_MAX, playScale: 1,
       title: 'THE BUNKER — quarantine shelter',
       castSwitch: true, canReset: true, noLongIdle: true,
       beats: [
@@ -4911,8 +4964,12 @@ class BunkerScene extends WalkScene {
                     tip: 'PRESS  E  AT THE DOOR' }
       ],
       exits: [
+        // The blast door's box, measured off bunker_wide.png: the slab runs
+        // x 0.838-0.952 and y 0.264-0.775 of the painting. The whole door
+        // lights up rather than a puddle of light pooling at its foot.
         { xFrac: 0.90, w: 180, label: 'EXIT THE BUNKER', target: 'ExitScene',
-          glow: true, noArrow: true, glowH: 110, glowScale: 1.25 }
+          glow: true, noArrow: true,
+          glowFrac: { x0: 0.838, x1: 0.952, y0: 0.264, y1: 0.775 } }
       ],
       drawFallback(WW) {
         const g = this.add.graphics().setDepth(-20);
@@ -4953,11 +5010,13 @@ class ExitScene extends WalkScene {
       // the picture instead of the file and zoom drops to 1 — the content then
       // fills the frame exactly and the brothers walk low in it, the way a road
       // is usually framed.
-      // 167 px/m, measured off the blast doorway they walk out of: 345px from
-      // road to lintel, which at this scale is a 2.07m door. They come out at
-      // 300px instead of the 200px that made them look like children.
+      // 167 px/m is this painting's true scale, measured off the blast doorway
+      // they walk out of: 345px from road to lintel, a 2.07m door. They are
+      // drawn at the ceiling instead, which makes them a little small for the
+      // road and perfectly sharp — a trade this game makes everywhere, since
+      // 167 was magnifying 225px of art by a third.
       worldW: 'auto', groundFrac: 0.755, bgContentFrac: 0.8411,
-      startXFrac: 0.135, bgZoom: 1.0, pxPerM: 167,
+      startXFrac: 0.135, bgZoom: 1.0, pxPerM: PX_PER_M_MAX,
       title: 'OUTSIDE — the village road',
       castSwitch: true, canReset: true, noLongIdle: true,
       // Foreground dressing, placed close to the bunker door where the scene
@@ -5026,12 +5085,15 @@ class JumpScene extends WalkScene {
     this.cameras.main.fadeIn(600, 0, 0, 0);
     this.buildWalk({
       bgKey: 'scene_jump',
-      // Same 167 px/m as the village road. The two paintings are displayed at
-      // within 1% of each other (864px against 856px) and the brothers walk
-      // straight from one into the other, so they have to be the same size in
-      // both — they were 200px and 240px before, which popped on the change.
+      // The same scale as the village road, because the brothers walk straight
+      // from one into the other and any change in their size pops on the cut.
+      // Both are at the ceiling now.
+      //
+      // The wall below is given in metres, and the jump scales with px/m too,
+      // so dropping the scale shrinks the wall and the leap together and the
+      // stage plays exactly as it did — just smaller and sharper.
       worldW: 'auto', groundFrac: 0.755, startXFrac: 0.04, bgZoom: 1.2,
-      pxPerM: 167,
+      pxPerM: PX_PER_M_MAX,
       title: 'THE BURNT STREET',
       castSwitch: true, canReset: true, noLongIdle: true,
       // No holes: this stage teaches one thing. A single broken wall sits near
