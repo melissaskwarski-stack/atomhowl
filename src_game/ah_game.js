@@ -3050,6 +3050,15 @@ const CROUCH_SPEED = 0;
 // through, stretched along the direction of travel and fading behind him, which
 // is what motion blur actually is. Plus the lean going in and the dust coming
 // out the other end.
+// The dash in a walking stage. A flat burst that ignores gravity for its own
+// length, which is what makes it a traversal move rather than a faster walk:
+// the jump gets you up, the dash gets you across. The numbers are the combat
+// burst's, so the move feels the same wherever you meet it.
+const WDASH_SPEED = 760;
+const WDASH_MS    = 260;
+const WDASH_COOL  = 620;      // after it ends, before another is allowed
+const WDASH_GHOST = 30;       // one blur copy this often while he travels
+
 const DASH_LEAN     = 0.17;   // ~10 degrees into the run
 const DASH_GHOST_MS = 26;     // one blur copy this often while he travels
 const DASH_GHOST_FADE = 260;
@@ -3403,15 +3412,54 @@ function driveWalker(scene, p, keys, onGround) {
   // sprinting single jump carries 452px here and a walking double only 416,
   // so with the sprint available there is no gap width that a double jump can
   // cross and a single cannot — the stage would teach nothing.
-  const sprint = !!(keys.SHIFT && keys.SHIFT.isDown) && !(scene.cfg && scene.cfg.noSprint);
+  const canDash = !!(scene.cfg && scene.cfg.dash);
+  // A stage has one or the other on Shift, never both: holding it to sprint
+  // would fire a dash on every first frame of the hold.
+  const sprint = !canDash && !!(keys.SHIFT && keys.SHIFT.isDown) &&
+                 !(scene.cfg && scene.cfg.noSprint);
   // Everything here is in the stage's own scale: a bigger man takes bigger
   // strides and a bigger leap, so the motion reads the same at any size.
   const k = scene.playScale || 1;
-  p.setVelocityX(move * (sprint ? RUN_SPEED : WALK_SPEED) * k);
+  const now = scene.time.now;
 
-  const wantJump = Phaser.Input.Keyboard.JustDown(keys.W)
+  // ---- dash ----------------------------------------------------------
+  // One in the air per trip off the ground, so a crossing is jump, jump,
+  // dash — and not an indefinite glide across any gap at all.
+  if (onGround) p._airDashUsed = false;
+  if (canDash && keys.SHIFT && Phaser.Input.Keyboard.JustDown(keys.SHIFT) &&
+      now >= (p._dashReadyAt || 0) && (onGround || !p._airDashUsed)) {
+    p._dashDir = move || p._facing || 1;
+    p._dashUntil = now + WDASH_MS;
+    p._dashReadyAt = now + WDASH_MS + WDASH_COOL;
+    p._dashGhostAt = 0;
+    if (!onGround) p._airDashUsed = true;
+    Sfx.ensure(); Sfx.dash();
+    scene.cameras.main.shake(90, 0.003);
+  }
+  const dashing = now < (p._dashUntil || 0);
+  if (dashing) {
+    // Flat: gravity off for the burst, so it carries the same distance
+    // whether it is started on the floor or at the top of a jump.
+    if (p.body.allowGravity) p.body.setAllowGravity(false);
+    p.setVelocity(p._dashDir * WDASH_SPEED * k, 0);
+    if (p._real && now >= (p._dashGhostAt || 0)) {
+      p._dashGhostAt = now + WDASH_GHOST;
+      const gh = scene.add.image(p.x, p.y, p.texture.key, p.frame.name)
+        .setOrigin(p.originX, p.originY).setDepth(p.depth - 1)
+        .setFlipX(p.flipX).setAlpha(0.42)
+        .setScale(p.scaleX * DASH_STRETCH, p.scaleY * (2 - DASH_STRETCH));
+      scene.tweens.add({ targets: gh, alpha: 0, duration: DASH_GHOST_FADE,
+                         onComplete: () => gh.destroy() });
+    }
+  } else {
+    if (!p.body.allowGravity) p.body.setAllowGravity(true);
+    p.setVelocityX(move * (sprint ? RUN_SPEED : WALK_SPEED) * k);
+  }
+
+  const wantJump = !dashing &&
+                  (Phaser.Input.Keyboard.JustDown(keys.W)
                 || Phaser.Input.Keyboard.JustDown(keys.SPACE)
-                || Phaser.Input.Keyboard.JustDown(keys.UP);
+                || Phaser.Input.Keyboard.JustDown(keys.UP));
   // Touching down clears the count, so the second jump is only ever available
   // once he has left the floor.
   if (onGround) p._jumpsUsed = 0;
@@ -3432,7 +3480,6 @@ function driveWalker(scene, p, keys, onGround) {
 
   const hero = p._hero;
   // same landing beat as combat: only after real air time
-  const now = scene.time.now;
   if (onGround && p._airSince && now - p._airSince > 160 && heroHas(hero, 'land')) {
     p._landUntil = now + LAND_MS;
   }
@@ -3459,7 +3506,8 @@ function driveWalker(scene, p, keys, onGround) {
     // picking himself up owns the sprite until it finishes
     if (now < (p._downUntil || 0)) { p.setVelocityX(0); return move; }
 
-    const want = !onGround ? airAction(hero, p.body.velocity.y, p)
+    const want = dashing ? 'dash'
+               : !onGround ? airAction(hero, p.body.velocity.y, p)
                : now < (p._landUntil || 0) ? 'land'
                : moving    ? (sprint ? 'run' : 'walk')
                : idlePose(hero, p._restSince, now, p._longIdleDone, allowLong);
@@ -4344,8 +4392,6 @@ class WalkScene extends Phaser.Scene {
     };
     gaps.forEach(g => { slab(cursor, g.x0); cursor = g.x1; });
     slab(cursor, WW);
-    const floor = this.solidsW[0];
-
     // A gap needs an edge you can see, or it is an invisible pit — unless the
     // stage has painted what is down there, in which case the hole should show
     // it rather than a black slab laid over the top of it.
@@ -4358,6 +4404,32 @@ class WalkScene extends Phaser.Scene {
       dark.setOrigin(0.5, 0);
     });
 
+
+    // Ledges. The floor is one line across the world, which is all a street
+    // needs; a stage that is climbed needs surfaces at several heights. Each
+    // one is given as fractions of the BACKDROP — the painting is what says
+    // where the stonework is, and fractions survive a change of zoom the way
+    // a pixel count would not.
+    //
+    // They are one-way by default: only the top face collides, so a jump from
+    // underneath passes through and lands on it instead of cracking his head
+    // on the underside. `solid: true` makes a ledge block from every side.
+    this.ledges = (cfg.ledges || []).map(L => {
+      const bg = this.bgGeom;
+      const x0 = bg ? bg.x + L.x0 * bg.w : L.x0 * WW;
+      const x1 = bg ? bg.x + L.x1 * bg.w : L.x1 * WW;
+      const top = bg ? bg.y + L.y * bg.h : L.y * H;
+      const h = L.h || 420;                     // deep enough not to fall through
+      const box = this.add.rectangle((x0 + x1) / 2, top + h / 2, x1 - x0, h,
+                                     0x000000, 0).setDepth(-1);
+      this.physics.add.existing(box, true);
+      if (!L.solid) {
+        const c = box.body.checkCollision;
+        c.down = false; c.left = false; c.right = false;
+      }
+      this.solidsW.push(box);
+      return box;
+    });
 
     // Props. A wall is solid, so it is something to climb onto and cross;
     // 'fg'/'log' sit in front of everything at a touch more than world speed,
@@ -5346,7 +5418,7 @@ class BridgeScene extends WalkScene {
                  tip: 'CROSS THE BRIDGE' }
       ],
       exits: [
-        { xFrac: 0.985, w: 90, target: 'MenuScene', auto: true,
+        { xFrac: 0.985, w: 90, target: 'DashScene', auto: true,
           silent: true, fadeMs: 320 }
       ],
       drawFallback(WW) {
@@ -5575,6 +5647,64 @@ class BridgeScene extends WalkScene {
         ease: 'Sine.easeOut', onComplete: () => p.destroy()
       });
     }
+  }
+}
+
+// ================================================================== //
+//  TUTORIAL 4 — THE DROP (double jump into a dash)                   //
+//                                                                    //
+//  Three surfaces at three heights, read off the painting: the        //
+//  roadway he starts on, a ledge below and ahead of it, and the deck  //
+//  above and beyond that. Walk off the first, drop to the second,     //
+//  and leave the second with everything he has — jump, jump again,    //
+//  and dash out of the top of the arc, because the double jump alone  //
+//  runs out of height before it runs out of distance.                 //
+// ================================================================== //
+class DashScene extends WalkScene {
+  constructor() { super('DashScene'); }
+  create() {
+    this.cameras.main.fadeIn(600, 0, 0, 0);
+    this.buildWalk({
+      bgKey: 'scene_dashstage',
+      worldW: 'auto', bgZoom: 1.0, startXFrac: 0.05,
+      // The floor line is the roadway he starts on. Nothing else uses it —
+      // the whole world is a hole and every surface is a ledge — but a missed
+      // jump is put back on solid ground relative to it.
+      groundY: Math.round(720 * 0.470),
+      // Small, like the bridge: this is a wide shot and the point of it is
+      // the distance between the three surfaces, which only reads if they are
+      // all in frame at once.
+      pxPerM: 58,
+      title: 'THE DROP',
+      castSwitch: true, canReset: true, noLongIdle: true,
+      doubleJump: true, dash: true,
+      // No floor anywhere. Everything standable is a ledge, and what is not a
+      // ledge is the valley.
+      gaps: [{ atFrac: 0, wFrac: 1 }], gapShade: false,
+      // Measured off the painting. Each is the top face of a piece of
+      // stonework you can see, as a fraction of the picture.
+      ledges: [
+        { x0: 0.000, x1: 0.335, y: 0.470 },   // the roadway, with the car
+        { x0: 0.345, x1: 0.510, y: 0.552 },   // the ledge below it
+        { x0: 0.610, x1: 1.000, y: 0.372 }    // the deck above, and walkable
+      ],
+      beats: [
+        { at: 0,    say: [['PLAYER', 'Road stops here.']],
+                    tip: 'WALK RIGHT — THE ROAD RUNS OUT' },
+        { at: 0.30, tip: 'WALK OFF THE EDGE AND DROP TO THE LEDGE' },
+        { at: 0.44, say: [['PLAYER', 'That deck is too high to jump at.']],
+                    tip: 'JUMP, JUMP AGAIN, THEN SHIFT TO DASH ACROSS' }
+      ],
+      exits: [
+        { xFrac: 0.985, w: 90, target: 'MenuScene', auto: true,
+          silent: true, fadeMs: 320 }
+      ],
+      drawFallback(WW) {
+        const g = this.add.graphics().setDepth(-20);
+        g.fillStyle(0x140f0c, 1); g.fillRect(0, 0, WW, 720);
+        g.fillStyle(0x6b2a10, 0.5); g.fillRect(0, 300, WW, 220);
+      }
+    });
   }
 }
 
@@ -5952,7 +6082,7 @@ window.__game = new Phaser.Game({
   scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
   physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
   scene: [BootScene, StartScene, MenuScene, CharSelectScene, IntroDialogueScene,
-          BunkerScene, ExitScene, JumpScene, BridgeScene,
+          BunkerScene, ExitScene, JumpScene, BridgeScene, DashScene,
           CityScene, ShopFrontScene, ShopScene, GameScene, DebugScene]
 });
 

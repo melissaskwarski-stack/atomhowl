@@ -67,6 +67,9 @@ const SCENE_SRC = {
   // between them), and the section that spans the band. The stage reads its
   // own geometry back off these — the lip of the painted roadway is where the
   // hole in the floor starts — so redrawing them moves the stage with them.
+  // The double-jump-and-dash stage: one painting, and the stage reads its
+  // ledges off it by fraction.
+  dashstage:  ['public/assets/dash_stage.jpg'],
   bridgebg:   ['public/assets/bridge_bg.jpg'],
   bridgeends: ['public/assets/bridge_ends.png'],
   bridgespan: ['public/assets/bridge_span.png'],
