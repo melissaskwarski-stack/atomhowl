@@ -5126,7 +5126,10 @@ class JumpScene extends WalkScene {
       // The wall below is given in metres, and the jump scales with px/m too,
       // so dropping the scale shrinks the wall and the leap together and the
       // stage plays exactly as it did — just smaller and sharper.
-      worldW: 'auto', groundFrac: 0.755, startXFrac: 0.04, bgZoom: 1.2,
+      // He starts clear of the growth at the left end. At 0.04 he spawned
+      // inside the dead plant, which draws in front of him — so the stage
+      // opened on a man you could not see.
+      worldW: 'auto', groundFrac: 0.755, startXFrac: 0.14, bgZoom: 1.2,
       pxPerM: PX_PER_M_MAX,
       title: 'THE BURNT STREET',
       castSwitch: true, canReset: true, noLongIdle: true,
