@@ -3109,6 +3109,7 @@ const PAD_MAP = {
   2:  'K',       // X      fire / open door
   3:  'E',       // Y      swap weapon / open door
   5:  'Q',       // RB     nuke
+  8:  'ENTER',   // Back   skip what is being said
   9:  'ESC',     // Start  back to the menu / skip the cutscene
   // Clicking the left stick, where a sprint lives in most games — your thumb is
   // already on the stick that is doing the running. It was LB, which meant
@@ -3991,7 +3992,11 @@ class IntroDialogueScene extends Phaser.Scene {
     this._started = false;
     this.time.delayedCall(1500, () => this._begin());
 
-    const next = () => (this._started ? this._advance() : this._begin());
+    // A click on the SKIP button also reaches the scene's own pointer handler,
+    // so this bails once the scene is on its way out rather than stepping a
+    // line forward underneath the fade.
+    const next = () => { if (this._done) return;
+                         return this._started ? this._advance() : this._begin(); };
     this.input.on('pointerdown', next);
     this.input.keyboard.on('keydown-SPACE', next);
     this.input.keyboard.on('keydown-ENTER', next);
@@ -4056,10 +4061,25 @@ class IntroDialogueScene extends Phaser.Scene {
     this._drawMore('l');
     this.tweens.add({ targets: this._more, y: -4, yoyo: true, repeat: -1, duration: 620 });
 
-    this._hint = this.add.text(W / 2, H - 8, 'SPACE / CLICK — NEXT      ESC — SKIP', {
+    this._hint = this.add.text(W / 2, H - 8, 'SPACE / CLICK — NEXT', {
       fontFamily: F_UI, fontSize: '9px', fontStyle: '500', color: '#6b5a48'
     }).setOrigin(0.5, 1).setDepth(22);
 
+    // Out of the conversation altogether. ESC has always done this, but only a
+    // line of grey text at the bottom of the screen said so, which is not
+    // something anyone reads while two brothers are talking at them. A button
+    // in the corner is, and the pad's Start reaches it because Start is ESC.
+    this._skip = this.add.text(W - 20, 18, 'SKIP  ▸', {
+      fontFamily: F_UI, fontSize: '12px', fontStyle: '700', color: '#f5c169',
+      backgroundColor: '#1a1410', padding: { x: 12, y: 7 }
+    }).setOrigin(1, 0).setDepth(24).setAlpha(0.85);
+    this._skip.setInteractive({ useHandCursor: true })
+      .on('pointerover', () => this._skip.setColor('#ffffff'))
+      .on('pointerout',  () => this._skip.setColor('#f5c169'))
+      .on('pointerdown', () => this._finish());
+
+    // Not in _ui: everything in there is faded up when the conversation
+    // starts, and the way out should be there before it does.
     this._ui.push(this._name, this._body, this._hint);
   }
 
@@ -4644,9 +4664,41 @@ class WalkScene extends Phaser.Scene {
       fontFamily: F_UI, fontSize: '13px', fontStyle: '700', color: '#0f0c09',
       backgroundColor: '#f2b13c', padding: { x: 14, y: 7 }
     }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(41).setAlpha(0);
+
+    // A way past the talking. The lines hold long enough to read at a first
+    // pass, which is exactly the wrong length once you have heard them — so
+    // there is a button, and it only exists while someone is speaking.
+    //
+    // It sits in the corner rather than next to the speech: the speech moves
+    // with whoever said it, and a button that follows a walking man around is
+    // a thing to chase rather than a thing to press.
+    this._skip = this.add.text(1264, 690, 'SKIP  ▸', {
+      fontFamily: F_UI, fontSize: '12px', fontStyle: '700', color: '#f5c169',
+      backgroundColor: '#1a1410', padding: { x: 12, y: 7 }
+    }).setOrigin(1, 1).setScrollFactor(0).setDepth(41).setAlpha(0);
+    this._skip.setInteractive({ useHandCursor: true })
+      .on('pointerover', () => this._skip.setColor('#ffffff'))
+      .on('pointerout',  () => this._skip.setColor('#f5c169'))
+      .on('pointerdown', () => this._skipSay());
+    // And on the keyboard, where ENTER is already the "get on with it" key in
+    // the menus and the opening cutscene. It is not bound to anything in a
+    // stage, so it cannot make him jump or swing while skipping a line.
+    this.input.keyboard.on('keydown-ENTER', () => this._skipSay());
   }
 
   _say(lines) { this._sayQueue.push.apply(this._sayQueue, lines); }
+
+  // Drop the rest of what is being said and clear the bubble. Everything the
+  // lines were going to do has already happened — they are commentary on the
+  // stage, never a gate in front of it — so there is nothing to fast-forward
+  // through, only something to stop showing.
+  _skipSay() {
+    if (!this._sayQueue) return;
+    if (!this._sayQueue.length && !(this._sayText && this._sayText.alpha > 0)) return;
+    this._sayQueue.length = 0;
+    this._sayUntil = 0;
+    this.tweens.add({ targets: [this._sayName, this._sayText], alpha: 0, duration: 160 });
+  }
 
   _showTip(text) {
     if (!this._tip) return;
@@ -4681,11 +4733,29 @@ class WalkScene extends Phaser.Scene {
         const speaker = who === 'PLAYER'
           ? ((castById(this.castId) || {}).name || 'ETERWOLF')
           : who;
+        // Kill the fade first. A line that lands while the previous one is
+        // still fading out would otherwise be set to full alpha and then
+        // driven straight back to nothing by that tween still running — the
+        // line is there, correct and on the right spot over his head, and
+        // completely invisible.
+        this.tweens.killTweensOf(this._sayName);
+        this.tweens.killTweensOf(this._sayText);
         this._sayName.setText(speaker).setAlpha(1);
         this._sayText.setText(text).setAlpha(1);
         this._sayUntil = now + 1600 + text.length * 45;
       } else if (this._sayText.alpha > 0) {
         this.tweens.add({ targets: [this._sayName, this._sayText], alpha: 0, duration: 300 });
+      }
+    }
+
+    // The skip button is only there while there is something to skip.
+    if (this._skip) {
+      const talking = this._sayQueue.length > 0 || this._sayText.alpha > 0.05;
+      if (talking !== this._skipShown) {
+        this._skipShown = talking;
+        this.tweens.killTweensOf(this._skip);
+        this.tweens.add({ targets: this._skip, alpha: talking ? 0.85 : 0,
+                          duration: talking ? 200 : 160 });
       }
     }
 
