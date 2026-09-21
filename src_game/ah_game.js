@@ -4417,18 +4417,48 @@ class WalkScene extends Phaser.Scene {
         const prof = painted ? surfaceProfile(this, 'scene_wallblue', 16) : null;
         const left = x - im.displayWidth / 2;
         if (prof) {
-          prof.forEach(seg => {
-            if (!seg) return;
-            const segX = left + seg.x0 * im.displayWidth;
-            const segW = (seg.x1 - seg.x0) * im.displayWidth;
-            const topY = (im.y - im.displayHeight) + seg.topFrac * im.displayHeight;
+          // Following the painted top slice by slice put the surface where the
+          // eye expects it, and made a mess to walk on.
+          //
+          // The wall's ends taper into rubble. Its first slice sits 65px below
+          // the capstone — low enough to stand on — so he walks onto the toe
+          // and then meets the deck's face. Arcade cannot step up, and it
+          // separates a body from a static box along whichever axis overlaps
+          // least, so instead of being stopped he gets squeezed upward: the
+          // jitter. And a body wider than one slice rests on two tops at once
+          // and is resolved against both every frame, which is why Wolffel
+          // (42px across 1.34 slices) shook harder than Eterwolf (21px, 0.68).
+          //
+          // So the collision keeps only the slices near the crown — the deck —
+          // and gives each run of them ONE flat surface at its median height.
+          // The rubble toe stays painted and stops being standable, which is
+          // how a wall reads anyway: you jump onto it, you do not walk up it.
+          const live = prof.filter(Boolean);
+          const crown = Math.min.apply(null, live.map(g => g.topFrac));
+          // how far below the crown still counts as deck rather than rubble
+          const DECK_BAND = 0.35;
+          const onDeck = prof.map(g => !!g && g.topFrac <= crown + DECK_BAND);
+          const put = (x0f, x1f, topF) => {
+            const segX = left + x0f * im.displayWidth;
+            const segW = (x1f - x0f) * im.displayWidth;
+            const topY = (im.y - im.displayHeight) + topF * im.displayHeight;
             const bh = (groundY + 4) - topY;
             if (bh < 6 || segW < 2) return;      // nothing worth standing on
             const box = this.add.rectangle(segX + segW / 2, topY + bh / 2,
                                            segW, bh, 0x000000, 0).setDepth(-1);
             this.physics.add.existing(box, true);
             this.solidsW.push(box);
-          });
+          };
+          // one box per contiguous run of deck slices, flat across the run
+          let i = 0;
+          while (i < prof.length) {
+            if (!onDeck[i]) { i++; continue; }
+            let j = i;
+            while (j + 1 < prof.length && onDeck[j + 1]) j++;
+            const tops = prof.slice(i, j + 1).map(g => g.topFrac).sort((a, b) => a - b);
+            put(prof[i].x0, prof[j].x1, tops[tops.length >> 1]);
+            i = j + 1;
+          }
         } else {
           // No readable art: one box, sized off the declared surface height.
           const bw = im.displayWidth * 0.94;
@@ -4824,7 +4854,11 @@ class WalkScene extends Phaser.Scene {
     // the last place he stood, to put him back if he misses a jump
     if (onGround && Math.abs(this.player.body.velocity.x) < 40) this._safeX = this.player.x;
     this._catchFall();
-    if (!this._transitioning) driveWalker(this, this.player, this.keys, onGround);
+    // A stage can take the controls for a scripted beat — the bridge does it
+    // while the span comes down, so the earthquake happens TO him rather than
+    // being something he can walk through and out the other side of.
+    if (this._holdInput) this.player.setVelocityX(0);
+    else if (!this._transitioning) driveWalker(this, this.player, this.keys, onGround);
     this._runBeats();
 
     if (this.grain && this.game.loop.frame % 3 === 0) {
@@ -5166,6 +5200,15 @@ function bridgeArt(scene, key) {
     // The empty band across the middle, if there is one.
     let g0 = -1, g1 = -1;
     for (let x = 0; x < src.width; x++) if (tops[x] < 0) { if (g0 < 0) g0 = x; g1 = x; }
+    // Where the paint actually starts and stops. A picture is not its canvas —
+    // the span carries transparent margin on every side, and scaling by the
+    // canvas would leave the painted slab short of the roadway it is meant to
+    // reach by however much margin the exporter happened to leave.
+    let px0 = src.width, px1 = -1, py0 = src.height;
+    for (let x = 0; x < src.width; x++) if (tops[x] >= 0) {
+      if (x < px0) px0 = x; if (x > px1) px1 = x;
+      if (tops[x] < py0) py0 = tops[x];
+    }
     // The road surface: the median painted top over a strip of real roadway.
     // The median, not the highest — a lamp post or a parapet should not be
     // mistaken for the deck.
@@ -5179,7 +5222,8 @@ function bridgeArt(scene, key) {
     const deck = g0 > 0
       ? Math.round((strip(g0 - 220, g0) + strip(g1 + 1, g1 + 221)) / 2)  // both lips
       : strip(Math.round(src.width * 0.35), Math.round(src.width * 0.65));
-    out = { w: src.width, h: src.height, g0, g1, deck, bottom };
+    out = { w: src.width, h: src.height, g0, g1, deck, bottom,
+            px0, px1, py0, pw: px1 - px0 + 1, ph: bottom - py0 + 1 };
   } catch (e) { out = null; }   // tainted or missing: the caller falls back
   _bridgeArt[key] = out;
   return out;
@@ -5314,25 +5358,41 @@ class BridgeScene extends WalkScene {
     if (!this.textures.exists('scene_bridgespan')) return;
     const art = bridgeArt(this, 'scene_bridgespan');
     if (!art) return;
-    const s = this._artScale;
-    // A little onto each roadway, so there is no seam at the joins.
-    const OVERLAP = 14;
-    const x0 = this._gapL - OVERLAP, wantW = (this._gapR + OVERLAP) - x0;
-    // Taken from the middle of the slab, where it is continuous roadway. Its
-    // painted ends are not used: they are as wide as the whole picture and the
-    // ravine is a fraction of that, so fitting the whole thing in would squash
-    // the rubble to a smear.
-    const sliceW = Math.min(art.w, Math.round(wantW / s));
-    const sliceX = Math.round((art.w - sliceW) / 2);
 
-    // Above the dark fill and the two edges buildWalk draws down every hole in
-    // the floor — while the span is there the hole is covered, and those are
-    // what should be underneath it. Still well below the player at depth 10.
-    this.span = this.add.image(0, 0, 'scene_bridgespan')
-      .setOrigin(0, 0).setScale(s).setDepth(3);
-    this.span.setCrop(sliceX, 0, sliceW, art.h);
-    this.span.x = x0 - sliceX * s;
-    this.span.y = this.groundY - art.deck * s;
+    // The whole picture, scaled evenly, laid from one lip to the other with a
+    // little onto each roadway so there is no seam at the joins.
+    //
+    // Evenly, and whole. An earlier pass cut a slice out of the middle and
+    // stretched that, on the reasoning that the painted slab is as wide as its
+    // canvas and the ravine is a fraction of that — which is true, and gave a
+    // block with two straight razor edges sitting in the gap. The slab is a
+    // drawing of a bridge section; shown whole and small it reads as one, and
+    // shown as a cropped rectangle it reads as a cropped rectangle.
+    const OVERLAP = 12;
+    const x0 = this._gapL - OVERLAP, wantW = (this._gapR + OVERLAP) - x0;
+    // Off the PAINTED box, not the canvas: the picture carries transparent
+    // margin, and scaling by the canvas would leave the slab short of the
+    // roadway by however much margin the exporter left.
+    const s = wantW / art.pw;
+    this._spanScale = s;
+    this._spanW = wantW;
+
+    // Origin on the painted slab's own road surface, at its middle. Everything
+    // is then positioned by the point that has to land somewhere: the deck on
+    // the floor line, level with the roadway either side.
+    const mk = (cropX, cropW, originXpx) => {
+      const im = this.add.image(0, 0, 'scene_bridgespan')
+        .setOrigin(originXpx / art.w, art.deck / art.h)
+        .setScale(s)
+        // Above the dark fill and the two edges buildWalk draws down every
+        // hole in the floor — while the span is there the hole is covered and
+        // those belong underneath it. Still well below the player at depth 10.
+        .setDepth(3);
+      im.setCrop(cropX, 0, cropW, art.h);
+      return im;
+    };
+    this.span = mk(art.px0, art.pw, art.px0 + art.pw / 2);
+    this.span.setPosition((this._gapL + this._gapR) / 2, this.groundY);
 
     // Solid across the deck only, and only as deep as the road — the art hangs
     // broken reinforcement well below it and none of that is standable.
@@ -5343,21 +5403,69 @@ class BridgeScene extends WalkScene {
     this.physics.add.collider(this.player, this.spanBody);
 
     this.bridgeState = 'intact';
+    this.halves = null;
+    this._holdInput = false;
     // It goes while he is still on solid road: far enough along that he is
     // clearly committed to the crossing, well short of ever standing on it.
-    this._triggerX = this._gapL - 3.4 * HUMAN_M * (this.pxPerM || 60);
+    this._triggerX = this._gapL - 2.2 * HUMAN_M * (this.pxPerM || 60);
+    if (this._triggerX < 40) this._triggerX = 40;
   }
 
   update() {
     super.update();
-    if (!this.span || this.bridgeState !== 'intact') return;
+    if (!this.span || this.bridgeState !== 'intact' || this._transitioning) return;
     if (this.player.x >= this._triggerX) this._collapse();
   }
 
+  // It breaks in the middle, the two halves hinge down off the roadway they
+  // are still resting on, and then they let go. Each half keeps its own end of
+  // the painted slab, so the break is the picture coming apart rather than a
+  // rectangle being hidden.
+  // Take the controls, or give them back. Taking them drops him to a stand so
+  // he is not frozen mid-stride for the length of the set piece.
+  _hold(on) {
+    this._holdInput = on;
+    if (!on || !this.player) return;
+    this.player.setVelocity(0, 0);
+    const hero = this.player._hero;
+    if (hero) {
+      playAction(this.player, hero, 'idle', this.player._facing);
+      this.player._curAnim = heroAnim(hero, 'idle', this.player._facing);
+    }
+  }
+
+  _makeHalves() {
+    const art = bridgeArt(this, 'scene_bridgespan');
+    const mid = art.px0 + Math.floor(art.pw / 2);
+    const s = this._spanScale;
+    const half = (cropX, cropW, originXpx, atX) => {
+      const im = this.add.image(0, 0, 'scene_bridgespan')
+        .setOrigin(originXpx / art.w, art.deck / art.h)
+        .setScale(s).setDepth(3);
+      im.setCrop(cropX, 0, cropW, art.h);
+      im.setPosition(atX, this.groundY);
+      return im;
+    };
+    // Left half pivots on the left lip, right half on the right lip — the ends
+    // still carried by the roadway. Rotating about those drops the inner ends
+    // and opens the V.
+    return [
+      half(art.px0, mid - art.px0, art.px0, this._gapL - 12),
+      half(mid, art.px1 - mid + 1, art.px1 + 1, this._gapR + 12)
+    ];
+  }
+
   _collapse() {
+    if (this.bridgeState !== 'intact') return;     // only ever once
     this.bridgeState = 'shaking';
     Sfx.ensure();
     const sx = this.span.x;
+
+    // He stops where he is and watches. Without this he walks on through the
+    // shudder — nearly two seconds of it — and is standing out over the ravine
+    // on a span that is about to stop existing, which is the one place the
+    // stage is built to keep him out of.
+    this._hold(true);
 
     // The ground goes first: an earthquake he feels before he sees what it did.
     this.cameras.main.shake(1100, 0.007);
@@ -5366,9 +5474,10 @@ class BridgeScene extends WalkScene {
     this.tweens.add({
       targets: this.span, x: sx + 5, duration: 55, yoyo: true, repeat: 17,
       onComplete: () => {
+        if (!this.span) return;                    // scene restarted under us
         this.span.x = sx;
-        this.bridgeState = 'falling';
-        this.cameras.main.shake(400, 0.010);
+        this.bridgeState = 'breaking';
+        this.cameras.main.shake(420, 0.011);
 
         // It stops holding weight the instant it starts to go.
         if (this.spanBody) {
@@ -5380,41 +5489,58 @@ class BridgeScene extends WalkScene {
           body.destroy();
         }
 
-        // And then it crumbles rather than dropping out of frame in one piece:
-        // it sinks a little, loses its edges and fades out, the way a concrete
-        // deck gives way. A slab sliding straight down reads as the picture
-        // being moved; this reads as the bridge coming apart.
-        this.tweens.add({
-          targets: this.span, y: this.span.y + 90, alpha: 0,
-          duration: 1500, ease: 'Sine.easeIn',
+        // Swap the whole slab for its two halves in the same frame, in the
+        // same place, so nothing jumps: the break is the only change.
+        this.span.destroy(); this.span = null;
+        this.halves = this._makeHalves();
+        this._dust();
+
+        const [L, R] = this.halves;
+        // Hinge down off the roadway, inner ends dropping, opening the V.
+        this.tweens.add({ targets: L, rotation: 0.20, y: this.groundY + 14,
+                          duration: 620, ease: 'Quad.easeIn' });
+        this.tweens.add({ targets: R, rotation: -0.20, y: this.groundY + 14,
+                          duration: 620, ease: 'Quad.easeIn',
           onComplete: () => {
-            this.span.destroy(); this.span = null;
-            this.bridgeState = 'gone';
-            // Only once it is actually gone does he draw the conclusion.
-            this._say([['PLAYER', 'Looks like we have to jump it.']]);
-            this._showTip('JUMP, THEN JUMP AGAIN IN MID-AIR TO CLEAR THE GAP');
+            if (!this.halves) return;
+            this.bridgeState = 'falling';
+            // And then they let go and go down into the valley.
+            this.halves.forEach((h, i) => this.tweens.add({
+              targets: h, y: h.y + 420, alpha: 0,
+              rotation: h.rotation + (i === 0 ? 0.30 : -0.30),
+              duration: 1100, ease: 'Quad.easeIn',
+              onComplete: () => h.destroy()
+            }));
+            this.time.delayedCall(900, () => {
+              this.halves = null;
+              this.bridgeState = 'gone';
+              this._hold(false);
+              // Only once it is actually gone does he draw the conclusion.
+              this._say([['PLAYER', 'Looks like we have to jump it.']]);
+              this._showTip('JUMP, THEN JUMP AGAIN IN MID-AIR TO CLEAR THE GAP');
+            });
           }
         });
-        // Dust off the broken ends, so the fade has something to hide behind.
-        this._dust();
       }
     });
   }
 
-  // A few puffs lifting off the ravine edges while the span goes.
+  // Dust off the broken ends while it goes, so the drop has something to lift
+  // through. Seeded off the frame counter rather than a random number, so a
+  // replay of the stage looks the same.
   _dust() {
-    const gY = this.groundY;
-    for (let i = 0; i < 14; i++) {
-      const x = this._gapL + Math.random() * (this._gapR - this._gapL);
-      const r = 14 + Math.random() * 26;
+    const gY = this.groundY, W = this._gapR - this._gapL;
+    for (let i = 0; i < 16; i++) {
+      const f = (i * 2654435761 % 1000) / 1000;      // cheap, stable spread
+      const g = ((i * 40503) % 997) / 997;
+      const x = this._gapL + f * W;
+      const r = 14 + g * 26;
       // In front of the span and the pit shading, behind the brothers.
-      const p = this.add.circle(x, gY + 10 + Math.random() * 40, r, 0x6b5f52, 0.5)
-        .setDepth(5);
+      const p = this.add.circle(x, gY + 10 + g * 40, r, 0x6b5f52, 0.5).setDepth(5);
       this.tweens.add({
-        targets: p, y: p.y - 60 - Math.random() * 90, alpha: 0,
-        scale: 1.8 + Math.random(), duration: 1100 + Math.random() * 700,
-        delay: Math.random() * 500, ease: 'Sine.easeOut',
-        onComplete: () => p.destroy()
+        targets: p, y: p.y - 60 - f * 90, alpha: 0,
+        scale: 1.8 + g, duration: 1100 + f * 700, delay: g * 600,
+        ease: 'Sine.easeOut', onComplete: () => p.destroy()
       });
     }
   }
