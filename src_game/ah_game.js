@@ -5248,9 +5248,15 @@ class JumpScene extends WalkScene {
         // they sit on the painting. Phaser draws a prop at x - scrollX*factor,
         // so at 1.08 the camera drags it an extra 8% of however far it has
         // travelled: by the far end of this street that is 82px of leftward
-        // drift, and the log has to be written further RIGHT than the picture
-        // puts it to land at the edge of the frame when you arrive. The plant
-        // needs no such correction — you see it with the camera still at zero.
+        // drift. The plant needs no such correction — you meet it with the
+        // camera still at zero.
+        //
+        // The log is where it is so you WATCH him go behind it. The camera
+        // stops following at world 1664 and he walks the last 600px across a
+        // still frame; at 0.985 the log rendered at screen 1163 and he only
+        // reached it in the final 90px, which is no time at all. At 0.825 it
+        // renders around 790, and he crosses it with most of the street still
+        // ahead of him.
         //
         // The plant twice, the second one mirrored and smaller at the very
         // edge, so it reads as a clump rather than one repeated cutout.
@@ -5259,7 +5265,7 @@ class JumpScene extends WalkScene {
           flip: true },
         // Mirrored: the asset's splintered end points up-left, and the
         // reference has it pointing up-right, out of the corner of the frame.
-        { kind: 'fg', tex: 'deadlog',   xFrac: 0.985, scale: 1.31, yOff: 212,
+        { kind: 'fg', tex: 'deadlog',   xFrac: 0.825, scale: 1.31, yOff: 212,
           flip: true }
         // Add your own the same way:
         //   { kind: 'fg', tex: '<name>', xFrac: 0..1, scale: n, yOff: n, flip: true }
