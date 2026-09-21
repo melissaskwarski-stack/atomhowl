@@ -3293,6 +3293,54 @@ const PadHUD = {
   }
 };
 
+// Collision that follows what is actually painted, rather than one flat box.
+//
+// A ruined wall does not have a level top: the blue wall has a raised section
+// at the left, a long capstone across the middle, and a slope into rubble at
+// the right end, spanning about 60px of height between them. A single rectangle
+// can only ever match one of those, so the brothers stood correctly on one part
+// and hovered over the rest — which is exactly what they did across 83% of its
+// width. This reads the top edge of the picture and lays a short solid under
+// each slice of it, so the surface they stand on is the surface you can see.
+//
+// The texture ships as a data URI, so it is same-origin and readable; the scan
+// is a few tens of thousands of pixel tests, once, cached by texture key.
+const _profileCache = {};
+function surfaceProfile(scene, texKey, segments) {
+  const cacheKey = texKey + '@' + segments;
+  if (_profileCache[cacheKey]) return _profileCache[cacheKey];
+  let out = null;
+  try {
+    const src = scene.textures.get(texKey).getSourceImage();
+    const cv = document.createElement('canvas');
+    cv.width = src.width; cv.height = src.height;
+    const cx = cv.getContext('2d');
+    cx.drawImage(src, 0, 0);
+    const d = cx.getImageData(0, 0, src.width, src.height).data;
+    const tops = new Array(src.width).fill(-1);
+    for (let x = 0; x < src.width; x++) {
+      for (let y = 0; y < src.height; y++) {
+        if (d[(y * src.width + x) * 4 + 3] > 40) { tops[x] = y; break; }
+      }
+    }
+    out = [];
+    for (let i = 0; i < segments; i++) {
+      const x0 = Math.floor(src.width * i / segments);
+      const x1 = Math.floor(src.width * (i + 1) / segments);
+      const col = [];
+      for (let x = x0; x < x1; x++) if (tops[x] >= 0) col.push(tops[x]);
+      if (!col.length) { out.push(null); continue; }
+      col.sort((a, b) => a - b);
+      // the median, not the highest: a single spike of debris should not lift
+      // the whole slice
+      out.push({ x0: x0 / src.width, x1: x1 / src.width,
+                 topFrac: col[Math.floor(col.length / 2)] / src.height });
+    }
+  } catch (e) { out = null; }   // tainted or missing: caller falls back
+  _profileCache[cacheKey] = out;
+  return out;
+}
+
 function driveWalker(scene, p, keys, onGround) {
   let move = 0;
   if (keys.A.isDown || keys.LEFT.isDown)  move -= 1;
@@ -4270,16 +4318,33 @@ class WalkScene extends Phaser.Scene {
         // through. A rectangle placed by hand is the same thing the floor
         // slabs do, and it lands where it is put.
         //
-        // This is meant to be climbed onto and walked across, not cleared in
-        // one bound — the box spans nearly the full painted width so there is
-        // real ground up there, and its height is well under the ~137px a
-        // standing jump reaches, so landing on top is the reliable outcome
-        // rather than a narrow miss.
-        const bw = im.displayWidth * 0.94;
-        const bh = wantH * 0.90;
-        const box = this.add.rectangle(x, groundY + 4 - bh / 2, bw, bh, 0x000000, 0).setDepth(-1);
-        this.physics.add.existing(box, true);
-        this.solidsW.push(box);
+        // Climbed onto and walked across, not cleared in one bound. The solid
+        // follows the painted top edge slice by slice, so the surface they
+        // stand on is the one you can see — see surfaceProfile for why a single
+        // rectangle could not do this.
+        const prof = painted ? surfaceProfile(this, 'scene_wallblue', 16) : null;
+        const left = x - im.displayWidth / 2;
+        if (prof) {
+          prof.forEach(seg => {
+            if (!seg) return;
+            const segX = left + seg.x0 * im.displayWidth;
+            const segW = (seg.x1 - seg.x0) * im.displayWidth;
+            const topY = (im.y - im.displayHeight) + seg.topFrac * im.displayHeight;
+            const bh = (groundY + 4) - topY;
+            if (bh < 6 || segW < 2) return;      // nothing worth standing on
+            const box = this.add.rectangle(segX + segW / 2, topY + bh / 2,
+                                           segW, bh, 0x000000, 0).setDepth(-1);
+            this.physics.add.existing(box, true);
+            this.solidsW.push(box);
+          });
+        } else {
+          // No readable art: one box, sized off the declared surface height.
+          const bw = im.displayWidth * 0.94;
+          const bh = wantH * (1 - (pr.topFrac != null ? pr.topFrac : 0.19));
+          const box = this.add.rectangle(x, groundY + 4 - bh / 2, bw, bh, 0x000000, 0).setDepth(-1);
+          this.physics.add.existing(box, true);
+          this.solidsW.push(box);
+        }
       }
     });
 
@@ -4689,6 +4754,11 @@ class WalkScene extends Phaser.Scene {
   goExit(ex) {
     this._transitioning = true;
     this.player.setVelocityX(0);
+    // Stop the stride too, or he pedals on the spot for the whole fade.
+    if (this.player._real) {
+      playAction(this.player, this.player._hero, 'idle', this.player._facing);
+      this.player._curAnim = heroAnim(this.player._hero, 'idle', this.player._facing);
+    }
     Sfx.ensure(); Sfx.dash();
     this.cameras.main.fadeOut(ex.fadeMs || 450, 0, 0, 0);
     this.cameras.main.once('camerafadeoutcomplete', () => {
@@ -4782,9 +4852,25 @@ class ExitScene extends WalkScene {
       // (scrollFactor 1.08), which is what sells "closer to the camera" — the
       // two together are why he passes behind it instead of in front. xFrac
       // moves it, scale sizes it, yOff settles it into the ground; tune freely.
+      // ------------------------------------------------------------------
+      //  FOREGROUND DRESSING — add your own here
+      //
+      //    { kind: 'fg', tex: '<name>', xFrac: 0..1, scale: n, yOff: n }
+      //
+      //  tex     which picture, by the name it is registered under (see the
+      //          foreground list in tools/build_html.js). Right now:
+      //          'deadplant', 'deadlog'
+      //  xFrac   where along the stage, 0 = far left, 1 = far right
+      //  scale   size. 1 is the picture's own size, 0.5 is half
+      //  yOff    push it down into the ground, in pixels. Bigger = lower
+      //  flip    true to mirror it left-to-right (optional)
+      //
+      //  These draw IN FRONT of the brothers, so they walk behind them. Drop a
+      //  new PNG into public/assets, add one line to the foreground list in
+      //  tools/build_html.js, and it can be used here straight away.
+      // ------------------------------------------------------------------
       props: [
-        { kind: 'fg', tex: 'deadlog',   xFrac: 0.055, scale: 0.63, yOff: 14 },
-        { kind: 'fg', tex: 'deadplant', xFrac: 0.10,  scale: 0.54, yOff: 6 }
+        { kind: 'fg', tex: 'deadplant', xFrac: 0.10, scale: 0.54, yOff: 6 }
       ],
       beats: [
         // 'PLAYER' so the line belongs to whichever brother was chosen.
@@ -4798,7 +4884,7 @@ class ExitScene extends WalkScene {
         // The end of the stage is just the end of the road: no caret, no label,
         // walk into it and it fades on.
         { xFrac: 0.985, w: 90, target: 'JumpScene', auto: true,
-          silent: true, fadeMs: 1000 }
+          silent: true, fadeMs: 320 }
       ],
       drawFallback(WW) {
         const g = this.add.graphics().setDepth(-20);
@@ -4840,7 +4926,11 @@ class JumpScene extends WalkScene {
       // crosses it, and jumps down the far side, rather than needing to clear
       // it in one bound the way the old rubble heaps did.
       props: [
-        { xFrac: 0.5, kind: 'wall', m: 1.17 }
+        // 0.9m — waist-high on a 1.8m man. It was 1.17m and dominated the
+        // street. topFrac is where its walkable capstone is in the picture.
+        { xFrac: 0.5, kind: 'wall', m: 0.9, topFrac: 0.19 }
+        // Foreground dressing goes here too — same block as the village road:
+        //   { kind: 'fg', tex: 'deadlog', xFrac: 0.2, scale: 0.6, yOff: 10 },
       ],
       beats: [
         { at: 0,    say: [['ETERWOLF', 'Road is buried. We go over it.']],
