@@ -5706,13 +5706,71 @@ class DashScene extends WalkScene {
                     tip: 'JUMP, JUMP AGAIN, THEN SHIFT TO DASH ACROSS' }
       ],
       exits: [
-        { xFrac: 0.985, w: 90, target: 'MenuScene', auto: true,
+        { xFrac: 0.985, w: 90, target: 'ShopStreetScene', auto: true,
           silent: true, fadeMs: 320 }
       ],
       drawFallback(WW) {
         const g = this.add.graphics().setDepth(-20);
         g.fillStyle(0x140f0c, 1); g.fillRect(0, 0, WW, 720);
         g.fillStyle(0x6b2a10, 0.5); g.fillRect(0, 300, WW, 220);
+      }
+    });
+  }
+}
+
+// ================================================================== //
+//  THE SHOP STREET — down to the TIENDA                              //
+//                                                                    //
+//  A way down rather than a way across: off the high roadway, onto a  //
+//  block standing on its own legs over the drop, and down again onto  //
+//  the pavement in front of the shop. The way in is the dark opening  //
+//  under the sign, and it is lit so it reads as a door and not as a   //
+//  shadow.                                                            //
+// ================================================================== //
+class ShopStreetScene extends WalkScene {
+  constructor() { super('ShopStreetScene'); }
+  create() {
+    this.cameras.main.fadeIn(600, 0, 0, 0);
+    this.buildWalk({
+      bgKey: 'scene_shopstreet',
+      worldW: 'auto', bgZoom: 1.0, startXFrac: 0.04,
+      // The pavement in front of the shop, read off the painting.
+      groundFrac: 0.845,
+      // What this picture is drawn at: the shopfront opening is 0.28 of the
+      // height, and a roll-up shop door is a shade over two metres, which puts
+      // its metre at about 85px. He walks in at 153px and stands under that
+      // opening like a man standing in a doorway.
+      pxPerM: 85,
+      title: 'THE TIENDA',
+      castSwitch: true, canReset: true, noLongIdle: true,
+      // He arrives able to double jump and dash, and keeps both — there is
+      // nothing here that needs them, but taking a move away again reads as a
+      // bug rather than as design.
+      doubleJump: true, dash: true,
+      // No floor under the high roadway: step off it and you are committed.
+      gaps: [{ atFrac: 0, wFrac: 0.30 }], gapShade: false,
+      ledges: [
+        { x0: 0.000, x1: 0.300, y: 0.380 },   // the roadway he arrives on
+        { x0: 0.310, x1: 0.460, y: 0.550 }    // the block standing over the drop
+      ],
+      beats: [
+        { at: 0,    say: [['PLAYER', 'There. Still has a roof.']],
+                    tip: 'WALK OFF THE EDGE — DROP TO THE BLOCK, THEN TO THE STREET' },
+        { at: 0.62, say: [['PLAYER', 'Armas, equipo, reparaciones. Let us hope.']],
+                    tip: 'PRESS  E  AT THE OPENING' }
+      ],
+      exits: [
+        // The opening under the sign, measured off the painting. Lit the way
+        // the bunker's blast door is lit, so the whole doorway reads as live
+        // rather than a patch of shadow you have to guess at.
+        { xFrac: 0.823, w: 150, label: 'ENTER THE TIENDA', target: 'ShopScene',
+          spawnXFrac: 0.29, glow: true, noArrow: true,
+          glowFrac: { x0: 0.772, x1: 0.874, y0: 0.552, y1: 0.836 } }
+      ],
+      drawFallback(WW) {
+        const g = this.add.graphics().setDepth(-20);
+        g.fillStyle(0x15100c, 1); g.fillRect(0, 0, WW, 720);
+        g.fillStyle(0x3a2a1c, 1); g.fillRect(0, 600, WW, 120);
       }
     });
   }
@@ -6093,7 +6151,8 @@ window.__game = new Phaser.Game({
   physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
   scene: [BootScene, StartScene, MenuScene, CharSelectScene, IntroDialogueScene,
           BunkerScene, ExitScene, JumpScene, BridgeScene, DashScene,
-          CityScene, ShopFrontScene, ShopScene, GameScene, DebugScene]
+          ShopStreetScene, CityScene, ShopFrontScene, ShopScene,
+          GameScene, DebugScene]
 });
 
 // ---- gamepad ----
