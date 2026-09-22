@@ -6449,6 +6449,9 @@ window.__game = new Phaser.Game({
 // mapping — `Pad.connected`, `Pad.axes`, `Pad._held` — and so the tests can
 // drive it without reaching into the closure.
 window.Pad = Pad;
+// Same reason: so the sound can be prodded from the console while tuning it,
+// and so a test can count footsteps without listening to them.
+window.Sfx = Sfx;
 window.PadHUD = PadHUD;
 
 // One poll for the whole game. `prestep` runs before any scene's update, so a
