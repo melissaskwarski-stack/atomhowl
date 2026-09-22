@@ -4372,13 +4372,17 @@ class WalkScene extends Phaser.Scene {
       img.setScale(s);
       // Its bottom sits on the bottom of the WORLD, not of the view.
       img.y = WH - img.height * s * cf;
-      // With headroom above it there is nothing painted up there, so the sky
-      // carries on in the picture's own top colour rather than cutting to the
-      // page's black. Sampled once off the texture.
+      // With headroom above it there is nothing painted up there. A flat fill
+      // of the picture's top colour leaves a visible seam where the two meet,
+      // so instead the picture's own top rows are stretched up to cover it:
+      // the band above the art is the same sky, just taller. These paintings
+      // all fade to smooth cloud at the top, so the stretch does not read.
       if (img.y > 0.5) {
-        const sky = bgSkyColour(this, cfg.bgKey);
-        this.add.rectangle(0, 0, Math.ceil(img.width * s) + 4, Math.ceil(img.y) + 2,
-                           sky, 1).setOrigin(0, 0).setDepth(-21);
+        const ROWS = 24;
+        const cap = this.add.image(0, 0, cfg.bgKey)
+          .setOrigin(0, 0).setDepth(-21)
+          .setScale(s, (img.y + 2) / ROWS);
+        cap.setCrop(0, 0, img.width, ROWS);
       }
       // Where the painting ended up, so anything that belongs to a painted
       // feature — the blast door's glow — can be placed as a fraction of the
@@ -5389,27 +5393,6 @@ class JumpScene extends WalkScene {
     });
   }
 }
-// The colour the top of a painting fades to, for filling the headroom above
-// it when a stage's world is taller than its art. One read per texture.
-const _skyCache = {};
-function bgSkyColour(scene, key) {
-  if (_skyCache[key] !== undefined) return _skyCache[key];
-  let out = 0x0a0807;
-  try {
-    const src = scene.textures.get(key).getSourceImage();
-    const cv = document.createElement('canvas');
-    cv.width = src.width; cv.height = 4;
-    const cx = cv.getContext('2d');
-    cx.drawImage(src, 0, 0);
-    const d = cx.getImageData(0, 0, src.width, 2).data;
-    let r = 0, g = 0, b = 0, n = 0;
-    for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; n++; }
-    out = (Math.round(r / n) << 16) | (Math.round(g / n) << 8) | Math.round(b / n);
-  } catch (e) { /* tainted or missing: the page's own black will do */ }
-  _skyCache[key] = out;
-  return out;
-}
-
 // Where the painted bridge actually is inside its picture.
 //
 // The two pictures are drawn on one canvas: the ends art carries the roadway
