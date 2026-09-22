@@ -4748,7 +4748,11 @@ class WalkScene extends Phaser.Scene {
           gw = ex.glowW || 150; gh = ex.glowH || 260;
           gy = groundY - (ex.glowY != null ? ex.glowY : gh / 2);
         }
-        glow = this.add.image(gx, gy, 'doorglow')
+        // Cut to the painted opening where the stage gives a box on the
+        // backdrop to read it from; the soft slab otherwise.
+        const shaped = (f && ex.glowShape !== false)
+          ? holeGlowTexture(this, cfg.bgKey, f) : null;
+        glow = this.add.image(gx, gy, shaped || 'doorglow')
           .setDepth(6).setBlendMode(Phaser.BlendModes.ADD).setAlpha(0)
           .setDisplaySize(gw, gh);
       }
@@ -4759,7 +4763,9 @@ class WalkScene extends Phaser.Scene {
         fontFamily: 'Courier New, monospace', fontSize: '34px', color: '#f2b13c',
         stroke: '#0d0a08', strokeThickness: 5
       }).setOrigin(0.5).setDepth(30).setAlpha(0);
-      const lbl = this.add.text(ex.x, this.markerY + 34, ex.label, {
+      // An exit with nothing to say does not get a caption. A lit doorway is
+      // already telling you it is a doorway.
+      const lbl = !ex.label ? null : this.add.text(ex.x, this.markerY + 34, ex.label, {
         fontFamily: 'Courier New, monospace', fontSize: '15px', color: '#d9c7a8',
         stroke: '#0d0a08', strokeThickness: 4
       }).setOrigin(0.5).setDepth(30).setAlpha(0);
@@ -5134,7 +5140,7 @@ class WalkScene extends Phaser.Scene {
         if (m) m.y = this.markerY + Math.sin(this.time.now * 0.006) * 6;
         if (lbl) {
           lbl.setText(locked ? 'GRAB THE WEAPON FIRST' : ex.label);
-          lbl.setColor(locked ? '#c93b2a' : '#d9c7a8');
+          lbl.setColor(locked ? '#c93b2a' : '#d9c7a8');   // lbl may be null
         }
         // auto exits fire just by running into them; others want E/W/up
         if (!locked && (ex.auto || enterPressed) && !this._transitioning) this.goExit(ex);
@@ -5430,6 +5436,81 @@ class JumpScene extends WalkScene {
     });
   }
 }
+// A glow the shape of the hole it lights.
+//
+// The generic door glow is a soft slab, which is right for a rectangular blast
+// door and wrong for a hole knocked through a shopfront — a straight-edged
+// rectangle of light over an arched, ragged opening reads as a panel stuck on
+// the wall rather than as the doorway being lit.
+//
+// So the shape comes from the painting: read the backdrop inside the box the
+// exit names, take how DARK each pixel is as the strength of the light there —
+// the opening is the dark part, that is what makes it an opening — and blur
+// the result so it falls off into the stonework instead of stopping at an
+// edge. One build per exit, cached by the box it was cut from.
+const _holeGlow = {};
+function holeGlowTexture(scene, bgKey, f) {
+  const key = 'holeglow_' + bgKey + '_' + [f.x0, f.x1, f.y0, f.y1].join('_');
+  if (scene.textures.exists(key)) return key;
+  if (_holeGlow[key] === null) return null;          // tried once, no good
+  try {
+    const src = scene.textures.get(bgKey).getSourceImage();
+    const sx = Math.round(f.x0 * src.width),  sw = Math.round((f.x1 - f.x0) * src.width);
+    const sy = Math.round(f.y0 * src.height), sh = Math.round((f.y1 - f.y0) * src.height);
+    // Worked at a small size: this is a soft glow, it is drawn scaled up to
+    // the door anyway, and blurring is cheaper the fewer pixels there are.
+    const W = 96, H = Math.max(8, Math.round(W * sh / sw));
+    const cv = document.createElement('canvas');
+    cv.width = W; cv.height = H;
+    const cx = cv.getContext('2d');
+    cx.drawImage(src, sx, sy, sw, sh, 0, 0, W, H);
+    const d = cx.getImageData(0, 0, W, H).data;
+
+    let m = new Float32Array(W * H);
+    for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+      const lum = (d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11) / 255;
+      // dark = inside the opening. Squared so the near-black middle of the
+      // hole counts for much more than merely shaded stonework.
+      const v = Math.max(0, 1 - lum * 2.1);
+      m[p] = v * v;
+    }
+    // separable box blur, a few passes, to feather it into the wall
+    const tmp = new Float32Array(W * H);
+    const R = 6;
+    for (let pass = 0; pass < 3; pass++) {
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        let a = 0, n = 0;
+        for (let k = -R; k <= R; k++) { const xx = x + k;
+          if (xx >= 0 && xx < W) { a += m[y * W + xx]; n++; } }
+        tmp[y * W + x] = a / n;
+      }
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        let a = 0, n = 0;
+        for (let k = -R; k <= R; k++) { const yy = y + k;
+          if (yy >= 0 && yy < H) { a += tmp[yy * W + x]; n++; } }
+        m[y * W + x] = a / n;
+      }
+    }
+    let peak = 0;
+    for (let p = 0; p < m.length; p++) if (m[p] > peak) peak = m[p];
+    if (peak < 0.02) { _holeGlow[key] = null; return null; }   // nothing dark in there
+
+    const out = cx.createImageData(W, H);
+    for (let p = 0; p < m.length; p++) {
+      const a = Math.min(1, m[p] / peak);
+      // the game's amber, premultiplied — it is drawn with ADD, so the alpha
+      // channel does the work and the colour only has to be right
+      out.data[p * 4]     = 242;
+      out.data[p * 4 + 1] = 177;
+      out.data[p * 4 + 2] = 60;
+      out.data[p * 4 + 3] = Math.round(a * 235);
+    }
+    cx.putImageData(out, 0, 0);
+    scene.textures.addCanvas(key, cv);
+    return key;
+  } catch (e) { _holeGlow[key] = null; return null; }
+}
+
 // Where the painted bridge actually is inside its picture.
 //
 // The two pictures are drawn on one canvas: the ends art carries the roadway
@@ -5855,7 +5936,7 @@ class ShopStreetScene extends WalkScene {
         // The opening under the sign, measured off the painting. Lit the way
         // the bunker's blast door is lit, so the whole doorway reads as live
         // rather than a patch of shadow you have to guess at.
-        { xFrac: 0.823, w: 150, label: 'ENTER THE TIENDA', target: 'ShopScene',
+        { xFrac: 0.823, w: 150, target: 'ShopScene',
           spawnXFrac: 0.29, glow: true, noArrow: true,
           glowFrac: { x0: 0.772, x1: 0.874, y0: 0.552, y1: 0.836 } }
       ],
