@@ -5636,7 +5636,16 @@ class BridgeScene extends WalkScene {
     // filling the frame exactly, and the ravine that comes with it — 710px,
     // which at 2.4 heights puts him at 296.
     const ZOOM = 1.0;
-    const PX_PER_M = 164;
+    // Measured with real key presses on flat ground, walking: one jump carries
+    // 1.99 of his own heights and two carry 2.27. At 164 px/m this ravine was
+    // 2.41 heights — past BOTH of them, so the stage could not be finished at
+    // all. 185 puts it at 2.13: clear of the single with room, and inside the
+    // double with room.
+    //
+    // (The window is narrow because a second jump is worth most at the very
+    // top of the arc and a test harness presses it slightly late. A player
+    // does better than 2.27, not worse, so erring low is the safe side.)
+    const PX_PER_M = 185;
 
     this.buildWalk({
       bgKey: 'scene_bridgebg',
