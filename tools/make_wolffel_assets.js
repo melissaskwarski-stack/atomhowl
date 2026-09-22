@@ -62,9 +62,17 @@ const SRC = {
 
 // Where each one-shot settles into something repeatable.
 const LOOP_FROM = { aim: 7 };
-// The burger's loop is picked by hand rather than by index: it is the hand-at-
-// mouth band, retraced so it cannot seam.
+// The burger, cut by what the frames actually show: he reaches into his side
+// pocket (0-2), brings it up (3), eats (4-6), and lowers it again (7-8).
+//
+// So the whole business is one performance rather than a loop — out, three
+// bites, and away — which is what it looks like when someone eats something
+// standing up. Retracing 5 between the bites keeps each one from seaming, and
+// putting it back is the reach played in reverse, because there is no frame of
+// him pocketing it and running 2-1-0 backwards is exactly that motion.
+const TAKE = [0, 1, 2, 3];
 const CHEW = [4, 5, 6, 5];
+const PUT  = [7, 8, 2, 1, 0];
 // The arm swings wide in the aim and the burger comes up across the body, so
 // both would shimmy if each frame were centred on its own silhouette.
 const SHARE_X = ['idle0', 'aim', 'burger', 'sword', 'crouch', 'jump', 'p45', 'pfire'];
@@ -122,8 +130,10 @@ const K = {
 };
 // The looping tails reuse frames the intros already emitted.
 if (K.burgerin) {
-  K.burger  = CHEW.map(i => K.burgerin[Math.min(i, K.burgerin.length - 1)]);
-  K.burgerW = CHEW.map(i => K.burgerinW[Math.min(i, K.burgerinW.length - 1)]);
+  const seq = TAKE.concat(CHEW, CHEW, CHEW, PUT);
+  const pick = (pool, list) => list.map(i => pool[Math.min(i, pool.length - 1)]);
+  K.burger  = pick(K.burgerin,  seq);
+  K.burgerW = pick(K.burgerinW, seq);
 }
 if (K.shootin) {
   K.shoot  = K.shootin.slice(LOOP_FROM.aim);
@@ -179,14 +189,17 @@ add('walk',      K.walk,      11);
 add('walkW',     K.walkW,     11);
 add('run',       K.run,       14);
 add('runW',      K.runW,      14);
-// long idle: he digs the burger out, then chews on a loop
+// the raw clip, kept for anything that wants it whole
 add('burgerin',  K.burgerin,  10, 0);
 add('burgerinW', K.burgerinW, 10, 0);
 // He takes two bites and is done, rather than chewing on forever: the chew
-// band plays twice (repeat 1) and the game drops him back to the plain idle
+// out, three bites, away — once through (repeat 0), and the game puts him back
+// on his feet after. 7fps runs the 21 frames in about three seconds, which is
+// an unhurried snack rather than a man wolfing something down.
+// (the note below is the old two-bite loop, kept for the reasoning)
 // when it finishes — see longIdleOnce.
-add('burger',    K.burger,    6, 1);
-add('burgerW',   K.burgerW,   6, 1);
+add('burger',    K.burger,    7, 0);
+add('burgerW',   K.burgerW,   7, 0);
 // the arm-extend, standing in for a draw-and-fire
 // The draw must finish inside the weapon cooldown (150ms for the pistol), or
 // bullets leave while the arm is still coming up and appear to fire from his
@@ -300,6 +313,11 @@ const mod = {
   // what longIdle names for the scenes that suppress it.
   idleChain: ['idle0', 'idle', 'burger'].filter(a => anims[a]),
   idleStepMs: 8000,
+  // Having eaten, he does not just stop doing it forever. He goes back to
+  // standing — the three-quarter pose, not the side-on one he arrived in —
+  // and sixteen seconds later he gets the burger out again.
+  idleLoopFrom: 1,
+  idleLoopMs: 16000,
   longIdle: 'burger',      // what he does when left alone
   longIdleMs: 8000,
   longIdleOnce: true,      // two bites, then back to standing

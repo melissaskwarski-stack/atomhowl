@@ -794,6 +794,12 @@ const CAST = [];
                 ? d.art.idleChain.slice()
                 : ['idle', d.longIdle].filter(Boolean);
     d.idleStepMs = d.art.idleStepMs || d.longIdleMs || IDLE_LONG_MS;
+    // Where the chain picks up again once the flourish has played, and how
+    // long it holds there before doing it again. Without these a one-shot
+    // flourish happens once and never again, which is right for a man who
+    // takes his guitar off his back and wrong for a man eating.
+    d.idleLoopFrom = d.art.idleLoopFrom;
+    d.idleLoopMs = d.art.idleLoopMs;
     d.dir = !!d.art.directional;
     CAST.push(d);
   });
@@ -846,14 +852,23 @@ const ACTION_FALLBACK = {
 // flourish does not belong here at all. Both walk back past the flourish
 // rather than to the front of the chain, so he keeps whatever quiet pose he
 // had reached.
-function idlePose(hero, restSince, now, done, allowLong) {
+function idlePose(hero, restSince, now, done, allowLong, looped) {
   const chain = hero && hero.idleChain;
   if (!chain || !chain.length) return 'idle';
   let max = chain.length - 1;
-  if (done || allowLong === false)
+  if (allowLong === false || (done && hero.idleLoopFrom == null))
     while (max > 0 && chain[max] === hero.longIdle) max--;
   const step = hero.idleStepMs || IDLE_LONG_MS;
-  let i = restSince ? Math.floor((now - restSince) / step) : 0;
+  const held = restSince ? now - restSince : 0;
+  // Once round the chain already: he holds the pose the character names —
+  // Wolffel the three-quarter one, not the side-on one he first stopped in —
+  // and does the whole thing again when the longer fuse runs out.
+  if (looped && hero.idleLoopFrom != null) {
+    const from = Math.min(hero.idleLoopFrom, max);
+    if (held < (hero.idleLoopMs || step)) return chain[from];
+    return chain[max];
+  }
+  const i = Math.floor(held / step);
   return chain[Math.max(0, Math.min(i, max))];
 }
 function heroHas(hero, action) { return !!(hero && hero.art.anims[action]); }
@@ -2755,6 +2770,7 @@ class GameScene extends Phaser.Scene {
       if (moving || !onGround || firing || this.dead || this.crouching) {
         this.restSince = 0;
         this.longIdleDone = false;
+        this.idleLooped = false;
       } else if (!this.restSince) this.restSince = time;
       // A one-off long idle is finished when its clip stops; after that he
       // just stands there until something moves him again.
@@ -2762,6 +2778,7 @@ class GameScene extends Phaser.Scene {
           this.curAnim.indexOf('-' + this.hero.longIdle) === 2 &&
           !this.player.anims.isPlaying) {
         this.longIdleDone = true;
+        if (this.hero.idleLoopFrom != null) { this.idleLooped = true; this.restSince = time; }
       }
 
       // sword swing owns the sprite until it finishes
@@ -2781,7 +2798,7 @@ class GameScene extends Phaser.Scene {
         // Nothing left to shoot and he finds something to do with his hands;
         // with the street still live he only gets the quiet poses.
         else want = idlePose(this.hero, this.restSince, time, this.longIdleDone,
-                             this.aliveEnemies() === 0);
+                             this.aliveEnemies() === 0, this.idleLooped);
         const key = heroAnim(this.hero, want, this.facing);
         // There is no armed walk in the art, so walking and firing borrows the
         // run-and-gun cycle slowed to the ground speed, which keeps the feet
@@ -3519,7 +3536,9 @@ function driveWalker(scene, p, keys, onGround) {
   // Left standing long enough he finds something to do with his hands —
   // Eterwolf the guitar off his back, Wolffel a burger out of his side pocket.
   // Each character names its own and how long it takes to get bored.
-  if (moving || !onGround) { p._restSince = 0; p._longIdleDone = false; }
+  if (moving || !onGround) {
+    p._restSince = 0; p._longIdleDone = false; p._idleLooped = false;
+  }
   else if (!p._restSince) p._restSince = now;
   // A tutorial stage says what it teaches and nothing else — no taking the
   // guitar off his back halfway through learning to jump.
@@ -3527,6 +3546,8 @@ function driveWalker(scene, p, keys, onGround) {
   if (hero && hero.longIdleOnce && p._curAnim &&
       p._curAnim.indexOf('-' + hero.longIdle) === 2 && !p.anims.isPlaying) {
     p._longIdleDone = true;
+    // Round again rather than done forever, if the character asks for it.
+    if (hero.idleLoopFrom != null) { p._idleLooped = true; p._restSince = scene.time.now; }
   }
 
   if (p._real) {
@@ -3537,7 +3558,8 @@ function driveWalker(scene, p, keys, onGround) {
                : !onGround ? airAction(hero, p.body.velocity.y, p)
                : now < (p._landUntil || 0) ? 'land'
                : moving    ? (sprint ? 'run' : 'walk')
-               : idlePose(hero, p._restSince, now, p._longIdleDone, allowLong);
+               : idlePose(hero, p._restSince, now, p._longIdleDone, allowLong,
+                           p._idleLooped);
     const key = heroAnim(hero, want, p._facing);
     if (p._curAnim !== key) { playAction(p, hero, want, p._facing); p._curAnim = key; }
   } else {
