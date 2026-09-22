@@ -4326,7 +4326,13 @@ class WalkScene extends Phaser.Scene {
   // subclasses set cfg and call buildWalk() in create()
   buildWalk(cfg) {
     this.cfg = cfg;
-    const H = 720;
+    const H = 720;                       // the view
+    // The world may be taller than the view. Everywhere else it is not, and
+    // the camera is pinned vertically as a result — which is fine on a street
+    // and wrong anywhere he jumps properly, because he leaves the top of the
+    // frame and you lose him at the one moment you need to see him. Give a
+    // stage some headroom and the camera follows him up into it.
+    const WH = cfg.worldH || H;
     let groundY = cfg.groundY;
     let WW = cfg.worldW;
     // Painting the backdrop larger than the view is what makes a room reveal
@@ -4364,7 +4370,16 @@ class WalkScene extends Phaser.Scene {
       const cf = cfg.bgContentFrac || 1;
       const s = (H / (img.height * cf)) * zoom;
       img.setScale(s);
-      img.y = H - img.height * s * cf;
+      // Its bottom sits on the bottom of the WORLD, not of the view.
+      img.y = WH - img.height * s * cf;
+      // With headroom above it there is nothing painted up there, so the sky
+      // carries on in the picture's own top colour rather than cutting to the
+      // page's black. Sampled once off the texture.
+      if (img.y > 0.5) {
+        const sky = bgSkyColour(this, cfg.bgKey);
+        this.add.rectangle(0, 0, Math.ceil(img.width * s) + 4, Math.ceil(img.y) + 2,
+                           sky, 1).setOrigin(0, 0).setDepth(-21);
+      }
       // Where the painting ended up, so anything that belongs to a painted
       // feature — the blast door's glow — can be placed as a fraction of the
       // art rather than as a pixel count that goes wrong the moment the zoom
@@ -4388,13 +4403,13 @@ class WalkScene extends Phaser.Scene {
     // makes a NaN slab, drops the player through the world and takes his
     // physics body with him. The fraction is of the view instead.
     if (groundY == null || !isFinite(groundY)) {
-      groundY = Math.round(H * (cfg.groundFrac != null ? cfg.groundFrac : 0.83));
+      groundY = Math.round(WH * (cfg.groundFrac != null ? cfg.groundFrac : 0.83));
     }
     this.worldW = WW;
     this.cfg.worldW = WW;
 
-    this.physics.world.setBounds(0, 0, WW, H);
-    this.cameras.main.setBounds(0, 0, WW, H);
+    this.physics.world.setBounds(0, 0, WW, WH);
+    this.cameras.main.setBounds(0, 0, WW, WH);
 
     this.groundY = groundY;
 
@@ -4574,10 +4589,37 @@ class WalkScene extends Phaser.Scene {
                               : (cfg.charH || 190) * zoom;
     this.castId = data.cast || GameState.castId || DEFAULT_CAST;
     GameState.castId = this.castId;
-    this.player = makeWalker(this, startX, groundY, charH, this.castId);
+
+    // Stand him on whatever is actually solid under where he starts, not on
+    // the stage's floor line. On a street those are the same thing; on a stage
+    // built out of ledges they are not, and the shop street proved it — he
+    // began over the high roadway at the pavement's height, which is BELOW
+    // that roadway, dropped through it (a one-way ledge only catches from
+    // above) and fell out of the world before the scene had finished fading
+    // in. Anything that opens on a surface other than the floor line hit this.
+    let standY = groundY;
+    (this.solidsW || []).forEach(o => {
+      if (!o || !o.body) return;
+      const b = o.body;
+      if (startX < b.x || startX > b.x + b.width) return;
+      // the highest surface at that x that is not below the floor line
+      if (b.y <= groundY + 2 && b.y < standY) standY = b.y;
+    });
+    this.player = makeWalker(this, startX, standY, charH, this.castId);
     this._buildBeats(cfg);
     this.solidsW.forEach(f => this.physics.add.collider(this.player, f));
-    this._safeX = startX;
+    this._safeX = startX; this._safeY = null;
+    // ---- collision overlay (F11) ---------------------------------------
+    // Every surface in this game is guessed at from a painting, and guessing
+    // by eye has put floors in the wrong place on three stages running. This
+    // draws what the physics actually thinks is solid, on top of the picture,
+    // so the two can be compared instead of argued about.
+    this._solidsDebug = this.add.graphics().setDepth(60).setVisible(false);
+    this.input.keyboard.on('keydown-F11', () => {
+      this._solidsDebug.setVisible(!this._solidsDebug.visible);
+      this._drawSolids();
+    });
+
     this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
     this.cameras.main.setDeadzone(160, 100);
 
@@ -4787,10 +4829,55 @@ class WalkScene extends Phaser.Scene {
 
   // Missing a jump drops him back on the near side of whatever he fell into,
   // rather than ending anything — this is a tutorial, not a punishment.
+  _drawSolids() {
+    const g = this._solidsDebug;
+    if (!g || !g.visible) return;
+    g.clear();
+    (this.solidsW || []).forEach(o => {
+      if (!o || !o.body) return;
+      const b = o.body;
+      const oneWay = b.checkCollision && b.checkCollision.down === false;
+      g.fillStyle(oneWay ? 0x4fc3f7 : 0x7cff6b, 0.20);
+      g.fillRect(b.x, b.y, b.width, b.height);
+      g.lineStyle(2, oneWay ? 0x4fc3f7 : 0x7cff6b, 0.95);
+      g.strokeRect(b.x, b.y, b.width, b.height);
+      // the top edge is the part that matters — that is what he stands on
+      g.lineStyle(3, 0xffffff, 0.9);
+      g.lineBetween(b.x, b.y, b.x + b.width, b.y);
+    });
+    const p = this.player && this.player.body;
+    if (p) {
+      g.lineStyle(2, 0xff5252, 0.95);
+      g.strokeRect(p.x, p.y, p.width, p.height);
+    }
+  }
+
+  // Out of the world. The old rule put him back at the last place he stood
+  // still, 120px above the stage's floor line — which is solid ground on a
+  // street and thin air anywhere the floor line is not where he was standing.
+  // That is the floating: dropped at a height nothing holds him at, on a
+  // stage whose surfaces are ledges rather than one slab.
+  //
+  // So a stage may say where a fall puts him back, and by default it is a
+  // clean restart of the stage, with everything already played kept played —
+  // no second earthquake to sit through because you missed a jump.
   _catchFall() {
-    if (this._transitioning || this.player.y < 820) return;
+    const floor = (this.cfg && this.cfg.worldH) || 720;
+    if (this._transitioning || this.player.y < floor + 90) return;
+    if (this.cfg && this.cfg.fallRestart) {
+      this._transitioning = true;
+      this.cameras.main.fadeOut(260, 0, 0, 0);
+      this.cameras.main.once('camerafadeoutcomplete', () => {
+        const d = this.sys.settings.data || {};
+        // `resumed` is what tells the stage that its set pieces have already
+        // happened, so they are not played at you a second time.
+        this.scene.restart(Object.assign({}, d, { resumed: true }));
+      });
+      return;
+    }
     this.player.setVelocity(0, 0);
-    this.player.setPosition(this._safeX, this.groundY - 120);
+    this.player.setPosition(this._safeX, this._safeY != null ? this._safeY
+                                                             : this.groundY - 120);
     this.cameras.main.flash(160, 0, 0, 0);
     // He lands badly and picks himself up. The clip is the one that used to
     // stand in for a crouch — it was always a man going down, not ducking.
@@ -4945,8 +5032,13 @@ class WalkScene extends Phaser.Scene {
   update() {
     const onGround = this.player.body.blocked.down || this.player.body.touching.down;
     // the last place he stood, to put him back if he misses a jump
-    if (onGround && Math.abs(this.player.body.velocity.x) < 40) this._safeX = this.player.x;
+    // Both coordinates: putting him back at the right x and the wrong y is
+    // how he ends up in the air over a hole he just fell through.
+    if (onGround && Math.abs(this.player.body.velocity.x) < 40) {
+      this._safeX = this.player.x; this._safeY = this.player.y;
+    }
     this._catchFall();
+    if (this._solidsDebug && this._solidsDebug.visible) this._drawSolids();
     // A stage can take the controls for a scripted beat — the bridge does it
     // while the span comes down, so the earthquake happens TO him rather than
     // being something he can walk through and out the other side of.
@@ -5297,6 +5389,27 @@ class JumpScene extends WalkScene {
     });
   }
 }
+// The colour the top of a painting fades to, for filling the headroom above
+// it when a stage's world is taller than its art. One read per texture.
+const _skyCache = {};
+function bgSkyColour(scene, key) {
+  if (_skyCache[key] !== undefined) return _skyCache[key];
+  let out = 0x0a0807;
+  try {
+    const src = scene.textures.get(key).getSourceImage();
+    const cv = document.createElement('canvas');
+    cv.width = src.width; cv.height = 4;
+    const cx = cv.getContext('2d');
+    cx.drawImage(src, 0, 0);
+    const d = cx.getImageData(0, 0, src.width, 2).data;
+    let r = 0, g = 0, b = 0, n = 0;
+    for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; n++; }
+    out = (Math.round(r / n) << 16) | (Math.round(g / n) << 8) | Math.round(b / n);
+  } catch (e) { /* tainted or missing: the page's own black will do */ }
+  _skyCache[key] = out;
+  return out;
+}
+
 // Where the painted bridge actually is inside its picture.
 //
 // The two pictures are drawn on one canvas: the ends art carries the roadway
