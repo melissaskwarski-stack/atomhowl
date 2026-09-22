@@ -659,6 +659,22 @@ const WORLD_W = 2400;
 const WORLD_H = 720;
 const GROUND_Y = 648;          // top surface of the street
 const GRAVITY = 1500;
+// How hard they leave the ground, in the walking stages.
+//
+// It was 640, which against this gravity is a jump 0.68 of their own height —
+// low enough that jumping read as heavy rather than deliberate, and low enough
+// that it capped how small a brother could be and still clear a ravine two
+// jumps wide. 900 puts the apex at about 1.35 heights, which is where this
+// kind of game usually sits, and raises that ceiling with it.
+//
+// Every gap in the game is measured against this number. Change it and the
+// wall on the burnt street and the ravines on the bridge and the drop all have
+// to be re-measured — they are written in body-heights for exactly that
+// reason, but the body-height that works changes.
+const JUMP_V = 900;
+// The second jump is a little softer than the first, so the two read as
+// separate efforts rather than one long float.
+const JUMP_V2 = 810;
 // The brothers are 3D renders, not pixel art, and their frames are about
 // 225px tall. Drawn any larger than that the renderer is inventing pixels
 // that were never painted, and the result is soft — which is what a stage at
@@ -3479,7 +3495,7 @@ function driveWalker(scene, p, keys, onGround) {
     // The air jump starts from a standstill vertically rather than adding to
     // whatever he had left, or a jump tapped at the top of the arc barely
     // registers while one tapped while falling throws him miles.
-    p.setVelocityY(-640 * k);
+    p.setVelocityY(-((p._jumpsUsed || 0) === 0 ? JUMP_V : JUMP_V2) * k);
     // Forward momentum during jump: natural platformer feel
     p.setVelocityX((move || p._facing) * 140 * k);
     p._jumpsUsed = (p._jumpsUsed || 0) + 1;
@@ -4372,18 +4388,12 @@ class WalkScene extends Phaser.Scene {
       img.setScale(s);
       // Its bottom sits on the bottom of the WORLD, not of the view.
       img.y = WH - img.height * s * cf;
-      // With headroom above it there is nothing painted up there. A flat fill
-      // of the picture's top colour leaves a visible seam where the two meet,
-      // so instead the picture's own top rows are stretched up to cover it:
-      // the band above the art is the same sky, just taller. These paintings
-      // all fade to smooth cloud at the top, so the stretch does not read.
-      if (img.y > 0.5) {
-        const ROWS = 24;
-        const cap = this.add.image(0, 0, cfg.bgKey)
-          .setOrigin(0, 0).setDepth(-21)
-          .setScale(s, (img.y + 2) / ROWS);
-        cap.setCrop(0, 0, img.width, ROWS);
-      }
+      // A stage that wants headroom above its art has to supply art that
+      // covers it — bgZoom past 1 — because nothing convincing can be
+      // invented up there. Filling the band with the picture's average top
+      // colour leaves a seam; stretching its top rows up turns the skyline in
+      // them into vertical streaks. Both were tried and both looked worse
+      // than the problem. If a band is left it stays the page's black.
       // Where the painting ended up, so anything that belongs to a painted
       // feature — the blast door's glow — can be placed as a fraction of the
       // art rather than as a pixel count that goes wrong the moment the zoom
@@ -5484,21 +5494,17 @@ class BridgeScene extends WalkScene {
     // to IT rather than the other way round: a ravine wants 2.4 of a man's
     // heights — past one jump, inside two.
     //
-    // Which leaves the picture's own size as the only free number. At zoom 1
-    // the ravine is 710px and he would have to be 296 to match it; at 0.85 it
-    // is 604 and he is 252, which is the smaller man asked for. Everything
-    // scales together, so the jump is exactly as hard either way.
-    const ZOOM = 0.85;
-    const PX_PER_M = 140;
-    // Room above the deck. The camera follows him vertically but had nothing
-    // to move into, so a jump took him off the top of the frame — which is
-    // what made jumping feel wrong. 900 against a 720 view gives it 180px of
-    // travel, and the sky carries on above the art in its own colour.
-    const WORLD_H = 900;
+    // Which leaves the picture's own size as the only free number, and it is
+    // not free either: zoom below 1 leaves a band of nothing above the art,
+    // and nothing convincing can be painted into it. So zoom 1, the picture
+    // filling the frame exactly, and the ravine that comes with it — 710px,
+    // which at 2.4 heights puts him at 296.
+    const ZOOM = 1.0;
+    const PX_PER_M = 164;
 
     this.buildWalk({
       bgKey: 'scene_bridgebg',
-      worldW: 'auto', bgZoom: ZOOM, worldH: WORLD_H, startXFrac: 0.02,
+      worldW: 'auto', bgZoom: ZOOM, startXFrac: 0.02,
       groundFrac: DECK,
       pxPerM: PX_PER_M,
       // A missed jump restarts the stage with the bridge already down, rather
