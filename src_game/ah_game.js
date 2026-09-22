@@ -1592,10 +1592,11 @@ class GameScene extends Phaser.Scene {
     });
 
     // jump buffering
-    const bufferJump = () => { this.jumpBufferedAt = this.time.now; };
+    const bufferJump = () => this.bufferJump();
     this.input.keyboard.on('keydown-SPACE', bufferJump);
     this.input.keyboard.on('keydown-W', bufferJump);
-    // UP is the up-aim in combat, not a second jump key.
+    // UP is the up-aim in the street fight, not a second jump key. The
+    // sandbox binds it to a jump as well — see DebugScene.
 
     // ---------- atmosphere overlays ----------
     this.grain = this.add.tileSprite(640, 360, 1280, 720, 'grain_0')
@@ -2015,13 +2016,19 @@ class GameScene extends Phaser.Scene {
 
   // A wall a crawler can live on: a solid vertical face, plus the side of it
   // the creature sits on and the stretch it may creep along.
-  addWall(x, top, bottom, width) {
+  bufferJump() { this.jumpBufferedAt = this.time.now; }
+
+  // `enemiesPass` keeps the wall out of the shared solids list and gives it a
+  // collider against the player alone, so it is something to hop over rather
+  // than something the wave piles up behind.
+  addWall(x, top, bottom, width, enemiesPass) {
     const w = width || 26;
     const h = bottom - top;
     const img = this.add.rectangle(x, top + h / 2, w, h, 0x1a1512)
       .setDepth(-1).setStrokeStyle(2, 0x2c241c);
     this.physics.add.existing(img, true);
-    this.solids.push(img);
+    if (enemiesPass) this.physics.add.collider(this.player, img);
+    else this.solids.push(img);
     // The creature hangs clear of the brick: its own body is ~34px wide, and
     // overlapping the wall would have the solids collider shove it off the face
     // every frame.
@@ -4082,8 +4089,8 @@ const INTRO_LINES = [
   { who: 'WOLFFEL',  text: "Hmm, what's going on? I'm hungry.", wake: true },
   { who: 'ETERWOLF', text: "Do you remember how we got here?" },
   { who: 'WOLFFEL',  text: "No..." },
-  { who: 'WOLFFEL',  text: "..." },
   { who: 'ETERWOLF', text: "..." },
+  { who: 'WOLFFEL',  text: "..." },
   { who: 'ETERWOLF', text: "Ok, let's get out." }
 ];
 // No line names a recording any more — the takes were not worth keeping and
@@ -4234,9 +4241,12 @@ class IntroDialogueScene extends Phaser.Scene {
     this._drawMore('l');
     this.tweens.add({ targets: this._more, y: -4, yoyo: true, repeat: -1, duration: 620 });
 
-    this._hint = this.add.text(W / 2, H - 8, 'SPACE / CLICK — NEXT', {
+    // The hint and the button sit as one row under the panel, straddling its
+    // centre line — which is what keeps them reading as belonging to the
+    // panel rather than parked in a corner.
+    this._hint = this.add.text(W / 2 - 10, H - 6, 'SPACE / CLICK — NEXT', {
       fontFamily: F_UI, fontSize: '9px', fontStyle: '500', color: '#6b5a48'
-    }).setOrigin(0.5, 1).setDepth(22);
+    }).setOrigin(1, 1).setDepth(22);
 
     // Out of the conversation altogether. ESC has always done this, but only a
     // line of grey text along the bottom said so, which is not something
@@ -4246,12 +4256,13 @@ class IntroDialogueScene extends Phaser.Scene {
     // Just above the panel's right corner rather than away in the top of the
     // screen: it belongs to the conversation, so it sits where the
     // conversation is and where the eye already is.
-    this._skip = this.add.text(x + w, y - 10, 'SKIP  ▸', {
-      fontFamily: F_UI, fontSize: '13px', fontStyle: '700', color: '#f5c169',
-      backgroundColor: '#1a1410', padding: { x: 13, y: 7 }
-      // Depth 30, above the two of them at 25 — at 24 it was drawing behind
-      // Wolffel's shoulder, which is exactly where it now sits.
-    }).setOrigin(1, 1).setDepth(30).setAlpha(0.9);
+    // Under the panel and just right of its centre line, paired with the hint:
+    // it belongs to the conversation, so it sits with it rather than off at an
+    // edge of the screen. Depth 30 keeps it above the brothers at 25.
+    this._skip = this.add.text(W / 2 + 10, H - 4, 'SKIP  ▸', {
+      fontFamily: F_UI, fontSize: '11px', fontStyle: '700', color: '#f5c169',
+      backgroundColor: '#1a1410', padding: { x: 10, y: 4 }
+    }).setOrigin(0, 1).setDepth(30).setAlpha(0.9);
     this._skip.setInteractive({ useHandCursor: true })
       .on('pointerover', () => this._skip.setColor('#ffffff'))
       .on('pointerout',  () => this._skip.setColor('#f5c169'))
@@ -6215,12 +6226,23 @@ class DebugScene extends GameScene {
     this.waveSpeed = 55;               // enemy speeds derive from this; NaN without it
     this.finisherEnabled = true;
 
-    // A face for the wall crawler to live on, with a gap under it you can walk
-    // through — the whole point is being spat at from above while you move.
-    this._testWall = this.addWall(760, GROUND_Y - 330, GROUND_Y, 30);
-    this.add.text(760, GROUND_Y - 348, 'CRAWLER WALL', {
+    // A face for the wall crawler to live on. It used to be 330px of brick
+    // across the middle of the yard, which made it a barricade the whole wave
+    // shuffled up against and a thing you had to route around to reach
+    // anything. It is 100px now — one jump clears 136, so it is a hop — it
+    // sits at the far end out of the way, and the wave walks straight through
+    // it. It is there to practise against, not to fight.
+    const WX = WORLD_W - 300;
+    this._testWall = this.addWall(WX, GROUND_Y - 100, GROUND_Y, 30, true);
+    this.add.text(WX, GROUND_Y - 118, 'CRAWLER WALL', {
       fontFamily: F_UI, fontSize: '11px', fontStyle: '700', color: '#6f5c44'
     }).setOrigin(0.5, 1).setDepth(1);
+
+    // Jump on the up arrow too, the way it is in the walking stages. In the
+    // street fight UP tips the shot 45 degrees and jumping there stays on W
+    // and SPACE; here the practice matters more than the extra gun angle, and
+    // the 45 is still on the pad's right stick.
+    this.input.keyboard.on('keydown-UP', () => this.bufferJump());
 
     if (this.advanceHint) this.advanceHint.setVisible(false);
     this.waveText.setText('SANDBOX');
