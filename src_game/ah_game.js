@@ -4739,20 +4739,23 @@ class WalkScene extends Phaser.Scene {
       if (ex.glow) {
         let gx = ex.x, gy, gw, gh;
         const f = ex.glowFrac, bg = this.bgGeom;
+        // Cut to the painted opening where the stage gives a box to read it
+        // from; the soft slab otherwise.
+        const shaped = (f && bg && ex.glowShape !== false)
+          ? holeGlowTexture(this, cfg.bgKey, f) : null;
         if (f && bg) {
-          gw = (f.x1 - f.x0) * bg.w;
-          gh = (f.y1 - f.y0) * bg.h;
-          gx = bg.x + (f.x0 + f.x1) / 2 * bg.w;
-          gy = bg.y + (f.y0 + f.y1) / 2 * bg.h;
+          // the padded box the texture was cut from, so the falloff it
+          // contains lands where it was sampled from
+          const g = shaped ? shaped.box : f;
+          gw = (g.x1 - g.x0) * bg.w;
+          gh = (g.y1 - g.y0) * bg.h;
+          gx = bg.x + (g.x0 + g.x1) / 2 * bg.w;
+          gy = bg.y + (g.y0 + g.y1) / 2 * bg.h;
         } else {
           gw = ex.glowW || 150; gh = ex.glowH || 260;
           gy = groundY - (ex.glowY != null ? ex.glowY : gh / 2);
         }
-        // Cut to the painted opening where the stage gives a box on the
-        // backdrop to read it from; the soft slab otherwise.
-        const shaped = (f && ex.glowShape !== false)
-          ? holeGlowTexture(this, cfg.bgKey, f) : null;
-        glow = this.add.image(gx, gy, shaped || 'doorglow')
+        glow = this.add.image(gx, gy, shaped ? shaped.key : 'doorglow')
           .setDepth(6).setBlendMode(Phaser.BlendModes.ADD).setAlpha(0)
           .setDisplaySize(gw, gh);
       }
@@ -5449,14 +5452,22 @@ class JumpScene extends WalkScene {
 // the result so it falls off into the stonework instead of stopping at an
 // edge. One build per exit, cached by the box it was cut from.
 const _holeGlow = {};
+// Returns { key, box } — the texture, and the fractions it was actually cut
+// from, which are wider than the ones asked for: the light has to fall off
+// somewhere, and if the sampled box stops at the edge of the hole then so does
+// the glow, and it ends in a straight line again.
+const HOLE_PAD = 0.45;
 function holeGlowTexture(scene, bgKey, f) {
+  const pw = (f.x1 - f.x0) * HOLE_PAD, ph = (f.y1 - f.y0) * HOLE_PAD;
+  const box = { x0: Math.max(0, f.x0 - pw), x1: Math.min(1, f.x1 + pw),
+                y0: Math.max(0, f.y0 - ph), y1: Math.min(1, f.y1 + ph) };
   const key = 'holeglow_' + bgKey + '_' + [f.x0, f.x1, f.y0, f.y1].join('_');
-  if (scene.textures.exists(key)) return key;
+  if (scene.textures.exists(key)) return { key, box };
   if (_holeGlow[key] === null) return null;          // tried once, no good
   try {
     const src = scene.textures.get(bgKey).getSourceImage();
-    const sx = Math.round(f.x0 * src.width),  sw = Math.round((f.x1 - f.x0) * src.width);
-    const sy = Math.round(f.y0 * src.height), sh = Math.round((f.y1 - f.y0) * src.height);
+    const sx = Math.round(box.x0 * src.width),  sw = Math.round((box.x1 - box.x0) * src.width);
+    const sy = Math.round(box.y0 * src.height), sh = Math.round((box.y1 - box.y0) * src.height);
     // Worked at a small size: this is a soft glow, it is drawn scaled up to
     // the door anyway, and blurring is cheaper the fewer pixels there are.
     const W = 96, H = Math.max(8, Math.round(W * sh / sw));
@@ -5491,23 +5502,40 @@ function holeGlowTexture(scene, bgKey, f) {
         m[y * W + x] = a / n;
       }
     }
+    // Forced to nothing at the texture's own border. Padding the sampled box
+    // is not enough on its own: the stonework out there is dark too, so the
+    // mask never reaches zero by itself and the texture ends in a hard cut —
+    // a rectangle again, just a softer one. This guarantees the falloff
+    // whatever the painting happens to contain at the edges.
+    const EDGE = 0.22;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const fx = Math.min(x, W - 1 - x) / (W * EDGE);
+      const fy = Math.min(y, H - 1 - y) / (H * EDGE);
+      const e = Math.min(1, Math.max(0, Math.min(fx, fy)));
+      m[y * W + x] *= e * e * (3 - 2 * e);          // smoothstep in from the edge
+    }
+
     let peak = 0;
     for (let p = 0; p < m.length; p++) if (m[p] > peak) peak = m[p];
     if (peak < 0.02) { _holeGlow[key] = null; return null; }   // nothing dark in there
 
     const out = cx.createImageData(W, H);
     for (let p = 0; p < m.length; p++) {
-      const a = Math.min(1, m[p] / peak);
+      // The mask's own value, NOT stretched to fill the box. Normalising by
+      // the peak drove everything that was even slightly dark to full
+      // brightness, which turned the whole box into a solid amber rectangle —
+      // the exact thing this was written to avoid.
+      const a = Math.min(1, m[p]);
       // the game's amber, premultiplied — it is drawn with ADD, so the alpha
       // channel does the work and the colour only has to be right
       out.data[p * 4]     = 242;
       out.data[p * 4 + 1] = 177;
       out.data[p * 4 + 2] = 60;
-      out.data[p * 4 + 3] = Math.round(a * 235);
+      out.data[p * 4 + 3] = Math.round(a * 210);
     }
     cx.putImageData(out, 0, 0);
     scene.textures.addCanvas(key, cv);
-    return key;
+    return { key, box };
   } catch (e) { _holeGlow[key] = null; return null; }
 }
 
@@ -5936,9 +5964,13 @@ class ShopStreetScene extends WalkScene {
         // The opening under the sign, measured off the painting. Lit the way
         // the bunker's blast door is lit, so the whole doorway reads as live
         // rather than a patch of shadow you have to guess at.
-        { xFrac: 0.823, w: 150, target: 'ShopScene',
+        // The opening, measured off the painting by averaging darkness down
+        // the shopfront band and taking the widest dark run: x 0.845-0.912,
+        // y 0.585-0.825. The earlier 0.772-0.874 was read off a crop by eye
+        // and was a tenth of the picture to the left of the real hole.
+        { xFrac: 0.878, w: 170, target: 'ShopScene',
           spawnXFrac: 0.29, glow: true, noArrow: true,
-          glowFrac: { x0: 0.772, x1: 0.874, y0: 0.552, y1: 0.836 } }
+          glowFrac: { x0: 0.845, x1: 0.912, y0: 0.585, y1: 0.825 } }
       ],
       drawFallback(WW) {
         const g = this.add.graphics().setDepth(-20);
