@@ -5891,7 +5891,17 @@ class DashScene extends WalkScene {
       // the whole world is a hole and every surface is a ledge — but a missed
       // jump is put back on solid ground relative to it.
       groundFrac: 0.470,
-      pxPerM: 78,
+      // The gap here is the painting's 0.10 of the width, and that is narrow.
+      // A single jump carries 1.80 of his own heights, a double 2.93, and a
+      // dash adds about another 1.0 on top. At 78 px/m the gap was 1.74
+      // heights — under even a single jump, so the whole crossing could be
+      // taken with one press and both the double and the dash were decoration.
+      // 68 puts it at 1.99: past a single, well inside a double.
+      //
+      // Requiring the DASH is not on offer here: that needs a gap past 2.93
+      // heights, which means a man of 83px or less, smaller than this stage
+      // has ever had him. So the dash is taught here and useful, not demanded.
+      pxPerM: 68,
       title: 'THE DROP',
       castSwitch: true, canReset: true, noLongIdle: true,
       doubleJump: true, dash: true,
