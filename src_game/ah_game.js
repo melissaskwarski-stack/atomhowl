@@ -4907,8 +4907,19 @@ class WalkScene extends Phaser.Scene {
   // clean restart of the stage, with everything already played kept played —
   // no second earthquake to sit through because you missed a jump.
   _catchFall() {
-    const floor = (this.cfg && this.cfg.worldH) || 720;
-    if (this._transitioning || this.player.y < floor + 90) return;
+    const wh = (this.cfg && this.cfg.worldH) || 720;
+    const body = this.player.body;
+    if (this._transitioning || !body) return;
+    // Out of the world is not "fallen past the bottom of it". The player
+    // collides with the world bounds, so he never gets past them — he lands on
+    // the invisible floor at the foot of the level, below anything painted,
+    // and stands there. That is the being-stuck-in-the-void: this used to
+    // wait for him to fall through a bottom he physically cannot reach, so it
+    // never ran at all.
+    //
+    // Resting on that bottom edge IS the fall.
+    const onWorldFloor = body.bottom >= wh - 3;
+    if (!onWorldFloor && this.player.y < wh + 90) return;
     if (this.cfg && this.cfg.fallRestart) {
       this._transitioning = true;
       this.cameras.main.fadeOut(260, 0, 0, 0);
