@@ -5490,22 +5490,37 @@ class BridgeScene extends WalkScene {
     this.cameras.main.fadeIn(600, 0, 0, 0);
     const H = 720;
 
-    // Measured off bridge_bg: the roadway runs to x 0.321, picks up again at
-    // 0.646, and its surface sits on y 0.522 of the picture.
-    const GAP0 = 0.321, GAP1 = 0.646, DECK = 0.522;
+    // Measured off bridge_bg by averaging the brightness down the whole deck
+    // band and asking where the bridge stops: it runs out at 0.30 and picks up
+    // again at 0.67. The earlier 0.321/0.646 came from reading the brightest
+    // row alone, which the railings and lamp posts break into fragments, and
+    // it left the floor stopping short of the stone you can see.
+    const GAP0 = 0.300, GAP1 = 0.670, DECK = 0.522;
 
-    // The gap is the painting's and cannot be moved, so the brothers are
-    // sized to IT rather than the other way round: a ravine wants to be 2.4 of
-    // a man's heights — past one jump, inside two — and 0.325 of this picture
-    // works out at 144 px/m. That puts him at 259px, which is also why he is
-    // so much bigger here than he was.
-    const PX_PER_M = 144;
+    // The gap is the painting's and cannot be moved, so the brothers are sized
+    // to IT rather than the other way round: a ravine wants 2.4 of a man's
+    // heights — past one jump, inside two.
+    //
+    // Which leaves the picture's own size as the only free number. At zoom 1
+    // the ravine is 710px and he would have to be 296 to match it; at 0.85 it
+    // is 604 and he is 252, which is the smaller man asked for. Everything
+    // scales together, so the jump is exactly as hard either way.
+    const ZOOM = 0.85;
+    const PX_PER_M = 140;
+    // Room above the deck. The camera follows him vertically but had nothing
+    // to move into, so a jump took him off the top of the frame — which is
+    // what made jumping feel wrong. 900 against a 720 view gives it 180px of
+    // travel, and the sky carries on above the art in its own colour.
+    const WORLD_H = 900;
 
     this.buildWalk({
       bgKey: 'scene_bridgebg',
-      worldW: 'auto', bgZoom: 1.0, startXFrac: 0.02,
+      worldW: 'auto', bgZoom: ZOOM, worldH: WORLD_H, startXFrac: 0.02,
       groundFrac: DECK,
       pxPerM: PX_PER_M,
+      // A missed jump restarts the stage with the bridge already down, rather
+      // than dropping him somewhere and replaying the earthquake at him.
+      fallRestart: true,
       title: 'THE BRIDGE',
       castSwitch: true, canReset: true, noLongIdle: true,
       // The whole point of the stage, and the reason the sprint is off: a
@@ -5533,7 +5548,14 @@ class BridgeScene extends WalkScene {
 
     this._gapL = Math.round(GAP0 * this.worldW);
     this._gapR = Math.round(GAP1 * this.worldW);
-    this._armSpan();
+    // Coming back from a fall, the span is already gone and stays gone.
+    if ((this.sys.settings.data || {}).resumed) {
+      this.bridgeState = 'gone';
+      this.span = null; this.halves = null; this._holdInput = false;
+      this._showTip('JUMP, THEN JUMP AGAIN IN MID-AIR TO CLEAR THE GAP');
+    } else {
+      this._armSpan();
+    }
   }
 
   // The span: the whole picture, scaled evenly, laid across the gap and
@@ -5724,15 +5746,18 @@ class DashScene extends WalkScene {
     this.cameras.main.fadeIn(600, 0, 0, 0);
     this.buildWalk({
       bgKey: 'scene_dashstage',
-      worldW: 'auto', bgZoom: 1.0, startXFrac: 0.05,
+      // Zoomed in, which is the only way to make him bigger without changing
+      // the stage: the ledges are fractions of the picture, so they grow with
+      // it and the px/m grows with them. 243px of gap against a 141px man is
+      // the same 1.7 it was at 180 against 104 — an identical jump, larger.
+      // worldH gives the camera somewhere to follow him when he goes up.
+      worldW: 'auto', bgZoom: 1.35, worldH: 900, startXFrac: 0.05,
+      fallRestart: true,
       // The floor line is the roadway he starts on. Nothing else uses it —
       // the whole world is a hole and every surface is a ledge — but a missed
       // jump is put back on solid ground relative to it.
-      groundY: Math.round(720 * 0.470),
-      // Small, like the bridge: this is a wide shot and the point of it is
-      // the distance between the three surfaces, which only reads if they are
-      // all in frame at once.
-      pxPerM: 58,
+      groundFrac: 0.470,
+      pxPerM: 78,
       title: 'THE DROP',
       castSwitch: true, canReset: true, noLongIdle: true,
       doubleJump: true, dash: true,
@@ -5781,14 +5806,17 @@ class ShopStreetScene extends WalkScene {
     this.cameras.main.fadeIn(600, 0, 0, 0);
     this.buildWalk({
       bgKey: 'scene_shopstreet',
-      worldW: 'auto', bgZoom: 1.0, startXFrac: 0.04,
+      // Zoomed in so he reads at this distance; the ledges are fractions of
+      // the picture, so they come with it.
+      worldW: 'auto', bgZoom: 1.30, worldH: 820, startXFrac: 0.04,
+      fallRestart: true,
       // The pavement in front of the shop, read off the painting.
       groundFrac: 0.845,
       // What this picture is drawn at: the shopfront opening is 0.28 of the
       // height, and a roll-up shop door is a shade over two metres, which puts
       // its metre at about 85px. He walks in at 153px and stands under that
       // opening like a man standing in a doorway.
-      pxPerM: 85,
+      pxPerM: 110,
       title: 'THE TIENDA',
       castSwitch: true, canReset: true, noLongIdle: true,
       // He arrives able to double jump and dash, and keeps both — there is
