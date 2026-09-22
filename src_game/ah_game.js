@@ -57,6 +57,35 @@ const Sfx = {
     src.connect(f); f.connect(g); g.connect(this.master);
     src.start(t);
   },
+  // A noise burst through a band-pass rather than a low-pass: it gives a
+  // transient with a character to it — a tick, a scuff, a knock — where the
+  // low-passed version only ever sounds like a puff of air.
+  burst(dur, vol, freq, q, type) {
+    if (!this.ctx || this.muted) return;
+    const t = this.ctx.currentTime;
+    const len = Math.max(1, Math.floor(this.ctx.sampleRate * dur));
+    const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+    const src = this.ctx.createBufferSource(); src.buffer = buf;
+    const f = this.ctx.createBiquadFilter();
+    f.type = type || 'bandpass'; f.frequency.value = freq || 1400; f.Q.value = q || 2;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(vol || 0.3, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    src.connect(f); f.connect(g); g.connect(this.master);
+    src.start(t);
+  },
+  // Boots on broken concrete. The scuff carries it and the low thud gives it
+  // weight; both move a little each step so a walk does not tick like a
+  // metronome. Running is harder, brighter and closer together.
+  step(hard) {
+    const v = 0.85 + Math.random() * 0.3;
+    this.burst(hard ? 0.075 : 0.055, (hard ? 0.34 : 0.19) * v,
+               (hard ? 1500 : 1150) * v, 1.1);
+    this.blip((hard ? 96 : 78) * v, 0.05, 'sine', hard ? 0.13 : 0.075, 50);
+  },
+  land()    { this.burst(0.1, 0.4, 900, 0.9); this.blip(70, 0.11, 'sine', 0.22, 42); },
   shoot()   { this.noise(0.06, 0.5, 2600); this.blip(700, 0.05, 'square', 0.25, 180); },
   hit()     { this.blip(170, 0.06, 'square', 0.35, 90); },
   squelch() { this.noise(0.16, 0.5, 650); this.blip(95, 0.13, 'sawtooth', 0.3, 50); },
@@ -68,10 +97,17 @@ const Sfx = {
   clear()   { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => this.blip(f, 0.16, 'triangle', 0.3), i * 110)); },
   roar()    { this.noise(0.5, 0.6, 300); this.blip(70, 0.55, 'sawtooth', 0.5, 38); },
   swoop()   { this.blip(880, 0.22, 'sine', 0.2, 220); },
-  // menu / dialogue UI
-  hover()   { this.blip(760, 0.045, 'sine', 0.14, 980); },
-  select()  { this.blip(520, 0.07, 'triangle', 0.22, 300); setTimeout(() => this.blip(880, 0.11, 'sine', 0.14, 1150), 55); },
-  deny()    { this.blip(200, 0.13, 'square', 0.2, 130); },
+  // ---- menu / dialogue UI ----
+  // These were square and triangle waves, which is the sound of a console two
+  // generations before the one this game is drawn for. A modern interface
+  // clicks and thuds rather than beeping: a noise transient for the contact
+  // and a short low body underneath it for the weight.
+  hover()   { this.burst(0.028, 0.16, 3200, 1.4); },
+  select()  { this.burst(0.055, 0.42, 1700, 1.0);
+              this.blip(150, 0.11, 'sine', 0.26, 88);
+              setTimeout(() => this.burst(0.04, 0.16, 4200, 2.0), 42); },
+  deny()    { this.burst(0.07, 0.3, 500, 1.6);
+              this.blip(105, 0.16, 'sawtooth', 0.22, 70); },
   type()    { this.blip(1500, 0.011, 'square', 0.035); }
 };
 
@@ -3526,6 +3562,19 @@ function driveWalker(scene, p, keys, onGround) {
   // same landing beat as combat: only after real air time
   if (onGround && p._airSince && now - p._airSince > 160 && heroHas(hero, 'land')) {
     p._landUntil = now + LAND_MS;
+    Sfx.ensure(); Sfx.land();
+  }
+
+  // Footsteps, paced to the stride rather than to the animation: the walk and
+  // the run are different cycles and different lengths, and tying the sound to
+  // a frame index would need every character's clips to agree about which
+  // frame the foot lands on. A cadence is close enough to read as walking, and
+  // it scales with the stage the way the stride does.
+  if (onGround && Math.abs(p.body.velocity.x) > 20) {
+    const cad = (sprint ? 250 : 370) / Math.max(0.6, k);
+    if (now - (p._stepAt || 0) > cad) {
+      p._stepAt = now; Sfx.ensure(); Sfx.step(sprint);
+    }
   }
   if (onGround) resetAirPhase(p);
   p._airSince = onGround ? 0 : (p._airSince || now);
@@ -5241,8 +5290,13 @@ class BunkerScene extends WalkScene {
         // The blast door's box, measured off bunker_wide.png: the slab runs
         // x 0.838-0.952 and y 0.264-0.775 of the painting. The whole door
         // lights up rather than a puddle of light pooling at its foot.
+        // glowShape false: this one stays the soft slab it always was, sized
+        // to the door and no wider. The shaped glow cut from the painting is
+        // for a hole knocked in a wall — it lights whatever is DARK inside the
+        // box, and a blast door is the brightest thing in this room, so it lit
+        // the shadows around the frame instead of the door.
         { xFrac: 0.90, w: 180, label: 'EXIT THE BUNKER', target: 'ExitScene',
-          glow: true, noArrow: true,
+          glow: true, noArrow: true, glowShape: false,
           glowFrac: { x0: 0.838, x1: 0.952, y0: 0.264, y1: 0.775 } }
       ],
       drawFallback(WW) {
