@@ -5388,12 +5388,17 @@ class JumpScene extends WalkScene {
         //
         // The plant twice, the second one mirrored and smaller at the very
         // edge, so it reads as a clump rather than one repeated cutout.
-        { kind: 'fg', tex: 'deadplant', xFrac: 0.045, scale: 1.55, yOff: 212 },
-        { kind: 'fg', tex: 'deadplant', xFrac: 0.012, scale: 1.25, yOff: 212,
+        { kind: 'fg', tex: 'deadplant', xFrac: 0.078, scale: 2.25, yOff: 250 },
+        { kind: 'fg', tex: 'deadplant', xFrac: 0.028, scale: 1.75, yOff: 250,
           flip: true },
         // Mirrored: the asset's splintered end points up-left, and the
         // reference has it pointing up-right, out of the corner of the frame.
-        { kind: 'fg', tex: 'deadlog',   xFrac: 0.825, scale: 1.31, yOff: 212,
+        // Bigger, and standing further below the frame than the plants: at
+        // yOff 212 its base landed exactly on the bottom edge of the view, so
+        // the picture ended in a straight horizontal cut across the timber.
+        // Pushing it down past the edge means the frame crops it mid-branch
+        // instead, which is what a thing in front of the camera should do.
+        { kind: 'fg', tex: 'deadlog',   xFrac: 0.825, scale: 1.55, yOff: 300,
           flip: true }
         // Add your own the same way:
         //   { kind: 'fg', tex: '<name>', xFrac: 0..1, scale: n, yOff: n, flip: true }
