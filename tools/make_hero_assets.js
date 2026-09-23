@@ -82,13 +82,19 @@ const SRC = {
 // (tools note: run 4 scored 1.12, pistol 7 scored 1.00 — lower is smoother).
 const LOOP_FROM = { guitar: 4, pistol: 7, runshoot: 8, runshootW: 8 };
 
-// Playing the guitar is an upper-body action, but the render has him shifting
-// his weight foot to foot, which looks wrong once the clip is looping on the
-// spot. Everything below this fraction of his height is pinned to the first
-// frame of the loop, so only his torso, arms and the instrument move. The seam
-// sits at the waist, which the motion profile shows is the quietest band —
-// putting it anywhere busier would show as a shear.
-const FREEZE_BELOW = { guitar: 0.52 };
+// Pinning everything below a seam to one frame stops a looping clip walking
+// on the spot. The guitar USED to be in here at 0.52 — the waist — on the
+// grounds that playing is an upper-body action. It is not: the instrument
+// hangs well past the waist, so the seam ran straight through the lower bout,
+// and every frame had a guitar whose body was held at frame 4 while its neck
+// and his arms moved. That is a guitar smeared onto his thigh, which is
+// exactly what it looked like.
+//
+// There is no seam that both quiets the legs and clears the instrument, so
+// the legs keep their weight shift — it is a second of footwork, and the
+// clip no longer loops long enough for it to read as pacing. SHARE_X below
+// still holds him from sliding sideways, which was the other half of the job.
+const FREEZE_BELOW = {};
 // Clips whose frames keep one horizontal extent. Every frame is centred on
 // its own silhouette, so a clip that throws its arms out (the jump swings
 // from 47 to 115 wide) would shimmy the torso side to side. Sharing the X
@@ -97,8 +103,12 @@ const FREEZE_BELOW = { guitar: 0.52 };
 // supplies that.
 // The swords throw an arc far wider than the body and the crouch drops the
 // silhouette, so both would slide if each frame were centred on its own bounds.
+// 'guitar' is here now that the freeze no longer gives it a shared box of its
+// own: pulling the instrument off his back throws the silhouette from narrow
+// to wide, and per-frame centring would swing his whole body to meet it.
 const SHARE_X = ['jump', 'katana', 'katanaW', 'katana2W', 'esword',
-                 'eswordF', 'crouch', 'crouchwalk', 'falldown', 'death', 'p45'];
+                 'eswordF', 'crouch', 'crouchwalk', 'falldown', 'death', 'p45',
+                 'guitar'];
 
 // Bursts: the physics launches the instant the key goes down, so a clip that
 // opens on two or three frames of the character still standing reads as him
@@ -277,6 +287,18 @@ mz(['shoot45', 'shoot45in'], 'p45', 12);
 
 const A_ = (keys, fps, repeat) => ({ fps, repeat: repeat === undefined ? -1 : repeat, keys });
 const mid = a => [a[Math.min(2, a.length - 1)]];
+// Nine strums, then the pull-off run backwards. The last strum frame sits one
+// frame before the intro's end, so the reversal starts where the loop stops
+// and there is no jump at the seam.
+const GUITAR_OUT = (west) => {
+  const loop = west ? K.guitarW : K.guitar;
+  const intro = west ? K.guitarinW : K.guitarin;
+  const out = [];
+  for (let i = 0; i < 9; i++) out.push.apply(out, loop);
+  const from = LOOP_FROM.guitar || 0;
+  for (let i = from - 1; i >= 0; i--) out.push(intro[i]);
+  return out;
+};
 
 const mod = {
   charH: ih,
@@ -330,8 +352,16 @@ const mod = {
     // Nine times through the 0.71s strum, after a 0.82s intro: about seven
     // seconds of playing, then he stops and goes back to standing. It used to
     // loop until you moved, which meant he never put it away.
-    guitar:     A_(K.guitar,    7, 8),
-    guitarW:    A_(K.guitarW,   7, 8),
+    //
+    // And when it stopped he cut straight back to a breathing idle with the
+    // guitar gone from his hands between one frame and the next. The intro is
+    // him taking it off his back, so the intro PLAYED BACKWARDS is him putting
+    // it away — the art for the exit was already there, pointing the wrong
+    // direction. The strum is unrolled nine times into the key list and the
+    // reversed intro hung on the end, so the whole flourish is one clip that
+    // runs once: take it off, play, put it back, stand.
+    guitar:     A_(GUITAR_OUT(false), 7, 0),
+    guitarW:    A_(GUITAR_OUT(true),  7, 0),
     shoot:      A_(K.pistol,    10),    // arm out, recoil
     shootW:     A_(K.pistolW,   10),
     // Same again, and this one was the worst of them: eight frames at 15fps is

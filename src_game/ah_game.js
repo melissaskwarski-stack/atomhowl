@@ -5448,9 +5448,11 @@ class JumpScene extends WalkScene {
       // crosses it, and jumps down the far side, rather than needing to clear
       // it in one bound the way the old rubble heaps did.
       props: [
-        // 0.72m — about thigh height on a 1.8m man. Came down from 1.17m and
-        // then 0.9m, both of which still dominated the street.
-        { xFrac: 0.5, kind: 'wall', m: 0.72, topFrac: 0.19 },
+        // 0.58m — knee-and-a-bit on a 1.8m man. Came down 1.17 -> 0.9 -> 0.72
+        // -> this. The asset scales evenly, so every step also took the same
+        // percentage off its width, which is what "too thick" was about: the
+        // wall is as deep front-to-back as it is tall.
+        { xFrac: 0.5, kind: 'wall', m: 0.58, topFrac: 0.19 },
 
         // ---- FOREGROUND DRESSING -------------------------------------------
         // Dead growth at both ends of the street, close enough to the camera
@@ -5481,8 +5483,8 @@ class JumpScene extends WalkScene {
         // these, and they were scaled up at the same time, which put fronds
         // most of the way up the frame and made the street look like a
         // hedgerow. Position moved, size left alone.
-        { kind: 'fg', tex: 'deadplant', xFrac: 0.062, scale: 1.55, yOff: 232 },
-        { kind: 'fg', tex: 'deadplant', xFrac: 0.018, scale: 1.25, yOff: 232,
+        { kind: 'fg', tex: 'deadplant', xFrac: 0.100, scale: 1.55, yOff: 232 },
+        { kind: 'fg', tex: 'deadplant', xFrac: 0.056, scale: 1.25, yOff: 232,
           flip: true },
         // Mirrored: the asset's splintered end points up-left, and the
         // reference has it pointing up-right, out of the corner of the frame.
@@ -5727,7 +5729,12 @@ class BridgeScene extends WalkScene {
     // and nothing convincing can be painted into it. So zoom 1, the picture
     // filling the frame exactly, and the ravine that comes with it — 710px,
     // which at 2.4 heights puts him at 296.
-    const ZOOM = 1.0;
+    // Zoom above 1 crops off the TOP, which here is sky and hillside — the
+    // roadway and the ravine stay where they are. Everything in the scene
+    // scales together with it, the brothers included, so the gap stays the
+    // same 2.12 body heights while both get bigger against the frame. This is
+    // the only knob that makes a man bigger without making the jump easier.
+    const ZOOM = 1.30;
     // A ravine wants about 2.13 of a man's heights: a single jump carries 1.80
     // and a double 2.93, so that is clear of one and inside the other.
     //
@@ -5735,7 +5742,10 @@ class BridgeScene extends WalkScene {
     // px/m — where the mismeasured one demanded 333. The whole scene reads at
     // this size; at 333 he filled a third of the frame and you could not see
     // the bridge he was crossing.
-    const PX_PER_M = 78;
+    // 78 was the painting's own scale at zoom 1 and read as faithful but tiny.
+    // 78 x 1.30 keeps him exactly as big against the bridge and 30% bigger
+    // against the screen: a 182px man, a 387px ravine, the same 2.12.
+    const PX_PER_M = 101;
 
     this.buildWalk({
       bgKey: 'scene_bridgebg',
@@ -5792,7 +5802,10 @@ class BridgeScene extends WalkScene {
     if (!art) return;
 
     // Onto each roadway far enough that the joins are covered.
-    const OVERLAP = Math.round(0.014 * this.worldW);
+    // Just enough to close the joins. At 0.014 the slab ran a full body-width
+    // out over each intact roadway, so the picture carried two road surfaces
+    // at two heights along the overlap and read as a plank dropped on top.
+    const OVERLAP = Math.round(0.005 * this.worldW);
     const x0 = this._gapL - OVERLAP, wantW = (this._gapR + OVERLAP) - x0;
     // Off the PAINTED box, not the canvas — the picture carries transparent
     // margin, and scaling by the canvas would leave the slab short.
@@ -5800,7 +5813,12 @@ class BridgeScene extends WalkScene {
     this._spanScale = s;
     this._spanW = wantW;
     // How far its road surface stands above the roadway either side.
-    this._proud = Math.round(0.022 * 720);
+    // Flush. Standing it proud was meant to read as a plank laid over a hole,
+    // but this is not a plank — it is the missing piece of a stone deck, and
+    // the two road surfaces have to be the same line or the eye reads the
+    // seam before it reads the bridge. Its broken underside still hangs below
+    // the roadway, which is what shows it is the part that gives way.
+    this._proud = 0;
 
     const mk = (cropX, cropW, originXpx) => {
       const im = this.add.image(0, 0, 'scene_bridgespan')
@@ -5975,12 +5993,12 @@ class DashScene extends WalkScene {
       // it and the px/m grows with them. 243px of gap against a 141px man is
       // the same 1.7 it was at 180 against 104 — an identical jump, larger.
       // worldH gives the camera somewhere to follow him when he goes up.
-      worldW: 'auto', bgZoom: 1.35, worldH: 900, startXFrac: 0.05,
+      worldW: 'auto', bgZoom: 1.62, worldH: 1080, startXFrac: 0.05,
       fallRestart: true,
       // The floor line is the roadway he starts on. Nothing else uses it —
       // the whole world is a hole and every surface is a ledge — but a missed
       // jump is put back on solid ground relative to it.
-      groundFrac: 0.470,
+      groundFrac: 0.478,
       // The gap here is the painting's 0.10 of the width, and that is narrow.
       // A single jump carries 1.80 of his own heights, a double 2.93, and a
       // dash adds about another 1.0 on top. At 78 px/m the gap was 1.74
@@ -5991,7 +6009,7 @@ class DashScene extends WalkScene {
       // Requiring the DASH is not on offer here: that needs a gap past 2.93
       // heights, which means a man of 83px or less, smaller than this stage
       // has ever had him. So the dash is taught here and useful, not demanded.
-      pxPerM: 68,
+      pxPerM: 82,
       title: 'THE DROP',
       castSwitch: true, canReset: true,
       doubleJump: true, dash: true,
@@ -6001,9 +6019,19 @@ class DashScene extends WalkScene {
       // Measured off the painting. Each is the top face of a piece of
       // stonework you can see, as a fraction of the picture.
       ledges: [
-        { x0: 0.000, x1: 0.335, y: 0.470 },   // the roadway, with the car
-        { x0: 0.345, x1: 0.510, y: 0.552 },   // the ledge below it
-        { x0: 0.610, x1: 1.000, y: 0.372 }    // the deck above, and walkable
+        // Read off a 6x crop with a grid every 0.01, not off the car. The lit
+        // top edge of the coping runs dead flat at 0.478 and carries on to
+        // 0.348, where it drops away down a vertical face you can see. 0.470
+        // floated him a few pixels over it, and stopping at 0.335 walked him
+        // off into air with a body-width of painted stone still in front of
+        // him — which is what "you go before the brick floor" was.
+        { x0: 0.000, x1: 0.348, y: 0.478 },   // the roadway, with the car
+        // Same treatment. The middle ledge's lit top edge runs 0.375 to 0.470
+        // at 0.549 — it was reaching 0.04 of the picture past its own right
+        // end and starting 0.03 before its left one.
+        { x0: 0.375, x1: 0.470, y: 0.549 },   // the ledge below it
+        // The deck's left face is at 0.600 and its surface at 0.378.
+        { x0: 0.602, x1: 1.000, y: 0.378 }    // the deck above, and walkable
       ],
       beats: [
         { at: 0,    say: [['PLAYER', 'Road stops here.']],
@@ -6061,7 +6089,10 @@ class ShopStreetScene extends WalkScene {
       gaps: [{ atFrac: 0, wFrac: 0.30 }], gapShade: false,
       ledges: [
         { x0: 0.000, x1: 0.300, y: 0.380 },   // the roadway he arrives on
-        { x0: 0.310, x1: 0.460, y: 0.550 }    // the block standing over the drop
+        // The block's stones top out at 0.566, not 0.550. Sixteen thousandths
+        // of the picture is 15px at this zoom, and that is exactly the height
+        // he was standing in the air above it.
+        { x0: 0.307, x1: 0.462, y: 0.566 }    // the block standing over the drop
       ],
       beats: [
         { at: 0,    say: [['PLAYER', 'There. Still has a roof.']],
