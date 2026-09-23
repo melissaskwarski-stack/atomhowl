@@ -694,6 +694,15 @@ const GameState = { hasWeapon: false, hasSwords: false, castId: null };
 // city hands you a gun before it hands you a fight, so it keeps its sword on
 // that instead — nothing that worked before stops working.
 function armedWithBlade() { return GameState.hasSwords || GameState.hasWeapon; }
+// The control legend under the canvas shows the sword dimmed and marked
+// LOCKED until it is real. One place to light it, called from wherever the
+// blades actually arrive, so the page can never disagree with the game.
+function showBladeUnlocked() {
+  try {
+    const el = document.querySelector('.legend .sword');
+    if (el) el.classList.add('on');
+  } catch (e) { /* the legend is page furniture; the game runs without it */ }
+}
 
 const WORLD_W = 2400;
 const WORLD_H = 720;
@@ -701,20 +710,32 @@ const GROUND_Y = 648;          // top surface of the street
 const GRAVITY = 1500;
 // How hard they leave the ground, in the walking stages.
 //
-// It was 640, which against this gravity is a jump 0.68 of their own height —
-// low enough that jumping read as heavy rather than deliberate, and low enough
-// that it capped how small a brother could be and still clear a ravine two
-// jumps wide. 900 puts the apex at about 1.35 heights, which is where this
-// kind of game usually sits, and raises that ceiling with it.
+// 640 -> 900 -> 740. At 900 a single jump cleared 1.35 of their own height,
+// and that is the number that made the levels pointless: if one press puts
+// your head a body and a third above where you started, a ledge is scenery
+// and the second jump is decoration. 740 puts the apex at 0.91 of a height —
+// just under your own head — which is a jump you take to get ON something
+// rather than a jump that clears it.
 //
-// Every gap in the game is measured against this number. Change it and the
-// wall on the burnt street and the ravines on the bridge and the drop all have
-// to be re-measured — they are written in body-heights for exactly that
-// reason, but the body-height that works changes.
-const JUMP_V = 900;
-// The second jump is a little softer than the first, so the two read as
-// separate efforts rather than one long float.
-const JUMP_V2 = 810;
+// Every gap in the game is measured against this number, so all of them were
+// re-checked against the new one rather than left to see what broke:
+//   the bridge   ravine 298px; one jump carries 269 across and dies in it,
+//                two carry 460 — and at this height the stage no longer needs
+//                its pinned motion scale, so the brothers move at the same
+//                speed there as everywhere else
+//   the drop     261px of rise; one jump gives 166, two give 332
+//   the store    the balcony is 270 up and the low ledge 216, both past one
+//                jump and inside two; the shelf-to-stairs hop stays a single
+//   the street   the wall is 75px against a 214px jump
+// One consequence worth having: from the shop floor the high gantry is 320
+// up and two jumps now reach 302, so the staircase is the way up rather than
+// a thing you can skip.
+const JUMP_V = 740;
+// The same again, rather than softer. The second jump used to be 0.9 of the
+// first, which at the old height still left plenty; at this one the drop's
+// crossing came out three pixels short of possible at a walk, and matching
+// the two buys back the 34px that makes it a jump rather than a coin toss.
+const JUMP_V2 = 740;
 // The brothers are 3D renders, not pixel art, and their frames are about
 // 225px tall. Drawn any larger than that the renderer is inventing pixels
 // that were never painted, and the result is soft — which is what a stage at
@@ -4489,6 +4510,8 @@ class WalkScene extends Phaser.Scene {
     // background art scaled to fill 720 height; world width follows the art
     if (this.textures.exists(cfg.bgKey)) {
       const img = this.add.image(0, 0, cfg.bgKey).setOrigin(0, 0).setDepth(-20);
+      // Kept, so a stage can tone its own painting down. The bridge does.
+      this.bgImage = img;
       // Some paintings carry dead space along the bottom — the village road has
       // 121 near-black rows under the picture, 15.8% of its height. Pinning the
       // image's bottom edge to the screen put that band across the lower fifth
@@ -5210,6 +5233,7 @@ class WalkScene extends Phaser.Scene {
         Math.abs(this.player.y - this.pickup.y) < 84) {
       this.pickGot = true;
       GameState.hasWeapon = true;
+      showBladeUnlocked();       // the gun route carries a blade too
       this.tweens.killTweensOf(this.pickup);
       this.tweens.killTweensOf(this.pickupGlow);
       this.pickup.destroy(); this.pickupGlow.destroy(); this.pickupHint.destroy();
@@ -5481,8 +5505,22 @@ class JumpScene extends WalkScene {
       // He starts clear of the growth at the left end. At 0.04 he spawned
       // inside the dead plant, which draws in front of him — so the stage
       // opened on a man you could not see.
-      worldW: 'auto', groundFrac: 0.755, startXFrac: 0.035, bgZoom: 1.2,
-      pxPerM: 167,
+      // Zoomed out a tenth, and the brothers down from 167 px/m to 130.
+      //
+      // Two reasons, both about what comes next. A jump rises 1.35 of your own
+      // height at every scale in this game, so a 301px man on a 720 view goes
+      // from standing with his head at 419 to standing with it at 13 — he
+      // jumps into the top of the picture. At 234 his head tops out at 170,
+      // which is a jump inside a street rather than through its roof.
+      // And the bridge after this one runs at 101 px/m. 167 to 101 is a 40%
+      // drop in one cut and you feel the camera lurch; 167 -> 130 -> 101 is
+      // two even steps of about a fifth.
+      //
+      // The foreground props are placed in absolute pixels, so their scale and
+      // their yOff are both taken down by the same 1.08/1.2 the picture is —
+      // they sit exactly where they sat against the painting.
+      worldW: 'auto', groundFrac: 0.755, startXFrac: 0.035, bgZoom: 1.08,
+      pxPerM: 130,
       title: 'THE BURNT STREET',
       castSwitch: true, canReset: true,
       // No holes: this stage teaches one thing. A single broken wall sits near
@@ -5526,8 +5564,8 @@ class JumpScene extends WalkScene {
         // these, and they were scaled up at the same time, which put fronds
         // most of the way up the frame and made the street look like a
         // hedgerow. Position moved, size left alone.
-        { kind: 'fg', tex: 'deadplant', xFrac: 0.152, scale: 1.55, yOff: 232 },
-        { kind: 'fg', tex: 'deadplant', xFrac: 0.108, scale: 1.25, yOff: 232,
+        { kind: 'fg', tex: 'deadplant', xFrac: 0.152, scale: 1.395, yOff: 209 },
+        { kind: 'fg', tex: 'deadplant', xFrac: 0.108, scale: 1.125, yOff: 209,
           flip: true },
         // Mirrored: the asset's splintered end points up-left, and the
         // reference has it pointing up-right, out of the corner of the frame.
@@ -5536,7 +5574,7 @@ class JumpScene extends WalkScene {
         // the picture ended in a straight horizontal cut across the timber.
         // Pushing it down past the edge means the frame crops it mid-branch
         // instead, which is what a thing in front of the camera should do.
-        { kind: 'fg', tex: 'deadlog',   xFrac: 0.825, scale: 1.55, yOff: 300,
+        { kind: 'fg', tex: 'deadlog',   xFrac: 0.825, scale: 1.395, yOff: 270,
           flip: true }
         // Add your own the same way:
         //   { kind: 'fg', tex: '<name>', xFrac: 0..1, scale: n, yOff: n, flip: true }
@@ -5645,11 +5683,25 @@ function holeGlowTexture(scene, bgKey, f) {
     // mask never reaches zero by itself and the texture ends in a hard cut —
     // a rectangle again, just a softer one. This guarantees the falloff
     // whatever the painting happens to contain at the edges.
+    // ...and through a radial falloff from the middle of the box, which is
+    // what makes it a pool of light rather than a lit doorway. The mask on its
+    // own is the shape of whatever is DARK in the painting, and the dark part
+    // of a shopfront is the rectangular opening — so however softly it was
+    // feathered it still read as a square. This keeps it honest (it still
+    // lights only what is dark) while giving it a round silhouette.
     const EDGE = 0.22;
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const fx = Math.min(x, W - 1 - x) / (W * EDGE);
       const fy = Math.min(y, H - 1 - y) / (H * EDGE);
       const e = Math.min(1, Math.max(0, Math.min(fx, fy)));
+      // distance from the centre in units of the half-box, so the falloff is
+      // an ellipse that fits the opening rather than a circle that crops it
+      const rx = (x - (W - 1) / 2) / ((W - 1) / 2);
+      const ry = (y - (H - 1) / 2) / ((H - 1) / 2);
+      const r = Math.sqrt(rx * rx + ry * ry);
+      // full out to two thirds, then away to nothing by the edge of the box
+      const g = Math.min(1, Math.max(0, (1.02 - r) / 0.36));
+      m[y * W + x] *= g * g * (3 - 2 * g);
       m[y * W + x] *= e * e * (3 - 2 * e);          // smoothstep in from the edge
     }
 
@@ -5746,6 +5798,41 @@ function brightestRow(scene, key, y0, y1, x0, x1) {
     }
     return best < 0 ? null : { y: bestY, lum: best, h: src.height };
   } catch (e) { return null; }
+}
+
+// Where the paint actually is inside a texture, and where its top SURFACE is
+// — the first row opaque across most of its width, which on a slab is the
+// walking surface rather than the first stray pixel of a drip or a weed.
+const _paintBox = {};
+function paintedBox(scene, key) {
+  if (_paintBox[key] !== undefined) return _paintBox[key];
+  let out = null;
+  try {
+    const src = scene.textures.get(key).getSourceImage();
+    const cv = document.createElement('canvas');
+    cv.width = src.width; cv.height = src.height;
+    const cx = cv.getContext('2d');
+    cx.drawImage(src, 0, 0);
+    const d = cx.getImageData(0, 0, src.width, src.height).data;
+    let x0 = src.width, x1 = -1, y0 = src.height, y1 = -1;
+    for (let y = 0; y < src.height; y++) for (let x = 0; x < src.width; x++) {
+      if (d[(y * src.width + x) * 4 + 3] > 60) {
+        if (x < x0) x0 = x; if (x > x1) x1 = x;
+        if (y < y0) y0 = y; if (y > y1) y1 = y;
+      }
+    }
+    if (x1 < 0) throw new Error('nothing painted');
+    let top = y0;
+    for (let y = y0; y <= y1; y++) {
+      let n = 0;
+      for (let x = x0; x <= x1; x++) if (d[(y * src.width + x) * 4 + 3] > 150) n++;
+      if (n > (x1 - x0) * 0.5) { top = y; break; }
+    }
+    out = { w: src.width, h: src.height, x0, x1, y0, y1, top,
+            pw: x1 - x0 + 1, ph: y1 - y0 + 1 };
+  } catch (e) { out = null; }
+  _paintBox[key] = out;
+  return out;
 }
 
 function bridgeArt(scene, key) {
@@ -5856,30 +5943,18 @@ class BridgeScene extends WalkScene {
     // can see the whole crossing.
     const PX_PER_M = 101;
 
-    // Size and motion are normally the same number: pxPerM sets how big he
-    // is, and playScale — pxPerM/111 — scales his speed, his jump and gravity
-    // together so the arc keeps its shape. Here they have to come apart.
-    //
-    // A jump's reach in body-heights does not depend on either of them while
-    // they are locked together: 200 x playScale / pxPerM, which is 1.80 for a
-    // single and 2.93 for a double at every stage in the game. The ravine is
-    // the painting's, 298px at this zoom, and a 182px man wants to need two
-    // jumps for it — so the single has to fall short of 298 and the double
-    // has to clear it. At the locked scale a single carries 328px and the
-    // stage stops being about the double jump at all.
-    //
-    // So motion is pinned at 0.78 instead of 0.91. A single now carries 281px
-    // and dies in the ravine; a double carries 455px and lands. The cost is
-    // that he walks and jumps about a seventh slower here than elsewhere,
-    // which is the quietest price on offer — the alternatives were a smaller
-    // man or a tighter crop, and both have already been asked for and undone.
-    const PLAY_SCALE = 0.78;
+    // Motion used to be pinned at 0.78 here, apart from the size, because at
+    // the old jump height a walking single jump carried 328px across a 298px
+    // ravine and the stage stopped being about the double jump. Lowering the
+    // jump made the pin unnecessary: a single now carries 269 and falls in.
+    // So the brothers move on this bridge at the same speed they move
+    // everywhere else, which is one fewer thing that is quietly different.
 
     this.buildWalk({
       bgKey: 'scene_bridgebg',
       worldW: 'auto', bgZoom: ZOOM, startXFrac: 0.02,
       groundFrac: DECK,
-      pxPerM: PX_PER_M, playScale: PLAY_SCALE,
+      pxPerM: PX_PER_M,
       // A missed jump restarts the stage with the bridge already down, rather
       // than dropping him somewhere and replaying the earthquake at him.
       fallRestart: true,
@@ -5910,6 +5985,25 @@ class BridgeScene extends WalkScene {
 
     this._gapL = Math.round(GAP0 * this.worldW);
     this._gapR = Math.round(GAP1 * this.worldW);
+
+    // "The bridge is so bright." I tried to answer that by measurement first —
+    // match the painting's roadway to the fallen slab's — and the measurement
+    // said there is nothing to match: the slab's lit road is the BRIGHTER of
+    // the two, which is why the slab already takes a tint DOWN to meet the
+    // bridge rather than the other way round. So the glare is not the roadway
+    // against the slab, it is the whole picture, and no comparison inside it
+    // will find that.
+    //
+    // This is therefore a decision, not a derivation: the backdrop is
+    // multiplied to 0.86 across the board. Enough to take the shine off the
+    // stone; not so much that the fires stop being fires, which is the thing
+    // a flat multiply is always in danger of. The number is here to be moved.
+    if (this.bgImage) {
+      const TONE = 0.86;
+      const c = Math.round(255 * TONE);
+      this.bgImage.setTint((c << 16) | (c << 8) | c);
+      this._bgTone = TONE;
+    }
     // Coming back from a fall, the span is already gone and stays gone.
     if ((this.sys.settings.data || {}).resumed) {
       this.bridgeState = 'gone';
@@ -5998,10 +6092,16 @@ class BridgeScene extends WalkScene {
     if (!art) return;
 
     // Onto each roadway far enough that the joins are covered.
-    // Just enough to close the joins. At 0.014 the slab ran a full body-width
-    // out over each intact roadway, so the picture carried two road surfaces
-    // at two heights along the overlap and read as a plank dropped on top.
-    const OVERLAP = Math.round(0.005 * this.worldW);
+    // Measured off the reference, on a 0.02 grid: its stone runs 0.325 to
+    // 0.628 of the picture against a painted hole of 0.410 to 0.565 — so it
+    // laps about 0.07 onto the roadway at each end and is twice the width of
+    // the gap it covers. 0.005 met the lips and nothing more, which is why it
+    // read as a piece hanging in the hole rather than a piece laid across it.
+    //
+    // He never stands on it: the collapse fires one body-height before the
+    // lip, so the slab is there to be seen and then to break. That is what
+    // makes the overlap and the height below free to be whatever looks right.
+    const OVERLAP = Math.round(0.070 * this.worldW);
     const x0 = this._gapL - OVERLAP, wantW = (this._gapR + OVERLAP) - x0;
     // Off the PAINTED box, not the canvas — the picture carries transparent
     // margin, and scaling by the canvas would leave the slab short.
@@ -6009,12 +6109,11 @@ class BridgeScene extends WalkScene {
     this._spanScale = s;
     this._spanW = wantW;
     // How far its road surface stands above the roadway either side.
-    // Flush. Standing it proud was meant to read as a plank laid over a hole,
-    // but this is not a plank — it is the missing piece of a stone deck, and
-    // the two road surfaces have to be the same line or the eye reads the
-    // seam before it reads the bridge. Its broken underside still hangs below
-    // the roadway, which is what shows it is the part that gives way.
-    this._proud = 0;
+    // Proud, by the 0.013 of the picture's height the reference shows. Flush
+    // was wrong: a slab dropped across a hole rests ON the road either side,
+    // so its surface sits a little above the road's, and that small step is
+    // most of what says "laid over" rather than "part of".
+    this._proud = Math.round(0.013 * this.bgGeom.h);
 
     // The span and the backdrop are different files, and the span came out of
     // its pass a cooler, lighter grey than the warm stone it has to sit in.
@@ -6237,7 +6336,15 @@ class DashScene extends WalkScene {
       // it and the px/m grows with them. 243px of gap against a 141px man is
       // the same 1.7 it was at 180 against 104 — an identical jump, larger.
       // worldH gives the camera somewhere to follow him when he goes up.
-      worldW: 'auto', bgZoom: 1.62, worldH: 1080, startXFrac: 0.02,
+      // Zoomed IN here, which is the opposite lever from the bridge and for
+      // the opposite reason. The brothers were reading as miniatures, and they
+      // were not too small against the painting — a man IS taller than that
+      // car, and at 82 px/m he already was — they were too small against the
+      // FRAME, because this was the widest shot in the game. Everything scales
+      // with the zoom together, the ravine included, so the jump is untouched:
+      // 342px across and 261 up, against a single jump's 246 of rise. The
+      // second jump is still the only way up, by 15px.
+      worldW: 'auto', bgZoom: 2.0, worldH: 1333, startXFrac: 0.02,
       fallRestart: true,
       // The floor line is the roadway he starts on. Nothing else uses it —
       // the whole world is a hole and every surface is a ledge — but a missed
@@ -6245,13 +6352,12 @@ class DashScene extends WalkScene {
       groundFrac: 0.478,
       // What makes this crossing need the double jump is the HEIGHT, not the
       // distance — which is what the line of dialogue already says. From the
-      // ledge at 0.559 to the deck at 0.378 is 211px, and a single jump rises
-      // 199px at this scale. Twelve pixels short, every time, however fast he
-      // is running. The second jump adds 162px and clears it.
-      // The gap across is 277px against a 148px man, 1.87 heights, so the
-      // dash is what buys the distance comfortably rather than what makes it
-      // possible. Taught and useful, not demanded.
-      pxPerM: 82,
+      // ledge at 0.559 to the deck at 0.378 is 261px at this zoom, and a
+      // single jump rises 246. Fifteen pixels short, every time, however fast
+      // he is running. The second jump adds 199 and clears it.
+      // Across is 342px against a 182px man, so the dash buys the distance
+      // comfortably rather than making it possible: taught, not demanded.
+      pxPerM: 101,
       title: 'THE DROP',
       castSwitch: true, canReset: true,
       doubleJump: true, dash: true,
@@ -6417,15 +6523,20 @@ class StoreScene extends WalkScene {
         // ---- the left climb, and what it leads to ----
         { x0: 0.232, x1: 0.290, y: 0.752 },   // the stone block on the floor
         { x0: 0.302, x1: 0.377, y: 0.692 },   // the table beside it
-        { x0: 0.000, x1: 0.378, y: 0.385 },   // the balcony: the chest and the lever
+        // 0.392, not 0.385. The lit crenellations along the balcony's edge
+        // have their TOPS at 0.383 and their bases at 0.392, and a man walks
+        // on the deck behind them, not along the teeth.
+        { x0: 0.000, x1: 0.378, y: 0.392 },   // the balcony, and the lever
         // ---- the right climb ----
         { x0: 0.675, x1: 0.777, y: 0.500 },   // the shelf the low ledge delivers you to
         { x0: 0.627, x1: 0.683, y: 0.339 },   // the stairs, three steps
         { x0: 0.652, x1: 0.706, y: 0.319 },
         { x0: 0.653, x1: 0.727, y: 0.309 },
-        { x0: 0.664, x1: 0.727, y: 0.262 },   // the top of the stairs
+        { x0: 0.664, x1: 0.727, y: 0.268 },   // the top of the stairs
         // ---- the high gantry, and the way down to the door ----
-        { x0: 0.782, x1: 0.965, y: 0.262 },
+        // 0.268: the gantry's lit crenellations run 0.265 to 0.272 and a man
+        // walks on the deck behind them, the same as on the balcony.
+        { x0: 0.782, x1: 0.965, y: 0.268 },
         { x0: 0.818, x1: 0.908, y: 0.618 }
       ],
       beats: [
@@ -6455,21 +6566,33 @@ class StoreScene extends WalkScene {
     // Each is drawn at one end of its dotted line and travels to the other.
     // The low one runs the whole time; the high one is dead until the lever.
     this.movers = [
-      this._mover({ x0: 0.383, x1: 0.563, y: 0.565, to: 0.605, ms: 3400, live: true }),
-      this._mover({ x0: 0.478, x1: 0.620, y: 0.390, to: 0.390, ms: 2600, live: false })
+      // 5.4s end to end rather than 3.4. It is a platform you wait for and
+      // step onto, not one you chase.
+      // `to` is where the LEADING edge lands, which is the rule the high ledge
+      // was already following and the low one was not. Its dotted line ends at
+      // 0.605 and it travels right, so its RIGHT edge goes there — a left edge
+      // of 0.425, not 0.605. Read as the left edge it swept 0.222 of the room
+      // instead of 0.042 and shuttled half way across the shop.
+      this._mover({ x0: 0.383, x1: 0.563, y: 0.565, to: 0.425, ms: 5400, live: true }),
+      this._mover({ x0: 0.478, x1: 0.620, y: 0.392, to: 0.390, ms: 4200, live: false })
     ];
 
-    // On the high gantry on the right, which is where the climb ends — the
-    // reward at the top of the room rather than at the start of it.
-    this._buildChest(0.828, 0.262);
-    this._buildLever(0.345, 0.385);
+    // On the high gantry, up against the green locker at 0.885 — the climb
+    // ends at the top of the room, not the start of it.
+    this._buildChest(0.862, 0.268);
+    // On the machine housing partway along the balcony, not out by the
+    // doorway at its far end.
+    this._buildLever(0.215, 0.392);
     this._swordsTaken = false;
 
     // Its own listener rather than a JustDown in update. WalkScene's exit
     // check runs first every frame and reads JustDown(E) for its doorways —
     // and reading it is what clears it, so by the time the lever looked, the
     // press was already spent and the handle never moved.
-    this.input.keyboard.on('keydown-E', () => { if (this._atLever()) this._throwLever(); });
+    this.input.keyboard.on('keydown-E', () => {
+      if (this._atChest()) this._openChest();
+      else if (this._atLever()) this._throwLever();
+    });
   }
 
   // A one-way platform that moves. The collision box is static — the whole
@@ -6481,9 +6604,22 @@ class StoreScene extends WalkScene {
   _mover(m) {
     const w = (m.x1 - m.x0) * this.bgGeom.w;
     const y = this.fy(m.y);
-    const im = this.add.image(this.fx(m.x0) + w / 2, y, 'scene_ledgeprop')
-      .setOrigin(0.5, 0).setDepth(4);
-    im.setScale(w / im.width);
+    // Anchored and scaled off the PAINTED box. The drawing is 860x358 and its
+    // stone only occupies x 23..835, y 118..287, so taking the canvas put the
+    // slab's surface 60px below the line he stands on — he walked along the
+    // air above it. The anchor is the slab's top SURFACE row rather than its
+    // first painted pixel: one row apart on this drawing, but not on anything
+    // with a weed or a pebble sticking up, and it is the surface that has to
+    // meet the collision.
+    const art = paintedBox(this, 'scene_ledgeprop');
+    const im = this.add.image(this.fx(m.x0) + w / 2, y, 'scene_ledgeprop').setDepth(4);
+    if (art) {
+      im.setOrigin((art.x0 + art.pw / 2) / art.w, art.top / art.h);
+      im.setScale(w / art.pw);
+    } else {
+      im.setOrigin(0.5, 0);
+      im.setScale(w / im.width);
+    }
     // The box is the stone's top face only, and one-way like every other
     // ledge here, so a jump from underneath passes through it.
     const box = this.add.rectangle(im.x, y + 30, w, 60, 0x000000, 0).setDepth(-1);
@@ -6516,8 +6652,11 @@ class StoreScene extends WalkScene {
     this.chest = im;
     this.chestX = x;
     this.chestY = y;
-    this.chestGlow = this.add.ellipse(x, y - im.displayHeight * 0.5,
-      im.displayWidth * 0.9, im.displayHeight * 0.6, 0xffd27a, 0).setDepth(5);
+    // No glow behind it. The clip is the whole effect.
+    this.chestLabel = this.add.text(x, y - im.displayHeight - 18, 'E  —  OPEN THE CHEST', {
+      fontFamily: 'Courier New, monospace', fontSize: '15px', color: '#d9c7a8',
+      stroke: '#0d0a08', strokeThickness: 4
+    }).setOrigin(0.5, 1).setDepth(8).setAlpha(0);
 
     // the clip, cut out of the strip
     const CHEST_FRAMES = 12;
@@ -6570,6 +6709,12 @@ class StoreScene extends WalkScene {
     }).setOrigin(0.5, 1).setDepth(8).setAlpha(0);
   }
 
+  _atChest() {
+    return !!this.chest && !this._swordsTaken && !!this.player &&
+           Math.abs(this.player.x - this.chestX) < 90 &&
+           Math.abs(this.player.y - this.chestY) < 200;
+  }
+
   _atLever() {
     return !!this.leverOff && !!this.player &&
            Math.abs(this.player.x - this.leverX) < 90 &&
@@ -6602,19 +6747,18 @@ class StoreScene extends WalkScene {
     this._swordsTaken = true;
     GameState.hasSwords = true;
     Sfx.ensure(); Sfx.land();
-    this.cameras.main.flash(260, 255, 226, 170);
+    if (this.chestLabel) this.chestLabel.setAlpha(0);
     // The clip takes over from the still drawing and holds where it ends.
     if (this.chestAnim) {
       this.chest.setVisible(false);
       this.chestAnim.setVisible(true).play('chest-open');
     }
-    this.tweens.add({ targets: this.chestGlow, fillAlpha: 0.62, scaleY: 1.9,
-      duration: 520, yoyo: true, hold: 900 });
     this._say([['PLAYER', 'Two of them. One each.']]);
     // The card comes after the clip, not over it.
     this.time.delayedCall(820, () => this._bladePanel());
     this.time.delayedCall(1100, () => this._showTip(
-      'RMB OR  F  TO SWING  ·  NOW DOWN TO THE DOOR'));
+      'SWORD UNLOCKED — RMB OR  F  TO SWING  ·  NOW DOWN TO THE DOOR'));
+    showBladeUnlocked();
   }
 
   // acquireWeapon's card is about a gun and tells you to go back outside, so
@@ -6672,9 +6816,8 @@ class StoreScene extends WalkScene {
     });
 
     // ---- the chest, and the lever -----------------------------------
-    if (this.chest && !this._swordsTaken &&
-        Math.abs(this.player.x - this.chestX) < 80 &&
-        Math.abs(this.player.y - this.chestY) < 200) this._openChest();
+    // It opens when you ask it to, not when you brush past it.
+    if (this.chestLabel) this.chestLabel.setAlpha(this._atChest() ? 1 : 0);
 
     if (this.leverOff) this.leverLabel.setAlpha(this._atLever() ? 1 : 0);
   }
@@ -6841,6 +6984,7 @@ class DebugScene extends GameScene {
   create() {
     GameState.hasWeapon = true;        // sandbox starts armed
     GameState.hasSwords = true;        // ...blades included
+    showBladeUnlocked();
     this.castId = this._wantCast;      // read by GameScene.create when it builds the player
     super.create();
 

@@ -139,6 +139,13 @@ body{
 .legend{width:100%; max-width:1280px; display:flex; flex-wrap:wrap; gap:6px 22px;
   font-size:11px; font-weight:600; letter-spacing:.06em; color:var(--faint);}
 .legend b{color:var(--dim); font-weight:700}
+/* The sword is locked until the chest in the tienda. It reads dimmed until
+   then and lights up the moment the blades are taken, so the legend is
+   telling the truth about what the buttons do. */
+.legend .sword{opacity:.34}
+.legend .sword::after{content:' (LOCKED)'; color:var(--faint); font-size:10px}
+.legend .sword.on{opacity:1}
+.legend .sword.on::after{content:''}
 .legend .k{color:var(--ember); font-weight:700}
 h1{margin:0; font-size:13px; font-weight:700; letter-spacing:.34em; color:var(--dim);
   width:100%; max-width:1280px;}
@@ -158,7 +165,7 @@ h1 span{color:var(--faint); letter-spacing:.08em; font-weight:600; float:right}
   <span><b>FIRE</b> <span class="k">LMB</span> / <span class="k">K</span></span>
   <span><b>AIM 45&deg;</b> <span class="k">UP</span> + FIRE</span>
   <span><b>WEAPON</b> <span class="k">E</span></span>
-  <span><b>SWORD</b> <span class="k">F</span> / <span class="k">RMB</span></span>
+  <span class="sword"><b>SWORD</b> <span class="k">F</span> / <span class="k">RMB</span></span>
   <span><b>SANDBOX</b> <span class="k">F9</span></span>
   <span><b>RESTART STAGE</b> <span class="k">R</span></span>
   <span><b>MUTE</b> <span class="k">N</span></span>
