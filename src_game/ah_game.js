@@ -5703,12 +5703,20 @@ class BridgeScene extends WalkScene {
     this.cameras.main.fadeIn(600, 0, 0, 0);
     const H = 720;
 
-    // Measured off bridge_bg by averaging the brightness down the whole deck
-    // band and asking where the bridge stops: it runs out at 0.30 and picks up
-    // again at 0.67. The earlier 0.321/0.646 came from reading the brightest
-    // row alone, which the railings and lamp posts break into fragments, and
-    // it left the floor stopping short of the stone you can see.
-    const GAP0 = 0.300, GAP1 = 0.670, DECK = 0.522;
+    // Where the roadway actually ends, read off the picture at 2.4x rather
+    // than from a brightness scan: 0.410 on the left, 0.565 on the right.
+    //
+    // Both earlier attempts were wrong in the same direction and for the same
+    // reason. Averaging brightness down a band from the deck to 0.60 does not
+    // measure the deck — it measures the deck plus the arch underneath it, and
+    // the arch falls away toward the middle of the span long before the
+    // roadway does. That reported the bridge ending at 0.30 when the stone you
+    // can see runs to 0.41, so the floor stopped a hundred pixels short of it
+    // and he fell off thin air.
+    //
+    // It also made the ravine look 0.37 of the picture wide when it is 0.155,
+    // which is what forced the brothers up to 333px to span it.
+    const GAP0 = 0.410, GAP1 = 0.565, DECK = 0.522;
 
     // The gap is the painting's and cannot be moved, so the brothers are sized
     // to IT rather than the other way round: a ravine wants 2.4 of a man's
@@ -5720,16 +5728,14 @@ class BridgeScene extends WalkScene {
     // filling the frame exactly, and the ravine that comes with it — 710px,
     // which at 2.4 heights puts him at 296.
     const ZOOM = 1.0;
-    // Measured with real key presses on flat ground, walking: one jump carries
-    // 1.99 of his own heights and two carry 2.27. At 164 px/m this ravine was
-    // 2.41 heights — past BOTH of them, so the stage could not be finished at
-    // all. 185 puts it at 2.13: clear of the single with room, and inside the
-    // double with room.
+    // A ravine wants about 2.13 of a man's heights: a single jump carries 1.80
+    // and a double 2.93, so that is clear of one and inside the other.
     //
-    // (The window is narrow because a second jump is worth most at the very
-    // top of the arc and a test harness presses it slightly late. A player
-    // does better than 2.27, not worse, so erring low is the safe side.)
-    const PX_PER_M = 185;
+    // With the ravine measured properly at 298px, that is a 140px man — 78
+    // px/m — where the mismeasured one demanded 333. The whole scene reads at
+    // this size; at 333 he filled a third of the frame and you could not see
+    // the bridge he was crossing.
+    const PX_PER_M = 78;
 
     this.buildWalk({
       bgKey: 'scene_bridgebg',
