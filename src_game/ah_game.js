@@ -4189,12 +4189,32 @@ class IntroDialogueScene extends Phaser.Scene {
 
   create() {
     const W = 1280, H = 720;
+    // The panel was written for the one conversation at the front of the game
+    // and had that conversation, its backdrop and the scene after it all
+    // baked in. It is the same two faces and the same bar wherever the
+    // brothers talk, so it now takes them as data:
+    //   lines   the conversation, same shape as INTRO_LINES
+    //   target  the scene to start when it ends
+    //   bgKey   the picture behind the frame
+    //   sleeper who is out cold (only the opening has one)
+    //   hold    how long to sit on the picture before the bar rises
+    // Nothing passed = the opening, exactly as it was.
+    const d = this.sys.settings.data || {};
+    this.lines = (d.lines && d.lines.length) ? d.lines : INTRO_LINES;
+    this.target = d.target || 'BunkerScene';
+    this.sleeper = d.sleeper !== undefined ? d.sleeper : SLEEPER;
+    this.bgKey = d.bgKey || 'scene_bunker';
+    this.holdMs = d.hold != null ? d.hold : 1500;
+    // Mid-game there is no music to stop and the cut into it is a beat, not a
+    // curtain, so the fades are shorter than the opening's.
+    this.fadeMs = d.fadeMs != null ? d.fadeMs : 900;
+
     this.cameras.main.setBackgroundColor('#0a0807');
-    this.cameras.main.fadeIn(900, 0, 0, 0);
+    this.cameras.main.fadeIn(this.fadeMs, 0, 0, 0);
     stopMusic(400);
 
-    if (this.textures.exists('scene_bunker')) {
-      const bg = this.add.image(W / 2, H / 2, 'scene_bunker').setDepth(-20);
+    if (this.textures.exists(this.bgKey)) {
+      const bg = this.add.image(W / 2, H / 2, this.bgKey).setDepth(-20);
       bg.setScale(Math.max(W / bg.width, H / bg.height));
     }
     this.add.rectangle(W / 2, H / 2, W, H, 0x0a0807, 0.5).setDepth(-15);
@@ -4210,8 +4230,8 @@ class IntroDialogueScene extends Phaser.Scene {
 
     // He is still out cold when the scene opens, so he holds his eyes shut and
     // sits lower and unlit until the line that wakes him.
-    this._awake = false;
-    const sleeper = this.portraits[SLEEPER];
+    this._awake = !this.sleeper;
+    const sleeper = this.sleeper ? this.portraits[this.sleeper] : null;
     if (sleeper && sleeper.img && this.textures.exists(sleeper.closedKey)) {
       sleeper.img.setTexture(sleeper.closedKey);
     }
@@ -4221,7 +4241,7 @@ class IntroDialogueScene extends Phaser.Scene {
     this._ui.forEach(o => o.setAlpha(0));
     this._idx = 0;
     this._started = false;
-    this.time.delayedCall(1500, () => this._begin());
+    this.time.delayedCall(this.holdMs, () => this._begin());
 
     // A click on the SKIP button also reaches the scene's own pointer handler,
     // so this bails once the scene is on its way out rather than stepping a
@@ -4374,7 +4394,7 @@ class IntroDialogueScene extends Phaser.Scene {
     if (!p) return;
     this.time.delayedCall(3000 + Math.random() * 3000, () => {
       if (!this.scene.isActive()) return;
-      if (id === SLEEPER && !this._awake) { this._scheduleBlink(id); return; }   // still out
+      if (id === this.sleeper && !this._awake) { this._scheduleBlink(id); return; }   // still out
       if (p.img && this.textures.exists(p.closedKey)) {
         p.img.setTexture(p.closedKey);
         this.time.delayedCall(150, () => { if (p.img) p.img.setTexture(p.openKey); });
@@ -4384,8 +4404,8 @@ class IntroDialogueScene extends Phaser.Scene {
   }
 
   _show() {
-    if (this._idx >= INTRO_LINES.length) return this._finish();
-    const line = INTRO_LINES[this._idx];
+    if (this._idx >= this.lines.length) return this._finish();
+    const line = this.lines[this._idx];
     this._name.setText(line.who);
 
     // The plate goes on the SPEAKER'S side, so the bar points back at whoever
@@ -4406,14 +4426,14 @@ class IntroDialogueScene extends Phaser.Scene {
     Object.keys(this.portraits).forEach(k => {
       const p = this.portraits[k];
       if (!p.img) return;
-      const asleep = k === SLEEPER && !this._awake;
+      const asleep = k === this.sleeper && !this._awake;
       const on = !asleep && k === line.who;
       this.tweens.add({
         targets: p.img, y: asleep ? 272 : (on ? 232 : 244),
-        duration: line.wake && k === SLEEPER ? 500 : 220, ease: 'Sine.easeOut'
+        duration: line.wake && k === this.sleeper ? 500 : 220, ease: 'Sine.easeOut'
       });
       p.img.setTint(asleep ? 0x4a443e : (on ? 0xffffff : 0x6e6660));
-      if (line.wake && k === SLEEPER && this.textures.exists(p.openKey)) p.img.setTexture(p.openKey);
+      if (line.wake && k === this.sleeper && this.textures.exists(p.openKey)) p.img.setTexture(p.openKey);
     });
 
     this._more.setAlpha(0);
@@ -4448,7 +4468,7 @@ class IntroDialogueScene extends Phaser.Scene {
   _advance() {
     if (this._typing) {                       // first press completes the line
       if (this._typeEv) this._typeEv.remove();
-      this._body.setText(INTRO_LINES[this._idx].text);
+      this._body.setText(this.lines[this._idx].text);
       this._typing = false;
       this._more.setAlpha(0.8);
       return;                                 // the voice keeps playing out
@@ -4463,8 +4483,10 @@ class IntroDialogueScene extends Phaser.Scene {
     if (this._typeEv) this._typeEv.remove();
     stopVoice();                 // ESC out of the scene should not keep talking
     stopMusic(900);
-    this.cameras.main.fadeOut(900, 0, 0, 0);
-    this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('BunkerScene'));
+    this.cameras.main.fadeOut(this.fadeMs, 0, 0, 0);
+    this.cameras.main.once('camerafadeoutcomplete',
+      () => this.scene.start(this.target, this.sys.settings.data &&
+                             this.sys.settings.data.targetData || undefined));
   }
 }
 

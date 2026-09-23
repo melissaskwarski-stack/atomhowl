@@ -98,6 +98,19 @@ const SCENE_SRC = {
   chestopen: ['public/assets/chest_open_strip.png'],
   leveroff:  ['public/assets/lever_off.png'],
   leveron:   ['public/assets/lever_on.png'],
+  // ---- THE STORAGE ROOMS -----------------------------------------------
+  // Each room ships twice: the room as it is with the power off, and the same
+  // room lit. The stage draws the dark one and reveals the lit one through a
+  // mask, so a torch beam is a hole cut in the darkness rather than a yellow
+  // shape laid over it — the light falls on the actual painted room.
+  storage1dark: ['public/assets/storage1_dark.png'],
+  storage1lit:  ['public/assets/storage1_lit.png'],
+  storage2dark: ['public/assets/storage2_dark.png'],
+  storage2lit:  ['public/assets/storage2_lit.png'],
+  ropethin:     ['public/assets/alien_rope_thin.png'],
+  ropebig:      ['public/assets/alien_rope_big.png'],
+  cine1:        ['public/assets/enemy_cine_1.jpg'],
+  cine2:        ['public/assets/enemy_cine_2.jpg'],
   deadplant: ['public/assets/dead_plant.png'],
   deadlog:   ['public/assets/dead_log.png'],
   // ----------------------------------------------------------------------
