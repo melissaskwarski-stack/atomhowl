@@ -3896,7 +3896,7 @@ class CharSelectScene extends Phaser.Scene {
   create() {
     const W = 1280, H = 720;
     this.cameras.main.setBackgroundColor('#0a0807');
-    this.cameras.main.fadeIn(600, 0, 0, 0);
+    this.cameras.main.fadeIn(260, 0, 0, 0);
     // The menu theme belongs to the menu. Leaving it — even as far as the
     // character select — fades it out; coming back to MenuScene starts it again.
     stopMusic(600);
@@ -5204,7 +5204,13 @@ class WalkScene extends Phaser.Scene {
         if (glow) glow.setAlpha(0);
         return;
       }
-      const near = Math.abs(this.player.x - ex.x) < (ex.w || 90);
+      const d = Math.abs(this.player.x - ex.x);
+      const near = d < (ex.w || 90);
+      // Arm it only once he has stood clear of it. Stages now open a step
+      // inside their own edge and carry a way back out of that edge, so
+      // without this the entrance he arrives through fires immediately and
+      // bounces him straight back where he came from.
+      if (!ex._armed && d > (ex.w || 90) + 70) ex._armed = true;
       const a = near ? 1 : 0;
       if (m) m.setAlpha(a);
       if (lbl) lbl.setAlpha(a);
@@ -5221,7 +5227,11 @@ class WalkScene extends Phaser.Scene {
           lbl.setColor(locked ? '#c93b2a' : '#d9c7a8');   // lbl may be null
         }
         // auto exits fire just by running into them; others want E/W/up
-        if (!locked && (ex.auto || enterPressed) && !this._transitioning) this.goExit(ex);
+        // Arming gates the AUTO exits only. A door you have to press E at
+        // cannot bounce you, so gating those too would just mean standing in
+        // a doorway you arrived at and not being able to go back through it.
+        if (!locked && (ex.auto ? ex._armed : enterPressed) && !this._transitioning)
+          this.goExit(ex);
       }
     });
   }
@@ -5260,7 +5270,10 @@ class WalkScene extends Phaser.Scene {
       this.player._curAnim = heroAnim(this.player._hero, 'idle', this.player._facing);
     }
     Sfx.ensure(); Sfx.dash();
-    this.cameras.main.fadeOut(ex.fadeMs || 450, 0, 0, 0);
+    // Short. One stage running into the next is a step, not a scene change,
+    // and 450 out plus 600 in is a second of black every time you walk off
+    // the edge of a screen — which is what made the walk feel broken up.
+    this.cameras.main.fadeOut(ex.fadeMs || 260, 0, 0, 0);
     this.cameras.main.once('camerafadeoutcomplete', () => {
       const target = ex.kind === 'combat' ? 'GameScene' : ex.target;
       this.scene.start(target, ex.spawnXFrac != null ? { spawnXFrac: ex.spawnXFrac } : undefined);
@@ -5346,7 +5359,7 @@ class BunkerScene extends WalkScene {
 class ExitScene extends WalkScene {
   constructor() { super('ExitScene'); }
   create() {
-    this.cameras.main.fadeIn(600, 0, 0, 0);
+    this.cameras.main.fadeIn(260, 0, 0, 0);
     this.buildWalk({
       bgKey: 'scene_exit',
       // The painting's bottom 15.8% is dead black, so the scale is taken from
@@ -5400,7 +5413,7 @@ class ExitScene extends WalkScene {
         // The end of the stage is just the end of the road: no caret, no label,
         // walk into it and it fades on.
         { xFrac: 0.985, w: 90, target: 'JumpScene', auto: true,
-          silent: true, fadeMs: 320 }
+          silent: true, fadeMs: 190 }
       ],
       drawFallback(WW) {
         const g = this.add.graphics().setDepth(-20);
@@ -5425,7 +5438,7 @@ class ExitScene extends WalkScene {
 class JumpScene extends WalkScene {
   constructor() { super('JumpScene'); }
   create() {
-    this.cameras.main.fadeIn(600, 0, 0, 0);
+    this.cameras.main.fadeIn(260, 0, 0, 0);
     this.buildWalk({
       bgKey: 'scene_jump',
       // The same scale as the village road, because the brothers walk straight
@@ -5438,7 +5451,7 @@ class JumpScene extends WalkScene {
       // He starts clear of the growth at the left end. At 0.04 he spawned
       // inside the dead plant, which draws in front of him — so the stage
       // opened on a man you could not see.
-      worldW: 'auto', groundFrac: 0.755, startXFrac: 0.14, bgZoom: 1.2,
+      worldW: 'auto', groundFrac: 0.755, startXFrac: 0.035, bgZoom: 1.2,
       pxPerM: 167,
       title: 'THE BURNT STREET',
       castSwitch: true, canReset: true,
@@ -5483,8 +5496,8 @@ class JumpScene extends WalkScene {
         // these, and they were scaled up at the same time, which put fronds
         // most of the way up the frame and made the street look like a
         // hedgerow. Position moved, size left alone.
-        { kind: 'fg', tex: 'deadplant', xFrac: 0.100, scale: 1.55, yOff: 232 },
-        { kind: 'fg', tex: 'deadplant', xFrac: 0.056, scale: 1.25, yOff: 232,
+        { kind: 'fg', tex: 'deadplant', xFrac: 0.152, scale: 1.55, yOff: 232 },
+        { kind: 'fg', tex: 'deadplant', xFrac: 0.108, scale: 1.25, yOff: 232,
           flip: true },
         // Mirrored: the asset's splintered end points up-left, and the
         // reference has it pointing up-right, out of the corner of the frame.
@@ -5508,8 +5521,17 @@ class JumpScene extends WalkScene {
                     tip: 'THAT IS EVERYTHING BUILT SO FAR' }
       ],
       exits: [
+        // The way back. The bunker is behind a blast door, the bridge comes
+        // down behind you and the drop is a drop, so this is the one link in
+        // the chain you can actually walk back along — and a street you can
+        // only ever leave one way reads as a corridor, not a place.
+        { xFrac: 0.004, w: 80, target: 'ExitScene', auto: true,
+          // Far enough back up the village road that its own auto exit is
+          // clear of him on arrival — land inside it and he could never arm
+          // it, so walking right would do nothing.
+          silent: true, fadeMs: 190, spawnXFrac: 0.88 },
         { xFrac: 0.99, w: 90, target: 'BridgeScene', auto: true,
-          silent: true, fadeMs: 320 }
+          silent: true, fadeMs: 190 }
       ],
       drawFallback(WW) {
         const g = this.add.graphics().setDepth(-20);
@@ -5637,6 +5659,65 @@ function holeGlowTexture(scene, bgKey, f) {
 // The textures ship as data URIs, so they are same-origin and readable. One
 // scan per texture, cached by key.
 const _bridgeArt = {};
+// What colour a picture is over a box, as fractions of the picture. Used to
+// put the fallen span in the same light as the roadway it belongs to: the two
+// are different files by different passes, and side by side the span read as
+// a grey slab dropped onto a warm stone bridge.
+function meanColour(scene, key, x0, x1, y0, y1) {
+  try {
+    const src = scene.textures.get(key).getSourceImage();
+    const cv = document.createElement('canvas');
+    cv.width = src.width; cv.height = src.height;
+    const cx = cv.getContext('2d');
+    cx.drawImage(src, 0, 0);
+    const X0 = Math.max(0, Math.round(x0 * src.width));
+    const X1 = Math.min(src.width, Math.round(x1 * src.width));
+    const Y0 = Math.max(0, Math.round(y0 * src.height));
+    const Y1 = Math.min(src.height, Math.round(y1 * src.height));
+    if (X1 <= X0 || Y1 <= Y0) return null;
+    const d = cx.getImageData(X0, Y0, X1 - X0, Y1 - Y0).data;
+    let r = 0, g = 0, b = 0, n = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i + 3] < 60) continue;            // transparent margin does not count
+      r += d[i]; g += d[i + 1]; b += d[i + 2]; n++;
+    }
+    return n ? { r: r / n, g: g / n, b: b / n, n } : null;
+  } catch (e) { return null; }
+}
+
+// The brightest row of a picture inside a band, and how bright it is. The
+// span's road surface is the lit line across it; its topmost painted pixel is
+// the rubble sitting on that road, which is 38 source rows higher. Anchoring
+// by the rubble put the roadway 7px below the deck line it is meant to
+// continue, so what met the eye at the seam was broken stone.
+function brightestRow(scene, key, y0, y1, x0, x1) {
+  try {
+    const src = scene.textures.get(key).getSourceImage();
+    const cv = document.createElement('canvas');
+    cv.width = src.width; cv.height = src.height;
+    const cx = cv.getContext('2d');
+    cx.drawImage(src, 0, 0);
+    const X0 = Math.max(0, Math.round(x0 * src.width));
+    const X1 = Math.min(src.width, Math.round(x1 * src.width));
+    const Y0 = Math.max(0, Math.round(y0 * src.height));
+    const Y1 = Math.min(src.height, Math.round(y1 * src.height));
+    if (X1 <= X0 || Y1 <= Y0) return null;
+    const d = cx.getImageData(X0, Y0, X1 - X0, Y1 - Y0).data;
+    const w = X1 - X0;
+    let best = -1, bestY = Y0;
+    for (let y = 0; y < Y1 - Y0; y++) {
+      let sum = 0, n = 0;
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        if (d[i + 3] < 60) continue;
+        sum += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]; n++;
+      }
+      if (n > w * 0.4) { const m = sum / n; if (m > best) { best = m; bestY = Y0 + y; } }
+    }
+    return best < 0 ? null : { y: bestY, lum: best, h: src.height };
+  } catch (e) { return null; }
+}
+
 function bridgeArt(scene, key) {
   if (_bridgeArt[key] !== undefined) return _bridgeArt[key];
   let out = null;
@@ -5702,7 +5783,7 @@ class BridgeScene extends WalkScene {
   constructor() { super('BridgeScene'); }
 
   create() {
-    this.cameras.main.fadeIn(600, 0, 0, 0);
+    this.cameras.main.fadeIn(260, 0, 0, 0);
     const H = 720;
 
     // Where the roadway actually ends, read off the picture at 2.4x rather
@@ -5729,12 +5810,8 @@ class BridgeScene extends WalkScene {
     // and nothing convincing can be painted into it. So zoom 1, the picture
     // filling the frame exactly, and the ravine that comes with it — 710px,
     // which at 2.4 heights puts him at 296.
-    // Zoom above 1 crops off the TOP, which here is sky and hillside — the
-    // roadway and the ravine stay where they are. Everything in the scene
-    // scales together with it, the brothers included, so the gap stays the
-    // same 2.12 body heights while both get bigger against the frame. This is
-    // the only knob that makes a man bigger without making the jump easier.
-    const ZOOM = 1.30;
+    // The whole picture, no crop — the widest this stage can be framed.
+    const ZOOM = 1.0;
     // A ravine wants about 2.13 of a man's heights: a single jump carries 1.80
     // and a double 2.93, so that is clear of one and inside the other.
     //
@@ -5742,16 +5819,37 @@ class BridgeScene extends WalkScene {
     // px/m — where the mismeasured one demanded 333. The whole scene reads at
     // this size; at 333 he filled a third of the frame and you could not see
     // the bridge he was crossing.
-    // 78 was the painting's own scale at zoom 1 and read as faithful but tiny.
-    // 78 x 1.30 keeps him exactly as big against the bridge and 30% bigger
-    // against the screen: a 182px man, a 387px ravine, the same 2.12.
+    // A 182px man, held at the size he reached at zoom 1.30 while the picture
+    // went back to 1.0. That is 1.3x the painting's own scale — the railings
+    // say this bridge was drawn for a smaller man — which is the trade the
+    // wide framing costs, and the right way round: the brothers read, and you
+    // can see the whole crossing.
     const PX_PER_M = 101;
+
+    // Size and motion are normally the same number: pxPerM sets how big he
+    // is, and playScale — pxPerM/111 — scales his speed, his jump and gravity
+    // together so the arc keeps its shape. Here they have to come apart.
+    //
+    // A jump's reach in body-heights does not depend on either of them while
+    // they are locked together: 200 x playScale / pxPerM, which is 1.80 for a
+    // single and 2.93 for a double at every stage in the game. The ravine is
+    // the painting's, 298px at this zoom, and a 182px man wants to need two
+    // jumps for it — so the single has to fall short of 298 and the double
+    // has to clear it. At the locked scale a single carries 328px and the
+    // stage stops being about the double jump at all.
+    //
+    // So motion is pinned at 0.78 instead of 0.91. A single now carries 281px
+    // and dies in the ravine; a double carries 455px and lands. The cost is
+    // that he walks and jumps about a seventh slower here than elsewhere,
+    // which is the quietest price on offer — the alternatives were a smaller
+    // man or a tighter crop, and both have already been asked for and undone.
+    const PLAY_SCALE = 0.78;
 
     this.buildWalk({
       bgKey: 'scene_bridgebg',
       worldW: 'auto', bgZoom: ZOOM, startXFrac: 0.02,
       groundFrac: DECK,
-      pxPerM: PX_PER_M,
+      pxPerM: PX_PER_M, playScale: PLAY_SCALE,
       // A missed jump restarts the stage with the bridge already down, rather
       // than dropping him somewhere and replaying the earthquake at him.
       fallRestart: true,
@@ -5771,7 +5869,7 @@ class BridgeScene extends WalkScene {
       ],
       exits: [
         { xFrac: 0.985, w: 90, target: 'DashScene', auto: true,
-          silent: true, fadeMs: 320 }
+          silent: true, fadeMs: 190 }
       ],
       drawFallback(WW) {
         const g = this.add.graphics().setDepth(-20);
@@ -5796,6 +5894,74 @@ class BridgeScene extends WalkScene {
   // sitting ON the two roadways — its slab proud of the deck by its own
   // thickness, the way a plank laid over a hole sits on the ground either
   // side rather than flush with it.
+  // One multiply tint that carries the span's road surface onto the painted
+  // roadway's colour. Clamped to 1 per channel because a multiply tint can
+  // only take light away — if the span were the darker of the two there would
+  // be nothing to do, and the clamp says so rather than washing it out.
+  _matchSpanToDeck(art) {
+    return this._spanLook(art).tint;
+  }
+
+  // Where the span's roadway is in its own art, and what it takes to put it in
+  // the same light as the painted one. Three numbers, all measured:
+  //   anchor  the row to sit on groundY, so one lit road line crosses the gap
+  //   tint    a multiply, when the span is the lighter of the two
+  //   lift    an additive pass, when it is the darker — a multiply can only
+  //           take light away, and here the span IS darker, which is why the
+  //           first attempt's near-white tint changed nothing
+  _spanLook(art) {
+    if (this.__spanLook) return this.__spanLook;
+    const out = { anchor: art.deck / art.h, tint: null, lift: 0 };
+    const x0 = art.px0 / art.w, x1 = (art.px0 + art.pw) / art.w;
+    const road = brightestRow(this, 'scene_bridgespan',
+                              art.py0 / art.h, (art.bottom) / art.h, x0, x1);
+    if (road) out.anchor = road.y / art.h;
+    const dy = this.bgGeom ? (this.groundY - this.bgGeom.y) / this.bgGeom.h : 0.52;
+    const g0 = this._gapL / this.worldW, g1 = this._gapR / this.worldW;
+    const deckL = brightestRow(this, 'scene_bridgebg', dy - 0.035, dy + 0.005,
+                               Math.max(0, g0 - 0.10), Math.max(0.02, g0 - 0.01));
+    const deckR = brightestRow(this, 'scene_bridgebg', dy - 0.035, dy + 0.005,
+                               Math.min(0.98, g1 + 0.01), Math.min(1, g1 + 0.10));
+    const lum = deckL && deckR ? (deckL.lum + deckR.lum) / 2
+                               : (deckL || deckR || {}).lum;
+    if (road && lum) {
+      const r = lum / Math.max(1, road.lum);
+      if (r < 0.985) {
+        const c = Math.max(0, Math.min(255, Math.round(255 * r)));
+        out.tint = (c << 16) | (c << 8) | c;
+      } else if (r > 1.015) {
+        out.lift = Math.min(0.55, r - 1);
+      }
+    }
+    this.__spanLook = out;
+    return out;
+  }
+
+  _matchSpanToDeckOld(art) {
+    // Both samples have to be the ROAD, not the stonework under it. The first
+    // pass took a band below each deck line and so compared the span's broken
+    // concrete underside against the arch's shadow — two dark cool things —
+    // and came back with a tint that made the span bluer still.
+    //
+    // In the span's own art `deck` is the top of the slab, so its road surface
+    // is the band just below that. On the painting the deck line is the
+    // surface, so the roadway is the band just above it.
+    const D = art.deck / art.h;
+    const span = meanColour(this, 'scene_bridgespan',
+                            art.px0 / art.w, (art.px0 + art.pw) / art.w,
+                            D, D + 0.06);
+    const g0 = this._gapL / this.worldW, g1 = this._gapR / this.worldW;
+    const dy = this.bgGeom ? (this.groundY - this.bgGeom.y) / this.bgGeom.h : 0.52;
+    const L = meanColour(this, 'scene_bridgebg', g0 - 0.10, g0 - 0.01, dy - 0.030, dy - 0.002);
+    const R = meanColour(this, 'scene_bridgebg', g1 + 0.01, g1 + 0.10, dy - 0.030, dy - 0.002);
+    if (!span || (!L && !R)) return null;
+    const deck = L && R ? { r: (L.r + R.r) / 2, g: (L.g + R.g) / 2, b: (L.b + R.b) / 2 }
+                        : (L || R);
+    const ch = (d, s2) => Math.max(0, Math.min(255, Math.round(255 * Math.min(1, d / Math.max(1, s2)))));
+    const t = (ch(deck.r, span.r) << 16) | (ch(deck.g, span.g) << 8) | ch(deck.b, span.b);
+    return t;
+  }
+
   _armSpan() {
     if (!this.textures.exists('scene_bridgespan')) return;
     const art = bridgeArt(this, 'scene_bridgespan');
@@ -5820,18 +5986,49 @@ class BridgeScene extends WalkScene {
     // the roadway, which is what shows it is the part that gives way.
     this._proud = 0;
 
+    // The span and the backdrop are different files, and the span came out of
+    // its pass a cooler, lighter grey than the warm stone it has to sit in.
+    // Flush placement fixed where it sat; this fixes what it looked like.
+    //
+    // Both are measured rather than guessed: the roadway either side of the
+    // hole, in a band just under the deck line, against the span's own road
+    // surface in the same band. The tint is one over the other per channel,
+    // which is exactly what a multiply tint undoes.
+    const look = this._spanLook(art);
+    this._spanTint = look.tint;
+    this._spanAnchor = look.anchor;
+    this._spanLift = look.lift;
+
+    // The lift is a second copy of the same crop, blended additively over the
+    // first. Stone takes it well — it brightens what is already lit and leaves
+    // the shadows where they are, which is what a painted highlight does.
+    const dress = (im, cropX, cropW) => {
+      if (this._spanTint) im.setTint(this._spanTint);
+      if (!this._spanLift) return [im];
+      const up = this.add.image(im.x, im.y, 'scene_bridgespan')
+        .setOrigin(im.originX, im.originY).setScale(im.scaleX, im.scaleY)
+        .setDepth(im.depth).setBlendMode(Phaser.BlendModes.ADD)
+        .setAlpha(this._spanLift);
+      up.setCrop(cropX, 0, cropW, art.h);
+      im._lift = up;
+      return [im, up];
+    };
+
     const mk = (cropX, cropW, originXpx) => {
       const im = this.add.image(0, 0, 'scene_bridgespan')
-        .setOrigin(originXpx / art.w, art.deck / art.h)
+        .setOrigin(originXpx / art.w, this._spanAnchor)
         .setScale(s)
         // Above the two edges buildWalk draws down every hole in the floor —
         // while the span is there the hole is covered. Below the player at 10.
         .setDepth(3);
       im.setCrop(cropX, 0, cropW, art.h);
+      im._dress = () => dress(im, cropX, cropW);
       return im;
     };
     this.span = mk(art.px0, art.pw, art.px0 + art.pw / 2);
     this.span.setPosition((this._gapL + this._gapR) / 2, this.groundY - this._proud);
+    this.span._dress();
+    if (this.span._lift) this.span._lift.setPosition(this.span.x, this.span.y);
 
     // Solid across its own deck, and only as deep as the roadway.
     this.spanBody = this.add.rectangle(x0 + wantW / 2, this.groundY - this._proud + 30,
@@ -5878,10 +6075,19 @@ class BridgeScene extends WalkScene {
     const s = this._spanScale, y = this.groundY - this._proud;
     const half = (cropX, cropW, originXpx, atX) => {
       const im = this.add.image(0, 0, 'scene_bridgespan')
-        .setOrigin(originXpx / art.w, art.deck / art.h)
+        .setOrigin(originXpx / art.w, this._spanAnchor || (art.deck / art.h))
         .setScale(s).setDepth(3);
       im.setCrop(cropX, 0, cropW, art.h);
       im.setPosition(atX, y);
+      // The halves are the same slab coming apart, so they carry its colour.
+      if (this._spanTint) im.setTint(this._spanTint);
+      if (this._spanLift) {
+        const up = this.add.image(atX, y, 'scene_bridgespan')
+          .setOrigin(im.originX, im.originY).setScale(s).setDepth(3)
+          .setBlendMode(Phaser.BlendModes.ADD).setAlpha(this._spanLift);
+        up.setCrop(cropX, 0, cropW, art.h);
+        im._lift = up;
+      }
       return im;
     };
     const o = Math.round(0.014 * this.worldW);
@@ -5890,6 +6096,12 @@ class BridgeScene extends WalkScene {
       half(mid, art.px1 - mid + 1, art.px1 + 1, this._gapR + o)
     ];
   }
+
+  // The additive copy that lifts the span into the roadway's light is a
+  // separate image, so anything done to the slab has to be done to it too —
+  // every tween takes both, and destroying one destroys the other.
+  static _both(o) { return o && o._lift ? [o, o._lift] : [o]; }
+  _kill(o) { if (!o) return; if (o._lift) o._lift.destroy(); o.destroy(); }
 
   _collapse() {
     if (this.bridgeState !== 'intact') return;     // only ever once
@@ -5904,10 +6116,12 @@ class BridgeScene extends WalkScene {
     this.cameras.main.shake(1100, 0.007);
 
     this.tweens.add({
-      targets: this.span, x: sx + 5, duration: 55, yoyo: true, repeat: 17,
+      targets: BridgeScene._both(this.span), x: sx + 5, duration: 55,
+      yoyo: true, repeat: 17,
       onComplete: () => {
         if (!this.span) return;                    // scene restarted under us
         this.span.x = sx;
+        if (this.span._lift) this.span._lift.x = sx;
         this.bridgeState = 'breaking';
         this.cameras.main.shake(420, 0.011);
 
@@ -5922,23 +6136,23 @@ class BridgeScene extends WalkScene {
 
         // Swap the slab for its two halves in the same frame and the same
         // place, so nothing jumps: the break is the only change.
-        this.span.destroy(); this.span = null;
+        this._kill(this.span); this.span = null;
         this.halves = this._makeHalves();
         this._dust();
 
         const [L, R] = this.halves;
-        this.tweens.add({ targets: L, rotation: 0.20, y: L.y + 14,
-                          duration: 620, ease: 'Quad.easeIn' });
-        this.tweens.add({ targets: R, rotation: -0.20, y: R.y + 14,
-                          duration: 620, ease: 'Quad.easeIn',
+        this.tweens.add({ targets: BridgeScene._both(L), rotation: 0.20,
+                          y: L.y + 14, duration: 620, ease: 'Quad.easeIn' });
+        this.tweens.add({ targets: BridgeScene._both(R), rotation: -0.20,
+                          y: R.y + 14, duration: 620, ease: 'Quad.easeIn',
           onComplete: () => {
             if (!this.halves) return;
             this.bridgeState = 'falling';
             this.halves.forEach((h, i) => this.tweens.add({
-              targets: h, y: h.y + 520, alpha: 0,
+              targets: BridgeScene._both(h), y: h.y + 520, alpha: 0,
               rotation: h.rotation + (i === 0 ? 0.30 : -0.30),
               duration: 1100, ease: 'Quad.easeIn',
-              onComplete: () => h.destroy()
+              onComplete: () => this._kill(h)
             }));
             this.time.delayedCall(900, () => {
               this.halves = null;
@@ -5985,7 +6199,7 @@ class BridgeScene extends WalkScene {
 class DashScene extends WalkScene {
   constructor() { super('DashScene'); }
   create() {
-    this.cameras.main.fadeIn(600, 0, 0, 0);
+    this.cameras.main.fadeIn(260, 0, 0, 0);
     this.buildWalk({
       bgKey: 'scene_dashstage',
       // Zoomed in, which is the only way to make him bigger without changing
@@ -5993,22 +6207,20 @@ class DashScene extends WalkScene {
       // it and the px/m grows with them. 243px of gap against a 141px man is
       // the same 1.7 it was at 180 against 104 — an identical jump, larger.
       // worldH gives the camera somewhere to follow him when he goes up.
-      worldW: 'auto', bgZoom: 1.62, worldH: 1080, startXFrac: 0.05,
+      worldW: 'auto', bgZoom: 1.62, worldH: 1080, startXFrac: 0.02,
       fallRestart: true,
       // The floor line is the roadway he starts on. Nothing else uses it —
       // the whole world is a hole and every surface is a ledge — but a missed
       // jump is put back on solid ground relative to it.
       groundFrac: 0.478,
-      // The gap here is the painting's 0.10 of the width, and that is narrow.
-      // A single jump carries 1.80 of his own heights, a double 2.93, and a
-      // dash adds about another 1.0 on top. At 78 px/m the gap was 1.74
-      // heights — under even a single jump, so the whole crossing could be
-      // taken with one press and both the double and the dash were decoration.
-      // 68 puts it at 1.99: past a single, well inside a double.
-      //
-      // Requiring the DASH is not on offer here: that needs a gap past 2.93
-      // heights, which means a man of 83px or less, smaller than this stage
-      // has ever had him. So the dash is taught here and useful, not demanded.
+      // What makes this crossing need the double jump is the HEIGHT, not the
+      // distance — which is what the line of dialogue already says. From the
+      // ledge at 0.559 to the deck at 0.378 is 211px, and a single jump rises
+      // 199px at this scale. Twelve pixels short, every time, however fast he
+      // is running. The second jump adds 162px and clears it.
+      // The gap across is 277px against a 148px man, 1.87 heights, so the
+      // dash is what buys the distance comfortably rather than what makes it
+      // possible. Taught and useful, not demanded.
       pxPerM: 82,
       title: 'THE DROP',
       castSwitch: true, canReset: true,
@@ -6026,10 +6238,18 @@ class DashScene extends WalkScene {
         // off into air with a body-width of painted stone still in front of
         // him — which is what "you go before the brick floor" was.
         { x0: 0.000, x1: 0.348, y: 0.478 },   // the roadway, with the car
-        // Same treatment. The middle ledge's lit top edge runs 0.375 to 0.470
-        // at 0.549 — it was reaching 0.04 of the picture past its own right
-        // end and starting 0.03 before its left one.
-        { x0: 0.375, x1: 0.470, y: 0.549 },   // the ledge below it
+        // Read at 12x this time. The lit top edge runs dead flat at 0.549 and
+        // carries on to 0.507, where it turns down a face you can see — 0.470
+        // was a shadow across the stone, not the end of it, and stopping there
+        // dropped him into the ravine with a body-width of ledge still under
+        // the next step. The face at the left end is at 0.352.
+        //
+        // The surface is not level: it sits at 0.565 where he lands and ramps
+        // up to 0.549 by 0.425. A ledge is one flat box, so it takes 0.559 —
+        // his boots a little into the rubble at the takeoff end rather than a
+        // little above the stone at the landing end, because feet buried in
+        // debris read as standing and feet in the air do not.
+        { x0: 0.352, x1: 0.507, y: 0.559 },   // the ledge below it
         // The deck's left face is at 0.600 and its surface at 0.378.
         { x0: 0.602, x1: 1.000, y: 0.378 }    // the deck above, and walkable
       ],
@@ -6042,7 +6262,7 @@ class DashScene extends WalkScene {
       ],
       exits: [
         { xFrac: 0.985, w: 90, target: 'ShopStreetScene', auto: true,
-          silent: true, fadeMs: 320 }
+          silent: true, fadeMs: 190 }
       ],
       drawFallback(WW) {
         const g = this.add.graphics().setDepth(-20);
@@ -6065,12 +6285,12 @@ class DashScene extends WalkScene {
 class ShopStreetScene extends WalkScene {
   constructor() { super('ShopStreetScene'); }
   create() {
-    this.cameras.main.fadeIn(600, 0, 0, 0);
+    this.cameras.main.fadeIn(260, 0, 0, 0);
     this.buildWalk({
       bgKey: 'scene_shopstreet',
       // Zoomed in so he reads at this distance; the ledges are fractions of
       // the picture, so they come with it.
-      worldW: 'auto', bgZoom: 1.30, worldH: 820, startXFrac: 0.04,
+      worldW: 'auto', bgZoom: 1.30, worldH: 820, startXFrac: 0.02,
       fallRestart: true,
       // The pavement in front of the shop, read off the painting.
       groundFrac: 0.845,
