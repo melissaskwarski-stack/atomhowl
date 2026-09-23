@@ -3596,8 +3596,12 @@ function driveWalker(scene, p, keys, onGround) {
     p._restSince = 0; p._longIdleDone = false; p._idleLooped = false;
   }
   else if (!p._restSince) p._restSince = now;
-  // A tutorial stage says what it teaches and nothing else — no taking the
-  // guitar off his back halfway through learning to jump.
+  // `noLongIdle` still exists for a stage that wants it, but no stage sets it
+  // any more. Every walking stage did, on the reasoning that a tutorial says
+  // what it teaches and nothing else — which also meant Wolffel never once got
+  // the burger out and Eterwolf never played a note, in the entire game. The
+  // flourish is most of the character; suppressing it everywhere was throwing
+  // out the thing it was written for.
   const allowLong = !(scene.cfg && scene.cfg.noLongIdle);
   if (hero && hero.longIdleOnce && p._curAnim &&
       p._curAnim.indexOf('-' + hero.longIdle) === 2 && !p.anims.isPlaying) {
@@ -5290,7 +5294,7 @@ class BunkerScene extends WalkScene {
       worldW: 'auto', groundFrac: 0.872, startXFrac: 0.06, bgZoom: 1.0,
       pxPerM: 156, playScale: 1,
       title: 'THE BUNKER — quarantine shelter',
-      castSwitch: true, canReset: true, noLongIdle: true,
+      castSwitch: true, canReset: true,
       beats: [
         { at: 0,    tip: 'HOLD  A  TO GO LEFT,  D  TO GO RIGHT' },
         { at: 0.22, tip: 'HOLD  SHIFT  WHILE WALKING TO RUN' },
@@ -5356,7 +5360,7 @@ class ExitScene extends WalkScene {
       worldW: 'auto', groundFrac: 0.755, bgContentFrac: 0.8411,
       startXFrac: 0.135, bgZoom: 1.0, pxPerM: 167,
       title: 'OUTSIDE — the village road',
-      castSwitch: true, canReset: true, noLongIdle: true,
+      castSwitch: true, canReset: true,
       // Foreground dressing, placed close to the bunker door where the scene
       // is darkest and nobody actually walks. 'fg' draws above the player
       // (depth 34 against his 10) and scrolls a touch faster than the world
@@ -5437,7 +5441,7 @@ class JumpScene extends WalkScene {
       worldW: 'auto', groundFrac: 0.755, startXFrac: 0.14, bgZoom: 1.2,
       pxPerM: 167,
       title: 'THE BURNT STREET',
-      castSwitch: true, canReset: true, noLongIdle: true,
+      castSwitch: true, canReset: true,
       // No holes: this stage teaches one thing. A single broken wall sits near
       // the middle of the road — tall enough that he cannot just walk through
       // it, low enough that a jump lands him cleanly on top. He climbs on,
@@ -5473,8 +5477,12 @@ class JumpScene extends WalkScene {
         //
         // The plant twice, the second one mirrored and smaller at the very
         // edge, so it reads as a clump rather than one repeated cutout.
-        { kind: 'fg', tex: 'deadplant', xFrac: 0.078, scale: 2.25, yOff: 250 },
-        { kind: 'fg', tex: 'deadplant', xFrac: 0.028, scale: 1.75, yOff: 250,
+        // Back to the size that was signed off. The ask was to REPOSITION
+        // these, and they were scaled up at the same time, which put fronds
+        // most of the way up the frame and made the street look like a
+        // hedgerow. Position moved, size left alone.
+        { kind: 'fg', tex: 'deadplant', xFrac: 0.062, scale: 1.55, yOff: 232 },
+        { kind: 'fg', tex: 'deadplant', xFrac: 0.018, scale: 1.25, yOff: 232,
           flip: true },
         // Mirrored: the asset's splintered end points up-left, and the
         // reference has it pointing up-right, out of the corner of the frame.
@@ -5732,7 +5740,7 @@ class BridgeScene extends WalkScene {
       // than dropping him somewhere and replaying the earthquake at him.
       fallRestart: true,
       title: 'THE BRIDGE',
-      castSwitch: true, canReset: true, noLongIdle: true,
+      castSwitch: true, canReset: true,
       // The whole point of the stage, and the reason the sprint is off: a
       // sprinting single jump outreaches a walking double, so with it there is
       // no ravine width that needs two jumps and not one.
@@ -5979,7 +5987,7 @@ class DashScene extends WalkScene {
       // has ever had him. So the dash is taught here and useful, not demanded.
       pxPerM: 68,
       title: 'THE DROP',
-      castSwitch: true, canReset: true, noLongIdle: true,
+      castSwitch: true, canReset: true,
       doubleJump: true, dash: true,
       // No floor anywhere. Everything standable is a ledge, and what is not a
       // ledge is the valley.
@@ -6038,7 +6046,7 @@ class ShopStreetScene extends WalkScene {
       // opening like a man standing in a doorway.
       pxPerM: 110,
       title: 'THE TIENDA',
-      castSwitch: true, canReset: true, noLongIdle: true,
+      castSwitch: true, canReset: true,
       // He arrives able to double jump and dash, and keeps both — there is
       // nothing here that needs them, but taking a move away again reads as a
       // bug rather than as design.

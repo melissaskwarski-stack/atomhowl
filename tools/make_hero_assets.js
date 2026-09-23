@@ -28,6 +28,10 @@ const ROOT = path.resolve(__dirname, '..');
 const A = 'public/assets/';
 const SRC = {
   idle:      A + 'Idle_v3_idle_breathing_east.gif',
+  // The second thing he does standing still: a longer, slower breath. He
+  // settles into it after the first, and it is what he goes back to when he
+  // has finished with the guitar.
+  idle2:     A + 'ew_idle2_breathing.gif',
   // The run is two clips: the lean-in that gets him moving, which has real east
   // and west art, and a true looping sprint behind it. Before the sprint arrived
   // the loop had to be sliced out of the lean-in, which never settles.
@@ -181,6 +185,8 @@ const pool = (poolName, clip, mirror) => {
 const K = {
   idle:      pool('idle',      'idle',   false),
   idleW:     pool('idleW',     'idle',   true),   // east only — mirror
+  idle2:     pool('idle2',     'idle2',  false),
+  idle2W:    pool('idle2W',    'idle2',  true),
   walk:      pool('walk',      'walk',   false),
   walkW:     pool('walkW',     'walk',   true),   // east only — mirror
   runin:     pool('runin',     'runin',  false),  // real east lean-in
@@ -278,6 +284,17 @@ const mod = {
   directional: true,       // real per-side art — pick the anim, never flipX
   body, muzzle, muzzles,
   canvasW: CW, canvasH: CH,
+  // Standing still he works down this list, one step every idleStepMs: the
+  // first breath, then the longer one, then the guitar comes off his back.
+  // Having played, he goes back to the SECOND pose — not the first — and does
+  // it again eight seconds later.
+  idleChain: ['idle', 'idle2', 'guitar'],
+  idleStepMs: 8000,
+  idleLoopFrom: 1,
+  idleLoopMs: 8000,
+  longIdle: 'guitar',
+  longIdleMs: 8000,
+  longIdleOnce: true,      // it ends, and the chain comes round again
   pending: ['idle west (mirrored east)', 'walk west (mirrored east)',
             'guitar west (mirrored east)', 'pistol west (mirrored east)',
             'dash west (mirrored east)', 'run-shoot east (mirrored west)',
@@ -287,6 +304,8 @@ const mod = {
   anims: {
     idle:       A_(K.idle,      5),     // slow breathing
     idleW:      A_(K.idleW,     5),
+    idle2:      A_(K.idle2,     5),     // the longer breath he settles into
+    idle2W:     A_(K.idle2W,    5),
     walk:       A_(K.walk,      11),
     walkW:      A_(K.walkW,     11),
     // one-shot intros; each is chained into the matching loop below
@@ -308,8 +327,11 @@ const mod = {
     // settled tails
     run:        A_(K.run,       14),
     runW:       A_(K.runW,      14),
-    guitar:     A_(K.guitar,    7),     // idle strumming
-    guitarW:    A_(K.guitarW,   7),
+    // Nine times through the 0.71s strum, after a 0.82s intro: about seven
+    // seconds of playing, then he stops and goes back to standing. It used to
+    // loop until you moved, which meant he never put it away.
+    guitar:     A_(K.guitar,    7, 8),
+    guitarW:    A_(K.guitarW,   7, 8),
     shoot:      A_(K.pistol,    10),    // arm out, recoil
     shootW:     A_(K.pistolW,   10),
     // Same again, and this one was the worst of them: eight frames at 15fps is
