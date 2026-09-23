@@ -87,6 +87,17 @@ const SCENE_SRC = {
   // on the left is what you then write as tex:'<name>' in a stage's props.
   // Put the PNG in public/assets first; transparency is kept, so trim it tight
   // and it will sit on the ground properly.
+  // ---- THE STORE INTERIOR ----------------------------------------------
+  // One painting and five props. The stage reads every surface off the
+  // painting by fraction; the props are placed the same way.
+  storeint:  ['public/assets/store_interior.png'],
+  ledgeprop: ['public/assets/ledge_prop.png'],
+  chest:     ['public/assets/chest.png'],
+  // The opening clip as one horizontal strip of 12 frames, cut from the gif
+  // to its painted box. CHEST_FRAMES in the game has to match the 12.
+  chestopen: ['public/assets/chest_open_strip.png'],
+  leveroff:  ['public/assets/lever_off.png'],
+  leveron:   ['public/assets/lever_on.png'],
   deadplant: ['public/assets/dead_plant.png'],
   deadlog:   ['public/assets/dead_log.png'],
   // ----------------------------------------------------------------------

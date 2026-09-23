@@ -689,7 +689,11 @@ function waveConfig(n) {
 }
 
 // cross-scene progress (weapon acquired in the shop, etc.)
-const GameState = { hasWeapon: false, castId: null };
+const GameState = { hasWeapon: false, hasSwords: false, castId: null };
+// The blades come out of the chest in the store. The older route through the
+// city hands you a gun before it hands you a fight, so it keeps its sword on
+// that instead — nothing that worked before stops working.
+function armedWithBlade() { return GameState.hasSwords || GameState.hasWeapon; }
 
 const WORLD_W = 2400;
 const WORLD_H = 720;
@@ -2179,9 +2183,31 @@ class GameScene extends Phaser.Scene {
     this.damageZombie(zombie, 1, dir * 140, false);
   }
 
+  // One line, once, rather than a sound and nothing to read. It says where
+  // the blades are, because a control that does nothing and does not say why
+  // reads as broken rather than as locked.
+  _noBlade() {
+    if (this._noBladeAt && this.time.now - this._noBladeAt < 2200) return;
+    this._noBladeAt = this.time.now;
+    const t = this.add.text(640, 150, 'NO BLADE  —  THERE IS A CHEST IN THE TIENDA', {
+      fontFamily: 'Courier New, monospace', fontSize: '17px', color: '#c93b2a',
+      stroke: '#0d0a08', strokeThickness: 5
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(95);
+    this.tweens.add({ targets: t, alpha: 0, y: t.y - 22, duration: 1500,
+      delay: 500, onComplete: () => t.destroy() });
+  }
+
   swordAttack() {
     const time = this.time.now;
     if (time < this.nextSwordAt || this.dead) return;
+    // The blades are taken out of the chest in the store. Anyone who came the
+    // older way is already carrying a gun by the time there is anything to
+    // fight, and that counts — see armedWithBlade.
+    if (!armedWithBlade()) {
+      Sfx.ensure(); Sfx.deny();
+      this._noBlade();
+      return;
+    }
 
     // Keep swinging and the chain advances; let it lapse and the next swing
     // opens from the draw again. The blade is only out during the chain, so
@@ -4697,8 +4723,12 @@ class WalkScene extends Phaser.Scene {
     // that roadway, dropped through it (a one-way ledge only catches from
     // above) and fell out of the world before the scene had finished fading
     // in. Anything that opens on a surface other than the floor line hit this.
+    // ...unless the stage says he comes in through a door on the floor. The
+    // store has a balcony running the length of its left wall, so the topmost
+    // surface above the entrance is that balcony, and he arrived from the
+    // street standing on it.
     let standY = groundY;
-    (this.solidsW || []).forEach(o => {
+    if (!cfg.startOnFloor) (this.solidsW || []).forEach(o => {
       if (!o || !o.body) return;
       const b = o.body;
       if (startX < b.x || startX > b.x + b.width) return;
@@ -6328,8 +6358,8 @@ class ShopStreetScene extends WalkScene {
         // the shopfront band and taking the widest dark run: x 0.845-0.912,
         // y 0.585-0.825. The earlier 0.772-0.874 was read off a crop by eye
         // and was a tenth of the picture to the left of the real hole.
-        { xFrac: 0.878, w: 170, target: 'ShopScene',
-          spawnXFrac: 0.29, glow: true, noArrow: true,
+        { xFrac: 0.878, w: 170, target: 'StoreScene',
+          spawnXFrac: 0.03, glow: true, noArrow: true,
           glowFrac: { x0: 0.845, x1: 0.912, y0: 0.585, y1: 0.825 } }
       ],
       drawFallback(WW) {
@@ -6340,6 +6370,336 @@ class ShopStreetScene extends WalkScene {
     });
   }
 }
+
+// ================================================================== //
+//  THE STORE — inside the tienda                                     //
+//                                                                    //
+//  The first stage built out of a drawn plan rather than measured    //
+//  off the painting: every surface here is one of the red blocks in  //
+//  the reference, read out of that image by colour rather than by    //
+//  eye, so what you can stand on is exactly what was drawn. The two  //
+//  dotted lines in the same image are the paths the two stone ledges //
+//  travel, and they are read the same way.                           //
+//                                                                    //
+//  It asks for everything the three tutorials taught, in order: a    //
+//  double jump to reach the balcony, timing to ride the low ledge,   //
+//  and a dash to leave it. The chest on the balcony is the point of  //
+//  the trip — both brothers come out of it armed — and the lever     //
+//  beside it is what brings the high ledge across to the stairs.     //
+// ================================================================== //
+class StoreScene extends WalkScene {
+  constructor() { super('StoreScene'); }
+
+  create() {
+    this.cameras.main.fadeIn(260, 0, 0, 0);
+
+    // Zoomed so the brothers read against a room this wide. The painting's own
+    // scale comes off the door on the right — 0.205 of the height for a door a
+    // shade over two metres — which is 74 px/m at zoom 1 and a 133px man.
+    const ZOOM = 1.25;
+    const PX_PER_M = 92;
+
+    // Every one of these is a red block in the reference, to the thousandth.
+    // The floor is the boardwalk, which was not drawn because it is obvious.
+    this.buildWalk({
+      bgKey: 'scene_storeint',
+      // The world is as tall as the painting. Without that it is 720 and the
+      // picture's top 180px are cut off — which is exactly where the balcony
+      // is, so a man standing on it had his head outside the world and the
+      // camera had nowhere to follow him to.
+      worldW: 'auto', worldH: 900, bgZoom: ZOOM, startXFrac: 0.03,
+      groundFrac: 0.805, startOnFloor: true,
+      pxPerM: PX_PER_M,
+      title: 'THE TIENDA — INSIDE',
+      castSwitch: true, canReset: true,
+      doubleJump: true, dash: true,
+      ledges: [
+        // ---- the left climb, and what it leads to ----
+        { x0: 0.232, x1: 0.290, y: 0.752 },   // the stone block on the floor
+        { x0: 0.302, x1: 0.377, y: 0.692 },   // the table beside it
+        { x0: 0.000, x1: 0.378, y: 0.385 },   // the balcony: the chest and the lever
+        // ---- the right climb ----
+        { x0: 0.675, x1: 0.777, y: 0.500 },   // the shelf the low ledge delivers you to
+        { x0: 0.627, x1: 0.683, y: 0.339 },   // the stairs, three steps
+        { x0: 0.652, x1: 0.706, y: 0.319 },
+        { x0: 0.653, x1: 0.727, y: 0.309 },
+        { x0: 0.664, x1: 0.727, y: 0.262 },   // the top of the stairs
+        // ---- the high gantry, and the way down to the door ----
+        { x0: 0.782, x1: 0.965, y: 0.262 },
+        { x0: 0.818, x1: 0.908, y: 0.618 }
+      ],
+      beats: [
+        { at: 0,    say: [['PLAYER', 'Somebody left in a hurry.']],
+                    tip: 'CLIMB THE LEFT SIDE — THE BALCONY IS A DOUBLE JUMP' },
+        { at: 0.40, tip: 'RIDE THE LEDGE, THEN DASH OFF IT' },
+        { at: 0.74, tip: 'UP TO THE GANTRY — THE CHEST IS UP THERE' }
+      ],
+      exits: [
+        // The door at the far right, on the floor, under the sign. It is the
+        // end of what is built, so it does not start another scene.
+        { xFrac: 0.940, w: 120, label: 'LEAVE THROUGH THE BACK DOOR',
+          target: '__END__' }
+      ],
+      drawFallback(WW) {
+        const g = this.add.graphics().setDepth(-20);
+        g.fillStyle(0x140f0c, 1); g.fillRect(0, 0, WW, 720);
+        g.fillStyle(0x241c12, 1); g.fillRect(0, 580, WW, 140);
+      }
+    });
+
+    const bg = this.bgGeom;
+    this.fx = f => bg.x + f * bg.w;
+    this.fy = f => bg.y + f * bg.h;
+
+    // ---- the two travelling ledges -----------------------------------
+    // Each is drawn at one end of its dotted line and travels to the other.
+    // The low one runs the whole time; the high one is dead until the lever.
+    this.movers = [
+      this._mover({ x0: 0.383, x1: 0.563, y: 0.565, to: 0.605, ms: 3400, live: true }),
+      this._mover({ x0: 0.478, x1: 0.620, y: 0.390, to: 0.390, ms: 2600, live: false })
+    ];
+
+    // On the high gantry on the right, which is where the climb ends — the
+    // reward at the top of the room rather than at the start of it.
+    this._buildChest(0.828, 0.262);
+    this._buildLever(0.345, 0.385);
+    this._swordsTaken = false;
+
+    // Its own listener rather than a JustDown in update. WalkScene's exit
+    // check runs first every frame and reads JustDown(E) for its doorways —
+    // and reading it is what clears it, so by the time the lever looked, the
+    // press was already spent and the handle never moved.
+    this.input.keyboard.on('keydown-E', () => { if (this._atLever()) this._throwLever(); });
+  }
+
+  // A one-way platform that moves. The collision box is static — the whole
+  // stage's colliders are, and a dynamic immovable body would need its own —
+  // so it is repositioned each frame and told to re-read where it is. The
+  // player does not ride a static body by himself, so whatever is standing on
+  // it gets the same step added to its own x. Without that he stands still
+  // while the stone slides out from under him.
+  _mover(m) {
+    const w = (m.x1 - m.x0) * this.bgGeom.w;
+    const y = this.fy(m.y);
+    const im = this.add.image(this.fx(m.x0) + w / 2, y, 'scene_ledgeprop')
+      .setOrigin(0.5, 0).setDepth(4);
+    im.setScale(w / im.width);
+    // The box is the stone's top face only, and one-way like every other
+    // ledge here, so a jump from underneath passes through it.
+    const box = this.add.rectangle(im.x, y + 30, w, 60, 0x000000, 0).setDepth(-1);
+    this.physics.add.existing(box, true);
+    const c = box.body.checkCollision;
+    c.down = false; c.left = false; c.right = false;
+    this.solidsW.push(box);
+    this.physics.add.collider(this.player, box);
+    return { im, box, w, y, from: m.x0, to: m.to, ms: m.ms, live: m.live, t: 0, dir: 1, dx: 0 };
+  }
+
+  // The chest: the still drawing while it is shut, and the supplied clip when
+  // it is reached. The clip arrives as one horizontal strip, so its frames are
+  // cut into the texture here rather than at load time.
+  //
+  // Worth saying plainly: across all 24 frames of that clip the lid does not
+  // open. It is a glow — the metal lights up and the whole box brightens and
+  // swells a little. So the clip plays and holds on its last frame, and what
+  // carries "open" is the light out of it and the card that follows. A clip
+  // where the lid actually lifts would drop straight in here.
+  _buildChest(xf, groundFrac) {
+    if (!this.textures.exists('scene_chest')) return;
+    const x = this.fx(xf), y = this.fy(groundFrac);
+    // A chest is a known width, about 1.1m, and both drawings are roughly
+    // twice as wide as they are tall — so it is sized across. Sizing it by
+    // height gave one as wide as a man is tall.
+    const wantW = Math.round(1.25 * this.pxPerM);
+    const im = this.add.image(x, y + 2, 'scene_chest').setOrigin(0.5, 1).setDepth(6);
+    im.setScale(wantW / im.width);
+    this.chest = im;
+    this.chestX = x;
+    this.chestY = y;
+    this.chestGlow = this.add.ellipse(x, y - im.displayHeight * 0.5,
+      im.displayWidth * 0.9, im.displayHeight * 0.6, 0xffd27a, 0).setDepth(5);
+
+    // the clip, cut out of the strip
+    const CHEST_FRAMES = 12;
+    if (!this.textures.exists('scene_chestopen')) return;
+    const tex = this.textures.get('scene_chestopen');
+    const src = tex.getSourceImage();
+    const fw = Math.floor(src.width / CHEST_FRAMES), fh = src.height;
+    const names = [];
+    for (let i = 0; i < CHEST_FRAMES; i++) {
+      const n = 'co' + i;
+      if (!tex.has(n)) tex.add(n, 0, i * fw, 0, fw, fh);
+      names.push({ key: 'scene_chestopen', frame: n });
+    }
+    if (!this.anims.exists('chest-open')) {
+      this.anims.create({ key: 'chest-open', frames: names, frameRate: 15, repeat: 0 });
+    }
+    // Laid over the still one at the same footprint, hidden until it is time.
+    this.chestAnim = this.add.sprite(x, y + 2, 'scene_chestopen', 'co0')
+      .setOrigin(0.5, 1).setDepth(6).setVisible(false);
+    this.chestAnim.setScale(wantW / fw);
+  }
+
+  // The lever, bolted to the pillar at the end of the balcony. Two drawings,
+  // off and on, so the throw is a crossfade with the handle's own travel
+  // borrowed from the difference between them — plus the squash you feel in
+  // your hand when a switch like that goes over.
+  _buildLever(xf, floorFrac) {
+    if (!this.textures.exists('scene_leveroff')) return;
+    const x = this.fx(xf);
+    // Bolted to the pillar at chest height on a man standing beside it, which
+    // is where a hand goes without reaching. 0.75 of his height hung half a
+    // body off the floor and ran off the top of the picture.
+    const wantH = Math.round(0.42 * HUMAN_M * this.pxPerM);
+    const y = this.fy(floorFrac) - Math.round(0.28 * HUMAN_M * this.pxPerM);
+    const mk = key => {
+      const o = this.add.image(x, y, key).setOrigin(0.5, 1).setDepth(6);
+      o.setScale(wantH / o.height);
+      return o;
+    };
+    this.leverOff = mk('scene_leveroff');
+    this.leverOn = this.textures.exists('scene_leveron') ? mk('scene_leveron') : null;
+    if (this.leverOn) this.leverOn.setAlpha(0);
+    this.leverX = x;
+    this.leverY = y;
+    this.leverOnState = false;
+    // A hint that only shows when he is next to it, like every exit marker.
+    this.leverLabel = this.add.text(x, y - wantH - 16, 'E  —  THROW THE LEVER', {
+      fontFamily: 'Courier New, monospace', fontSize: '15px', color: '#d9c7a8',
+      stroke: '#0d0a08', strokeThickness: 4
+    }).setOrigin(0.5, 1).setDepth(8).setAlpha(0);
+  }
+
+  _atLever() {
+    return !!this.leverOff && !!this.player &&
+           Math.abs(this.player.x - this.leverX) < 90 &&
+           Math.abs(this.player.y - this.leverY) < 210;
+  }
+
+  _throwLever() {
+    if (this._leverBusy) return;
+    this._leverBusy = true;
+    this.leverOnState = !this.leverOnState;
+    Sfx.ensure(); Sfx.select();
+    const a = this.leverOnState ? this.leverOff : this.leverOn;
+    const b = this.leverOnState ? this.leverOn : this.leverOff;
+    if (!b) { this._leverBusy = false; return; }
+    // the handle goes over: a quick squash, the two states crossing under it
+    this.tweens.add({ targets: [a, b], scaleY: a.scaleY * 0.93, duration: 70, yoyo: true });
+    this.tweens.add({ targets: a, alpha: 0, duration: 110 });
+    this.tweens.add({ targets: b, alpha: 1, duration: 110,
+      onComplete: () => { this._leverBusy = false; } });
+    // and the high ledge starts or stops
+    const hi = this.movers[1];
+    hi.live = this.leverOnState;
+    this._showTip(this.leverOnState
+      ? 'THE HIGH LEDGE IS MOVING — RIDE IT TO THE STAIRS'
+      : 'THE HIGH LEDGE HAS STOPPED');
+  }
+
+  _openChest() {
+    if (this._swordsTaken || !this.chest) return;
+    this._swordsTaken = true;
+    GameState.hasSwords = true;
+    Sfx.ensure(); Sfx.land();
+    this.cameras.main.flash(260, 255, 226, 170);
+    // The clip takes over from the still drawing and holds where it ends.
+    if (this.chestAnim) {
+      this.chest.setVisible(false);
+      this.chestAnim.setVisible(true).play('chest-open');
+    }
+    this.tweens.add({ targets: this.chestGlow, fillAlpha: 0.62, scaleY: 1.9,
+      duration: 520, yoyo: true, hold: 900 });
+    this._say([['PLAYER', 'Two of them. One each.']]);
+    // The card comes after the clip, not over it.
+    this.time.delayedCall(820, () => this._bladePanel());
+    this.time.delayedCall(1100, () => this._showTip(
+      'RMB OR  F  TO SWING  ·  NOW DOWN TO THE DOOR'));
+  }
+
+  // acquireWeapon's card is about a gun and tells you to go back outside, so
+  // the blades get their own.
+  _bladePanel() {
+    const panel = this.add.rectangle(640, 350, 620, 190, 0x0d0a08, 0.93)
+      .setScrollFactor(0).setDepth(90).setStrokeStyle(3, 0xf2b13c);
+    const t1 = this.add.text(640, 300, 'A PAIR OF BLADES', {
+      fontFamily: 'Courier New, monospace', fontSize: '26px', color: '#f2b13c',
+      stroke: '#0d0a08', strokeThickness: 5
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(91);
+    const t2 = this.add.text(640, 340, 'one each  —  Eterwolf and Wolffel both carry one now', {
+      fontFamily: 'Courier New, monospace', fontSize: '16px', color: '#d9c7a8'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(91);
+    const t3 = this.add.text(640, 386, 'RMB  or  F  to swing  ·  hold the rhythm for the three-hit chain', {
+      fontFamily: 'Courier New, monospace', fontSize: '14px', color: '#8a6f4a'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(91);
+    const grp = [panel, t1, t2, t3];
+    grp.forEach(o => o.setAlpha(0));
+    this.tweens.add({ targets: grp, alpha: 1, duration: 250 });
+    this.time.delayedCall(3200, () => this.tweens.add({
+      targets: grp, alpha: 0, duration: 450,
+      onComplete: () => grp.forEach(o => o.destroy())
+    }));
+  }
+
+  update(time, delta) {
+    super.update(time, delta);
+    if (!this.player || this._transitioning) return;
+
+    // ---- carry the ledges, and whoever is standing on them ----------
+    const d = Math.min(48, delta || 16);
+    (this.movers || []).forEach(m => {
+      m.dx = 0;
+      if (!m.live) return;
+      m.t += (d / m.ms) * m.dir;
+      if (m.t >= 1) { m.t = 1; m.dir = -1; }
+      if (m.t <= 0) { m.t = 0; m.dir = 1; }
+      // ease in and out, so it arrives rather than stops dead
+      const e = 0.5 - Math.cos(Math.PI * m.t) / 2;
+      const want = this.fx(m.from + (m.to - m.from) * e) + m.w / 2;
+      m.dx = want - m.im.x;
+      m.im.x = want;
+      m.box.x = want;
+      m.box.body.updateFromGameObject();
+    });
+    // Standing ON one means his feet are at its top face and he is not rising.
+    const b = this.player.body;
+    (this.movers || []).forEach(m => {
+      if (!m.dx || !b.blocked.down) return;
+      const top = m.box.y - m.box.height / 2;
+      if (Math.abs(b.bottom - top) > 6) return;
+      if (b.right < m.box.x - m.w / 2 || b.left > m.box.x + m.w / 2) return;
+      this.player.x += m.dx;
+    });
+
+    // ---- the chest, and the lever -----------------------------------
+    if (this.chest && !this._swordsTaken &&
+        Math.abs(this.player.x - this.chestX) < 80 &&
+        Math.abs(this.player.y - this.chestY) < 200) this._openChest();
+
+    if (this.leverOff) this.leverLabel.setAlpha(this._atLever() ? 1 : 0);
+  }
+}
+
+StoreScene.prototype.goExit = function (ex) {
+  if (ex.target !== '__END__') return WalkScene.prototype.goExit.call(this, ex);
+  if (this._ending) return;
+  this._ending = true;
+  this._transitioning = true;
+  this.player.setVelocityX(0);
+  playAction(this.player, this.player._hero, 'idle', this.player._facing);
+  Sfx.ensure(); Sfx.select();
+  this.cameras.main.fadeOut(900, 0, 0, 0);
+  this.cameras.main.once('camerafadeoutcomplete', () => {
+    const t1 = this.add.text(640, 330, 'THE DOOR OPENS ON THE STREET', {
+      fontFamily: 'Courier New, monospace', fontSize: '26px', color: '#f2b13c'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(200).setAlpha(0);
+    const t2 = this.add.text(640, 380, 'end of the build  ·  ESC for the menu  ·  R to play it again', {
+      fontFamily: 'Courier New, monospace', fontSize: '15px', color: '#8a6f4a'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(200).setAlpha(0);
+    this.cameras.main.fadeIn(600, 0, 0, 0);
+    this.tweens.add({ targets: [t1, t2], alpha: 1, duration: 700, delay: 300 });
+  });
+};
 
 class CityScene extends WalkScene {
   constructor() { super('CityScene'); }
@@ -6480,6 +6840,7 @@ class DebugScene extends GameScene {
 
   create() {
     GameState.hasWeapon = true;        // sandbox starts armed
+    GameState.hasSwords = true;        // ...blades included
     this.castId = this._wantCast;      // read by GameScene.create when it builds the player
     super.create();
 
@@ -6727,7 +7088,7 @@ window.__game = new Phaser.Game({
   physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
   scene: [BootScene, StartScene, MenuScene, CharSelectScene, IntroDialogueScene,
           BunkerScene, ExitScene, JumpScene, BridgeScene, DashScene,
-          ShopStreetScene, CityScene, ShopFrontScene, ShopScene,
+          ShopStreetScene, StoreScene, CityScene, ShopFrontScene, ShopScene,
           GameScene, DebugScene]
 });
 
@@ -6736,6 +7097,9 @@ window.__game = new Phaser.Game({
 // mapping — `Pad.connected`, `Pad.axes`, `Pad._held` — and so the tests can
 // drive it without reaching into the closure.
 window.Pad = Pad;
+// What the brothers are carrying, so a test can read it back without having
+// to infer it from an animation.
+window.GameState = GameState;
 // Same reason: so the sound can be prodded from the console while tuning it,
 // and so a test can count footsteps without listening to them.
 window.Sfx = Sfx;
