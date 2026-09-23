@@ -109,6 +109,10 @@ const SCENE_SRC = {
   storage2lit:  ['public/assets/storage2_lit.png'],
   ropethin:     ['public/assets/alien_rope_thin.png'],
   ropebig:      ['public/assets/alien_rope_big.png'],
+  // The creature itself, as one horizontal strip of 8 frames cut from the gif
+  // to a box shared by every frame, so it does not shift as it plays.
+  // CREATURE_FRAMES in the game has to match the 8.
+  creature:     ['public/assets/creature_idle_strip.png'],
   cine1:        ['public/assets/enemy_cine_1.jpg'],
   cine2:        ['public/assets/enemy_cine_2.jpg'],
   deadplant: ['public/assets/dead_plant.png'],

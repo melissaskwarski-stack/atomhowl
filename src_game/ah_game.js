@@ -689,7 +689,16 @@ function waveConfig(n) {
 }
 
 // cross-scene progress (weapon acquired in the shop, etc.)
-const GameState = { hasWeapon: false, hasSwords: false, castId: null };
+// `seen` is the set of one-off moments that have already played — a
+// conversation, a cutscene, a creature waking up. Stages restart constantly
+// (a fall, R, walking back through a door), and without this every one of
+// them replays its set piece each time you step into the room.
+const GameState = { hasWeapon: false, hasSwords: false, castId: null, seen: {} };
+function once(id) {
+  if (GameState.seen[id]) return false;
+  GameState.seen[id] = true;
+  return true;
+}
 // The blades come out of the chest in the store. The older route through the
 // city hands you a gun before it hands you a fight, so it keeps its sword on
 // that instead — nothing that worked before stops working.
@@ -4211,7 +4220,11 @@ class IntroDialogueScene extends Phaser.Scene {
 
     this.cameras.main.setBackgroundColor('#0a0807');
     this.cameras.main.fadeIn(this.fadeMs, 0, 0, 0);
-    stopMusic(400);
+    // The opening takes the menu theme down with it. A cut out of a stage and
+    // back has no music of its own to stop, and stopping it would silence the
+    // stage it returns to.
+    this.keepMusic = !!d.keepMusic;
+    if (!this.keepMusic) stopMusic(400);
 
     if (this.textures.exists(this.bgKey)) {
       const bg = this.add.image(W / 2, H / 2, this.bgKey).setDepth(-20);
@@ -4241,6 +4254,14 @@ class IntroDialogueScene extends Phaser.Scene {
     this._ui.forEach(o => o.setAlpha(0));
     this._idx = 0;
     this._started = false;
+    // Phaser builds each scene in the config list ONCE and reuses the
+    // instance, so `_done` survives from the last conversation into the next
+    // one. Left set, the second conversation types its first line and then
+    // ignores space, click, ENTER, SKIP and ESC forever, because every one of
+    // them bails on `_done` — the scene is alive, on screen, and unusable.
+    // It was invisible while there was only ever one conversation.
+    this._done = false;
+    this._typing = false;
     this.time.delayedCall(this.holdMs, () => this._begin());
 
     // A click on the SKIP button also reaches the scene's own pointer handler,
@@ -4482,7 +4503,7 @@ class IntroDialogueScene extends Phaser.Scene {
     this._done = true;
     if (this._typeEv) this._typeEv.remove();
     stopVoice();                 // ESC out of the scene should not keep talking
-    stopMusic(900);
+    if (!this.keepMusic) stopMusic(900);
     this.cameras.main.fadeOut(this.fadeMs, 0, 0, 0);
     this.cameras.main.once('camerafadeoutcomplete',
       () => this.scene.start(this.target, this.sys.settings.data &&
