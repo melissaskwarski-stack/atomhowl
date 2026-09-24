@@ -3617,7 +3617,11 @@ function driveWalker(scene, p, keys, onGround) {
   // Touching down clears the count, so the second jump is only ever available
   // once he has left the floor.
   if (onGround) p._jumpsUsed = 0;
-  const maxJumps = (scene.cfg && scene.cfg.doubleJump) ? 2 : 1;
+  // Jumping is taught, not given: none at all until the broken wall on the
+  // burnt street (stages set noJump before it), one jump from there, and the
+  // second from the bridge (doubleJump).
+  const maxJumps = (scene.cfg && scene.cfg.noJump) ? 0
+                 : (scene.cfg && scene.cfg.doubleJump) ? 2 : 1;
   if (wantJump && (p._jumpsUsed || 0) < maxJumps) {
     // The air jump starts from a standstill vertically rather than adding to
     // whatever he had left, or a jump tapped at the top of the arc barely
@@ -4982,7 +4986,10 @@ class WalkScene extends Phaser.Scene {
       fontFamily: F_UI, fontSize: '15px', fontStyle: '700', color: '#d9c7a8',
       stroke: '#070605', strokeThickness: 4
     }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(40);
-    this.add.text(640, 692, 'A/D WALK   ·   SHIFT RUN   ·   W JUMP   ·   E ENTER   ·   N MUTE   ·   M EDIT',
+    // The hint bar does not offer a jump the stage has not given you yet.
+    this.add.text(640, 692, cfg.noJump
+      ? 'A/D WALK   ·   SHIFT RUN   ·   E ENTER   ·   N MUTE   ·   M EDIT'
+      : 'A/D WALK   ·   SHIFT RUN   ·   W JUMP   ·   E ENTER   ·   N MUTE   ·   M EDIT',
       { fontFamily: F_UI, fontSize: '10px', fontStyle: '500', color: '#8a6f4a' })
       .setOrigin(0.5, 1).setScrollFactor(0).setDepth(40).setAlpha(0.85);
 
@@ -5421,6 +5428,7 @@ class BunkerScene extends WalkScene {
       // jumped over, so the walk does not have to scale with him.
       worldW: 'auto', groundFrac: 0.872, startXFrac: 0.06, bgZoom: 1.0,
       pxPerM: 156, playScale: 1,
+      noJump: true,           // no jumping until the broken wall
       title: 'THE BUNKER — quarantine shelter',
       castSwitch: true, canReset: true,
       beats: [
@@ -5487,6 +5495,7 @@ class ExitScene extends WalkScene {
       // the third of magnification that comes with it.
       worldW: 'auto', groundFrac: 0.755, bgContentFrac: 0.8411,
       startXFrac: 0.135, bgZoom: 1.0, pxPerM: 167,
+      noJump: true,           // no jumping until the broken wall
       title: 'OUTSIDE — the village road',
       castSwitch: true, canReset: true,
       // Foreground dressing, placed close to the bunker door where the scene
