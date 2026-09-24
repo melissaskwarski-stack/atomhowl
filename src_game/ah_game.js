@@ -4662,8 +4662,15 @@ class WalkScene extends Phaser.Scene {
       const box = this.add.rectangle((x0 + x1) / 2, top + h / 2, x1 - x0, h,
                                      0x000000, 0).setDepth(-1);
       this.physics.add.existing(box, true);
-      if (!L.solid) {
-        const c = box.body.checkCollision;
+      const c = box.body.checkCollision;
+      if (L.ceiling) {
+        // A floor you stand on AND a ceiling you hit your head on, but no
+        // walls: a slab. Jump up under it and you stop dead instead of
+        // passing through to stand on top, which is what a one-way ledge
+        // lets you do. The sides stay open so you are never caught on its
+        // corner jumping up past its end.
+        c.left = false; c.right = false;
+      } else if (!L.solid) {
         c.down = false; c.left = false; c.right = false;
       }
       this.solidsW.push(box);
@@ -6398,20 +6405,26 @@ class DashScene extends WalkScene {
       // with the zoom together, the ravine included, so the jump is untouched:
       // 342px across and 261 up, against a single jump's 246 of rise. The
       // second jump is still the only way up, by 15px.
-      worldW: 'auto', bgZoom: 2.0, worldH: 1333, startXFrac: 0.02,
+      // The shop street's rule, which is why that stage looks right: the
+      // brothers are drawn at the painting's OWN scale. Measured off the car —
+      // 194px long and 69px tall at zoom 1, a small saloon of about 4.0m by
+      // 1.45m — this picture is ~48px per metre. So it is zoomed to 2.29,
+      // which puts it at 110, and the brothers are 110 too: the same 198px man
+      // as the shop street after it, standing next to a car his own size.
+      worldW: 'auto', bgZoom: 2.29, worldH: 1526, startXFrac: 0.02,
       fallRestart: true,
       // The floor line is the roadway he starts on. Nothing else uses it —
       // the whole world is a hole and every surface is a ledge — but a missed
       // jump is put back on solid ground relative to it.
       groundFrac: 0.478,
-      // What makes this crossing need the double jump is the HEIGHT, not the
-      // distance — which is what the line of dialogue already says. From the
-      // ledge at 0.559 to the deck at 0.378 is 261px at this zoom, and a
-      // single jump rises 246. Fifteen pixels short, every time, however fast
-      // he is running. The second jump adds 199 and clears it.
-      // Across is 342px against a 182px man, so the dash buys the distance
-      // comfortably rather than making it possible: taught, not demanded.
-      pxPerM: 101,
+      // What makes this crossing need the double jump is the HEIGHT: 298px up
+      // from the ledge to the deck at this zoom, against 181 for one jump and
+      // 362 for two.
+      // And across it is 392px. A double jump at a walk carries 380 — twelve
+      // short — so you run at it or dash out of the top of it, which is what
+      // this stage is for and what its tip has always said. Sprinting, a
+      // double carries 710.
+      pxPerM: 110,
       title: 'THE DROP',
       castSwitch: true, canReset: true,
       doubleJump: true, dash: true,
@@ -6574,13 +6587,19 @@ class StoreScene extends WalkScene {
       castSwitch: true, canReset: true,
       doubleJump: true, dash: true,
       ledges: [
-        // ---- the left climb, and what it leads to ----
-        { x0: 0.232, x1: 0.290, y: 0.752 },   // the stone block on the floor
-        { x0: 0.302, x1: 0.377, y: 0.692 },   // the table beside it
+        // ---- the left climb ----
+        // The stone block and the table beside it were stepping stones up to
+        // the balcony, and they are gone: with the lower jump the balcony is
+        // reached off the moving ledge instead — double-jump onto it from the
+        // floor, ride it to its left end, double-jump up onto the balcony.
+        // It uses the ledge, which is what the room is built around.
         // 0.392, not 0.385. The lit crenellations along the balcony's edge
         // have their TOPS at 0.383 and their bases at 0.392, and a man walks
         // on the deck behind them, not along the teeth.
-        { x0: 0.000, x1: 0.378, y: 0.392 },   // the balcony, and the lever
+        // A slab, not a one-way ledge: jump up under it and you hit your head.
+        // Thin, so the solid underside is the balcony's own and not a block
+        // reaching down to the shop floor.
+        { x0: 0.000, x1: 0.378, y: 0.392, ceiling: true, h: 36 },   // the balcony, and the lever
         // ---- the right climb ----
         { x0: 0.675, x1: 0.777, y: 0.500 },   // the shelf the low ledge delivers you to
         { x0: 0.627, x1: 0.683, y: 0.339 },   // the stairs, three steps
@@ -6595,8 +6614,8 @@ class StoreScene extends WalkScene {
       ],
       beats: [
         { at: 0,    say: [['PLAYER', 'Somebody left in a hurry.']],
-                    tip: 'CLIMB THE LEFT SIDE — THE BALCONY IS A DOUBLE JUMP' },
-        { at: 0.40, tip: 'RIDE THE LEDGE, THEN DASH OFF IT' },
+                    tip: 'DOUBLE JUMP ONTO THE MOVING LEDGE' },
+        { at: 0.40, tip: 'FROM THE LEDGE: UP TO THE BALCONY, OR ACROSS TO THE STAIRS' },
         { at: 0.74, tip: 'UP TO THE GANTRY — THE CHEST IS UP THERE' }
       ],
       exits: [
@@ -6628,7 +6647,12 @@ class StoreScene extends WalkScene {
       // 0.605 and it travels right, so its RIGHT edge goes there — a left edge
       // of 0.425, not 0.605. Read as the left edge it swept 0.222 of the room
       // instead of 0.042 and shuttled half way across the shop.
-      this._mover({ x0: 0.383, x1: 0.563, y: 0.565, to: 0.425, ms: 5400, live: true }),
+      // 0.535 rather than the plan's 0.565, so that ONE jump from it lands on
+      // the balcony. At 0.565 the balcony stood 156px above it against a
+      // single jump's 151 — five pixels short, every time, so it always took
+      // two. At 0.535 it is 129 up: one jump, with room to spare. From the
+      // floor it is 243 up, which is still a double.
+      this._mover({ x0: 0.383, x1: 0.563, y: 0.535, to: 0.425, ms: 5400, live: true }),
       this._mover({ x0: 0.478, x1: 0.620, y: 0.392, to: 0.390, ms: 4200, live: false })
     ];
 
@@ -6638,7 +6662,25 @@ class StoreScene extends WalkScene {
     // On the machine housing partway along the balcony, not out by the
     // doorway at its far end.
     this._buildLever(0.215, 0.392);
-    this._swordsTaken = false;
+
+    // Phaser builds each scene ONCE and reuses it, so anything set on `this`
+    // survives into the next visit unless create() puts it back. Two things
+    // here did not:
+    //   _ending — set the moment you go through the back door, never cleared.
+    //     Walk back out of the storage room into the store and the door is
+    //     still "ending", so it ignores you. That is the door that worked
+    //     once and then would not open.
+    //   _swordsTaken — was reset to false, so coming back showed the chest
+    //     shut again with the blades already on your back, and you could
+    //     open it a second time.
+    this._ending = false;
+    this._swordsTaken = !!GameState.hasSwords;
+    if (this._swordsTaken && this.chestAnim) {
+      // already open: the clip's last frame, not the shut drawing
+      this.chest.setVisible(false);
+      this.chestAnim.setVisible(true).setFrame('co11');
+      if (this.chestLabel) this.chestLabel.setAlpha(0);
+    }
 
     // Its own listener rather than a JustDown in update. WalkScene's exit
     // check runs first every frame and reads JustDown(E) for its doorways —
@@ -7123,6 +7165,7 @@ const Darkness = {
     const cam = this.cameras.main;
     this.lightRT.clear();
     if (this.beamRT) this.beamRT.clear();
+    this._paintLamps(cam);           // a dying lamp does not care about your torch
     if (!this.torchOn) return;
     const sx = this.player.x - cam.scrollX;
     const sy = this.player.y - cam.scrollY;
@@ -7163,37 +7206,54 @@ const Darkness = {
     }
   },
 
-  // Ceiling tubes that are on their way out. Each entry is a box in picture
-  // fractions; a lamp sits dark most of the time and then stutters.
+  // Lamps on their way out. There is no shape drawn for them — no glow, no
+  // halo. The lit twin of the painting already has each lamp painted ON, with
+  // its light falling on the wall around it, so a lamp that catches for a
+  // moment is simply that part of the lit painting let through the mask. The
+  // room flickers, rather than a circle blinking over it.
+  //
+  // Positions are measured, not guessed: the brightest warm clusters in the
+  // top half of the lit painting. The first attempt guessed, put one of them
+  // at 0.36 of the room when it hangs at 0.89, and the halo it drew glowed on
+  // nothing.
   buildFlicker(lamps) {
     if (!this.lit || !lamps || !lamps.length) return;
     const bg = this.bgGeom;
-    this.flickers = lamps.map(L => {
-      const x = bg.x + ((L.x0 + L.x1) / 2) * bg.w;
-      const y = bg.y + ((L.y0 + L.y1) / 2) * bg.h;
-      const w = (L.x1 - L.x0) * bg.w * 2.6;
-      const h = (L.y1 - L.y0) * bg.h * 5.0;
-      const o = this.add.ellipse(x, y, w, h, 0xffe6b0, 0)
-        .setDepth(-18).setBlendMode(Phaser.BlendModes.ADD);
-      return { o, nextAt: 0, burst: 0 };
-    });
+    this.flickers = lamps.map((L, i) => ({
+      x: bg.x + ((L.x0 + L.x1) / 2) * bg.w,
+      y: bg.y + ((L.y0 + L.y1) / 2) * bg.h,
+      // how much of the painted light to let through: wide, and dropping
+      // further below the lamp than above it, the way a lamp lights a wall
+      w: Math.max(260, (L.x1 - L.x0) * bg.w * 7),
+      h: 420,
+      on: 0, nextAt: 400 + i * 900, burstUntil: 0
+    }));
   },
 
   paintFlicker(time) {
-    if (!this.flickers) return;
+    if (!this.flickers || this.roomLit) return;
     this.flickers.forEach((f, i) => {
       if (time > f.nextAt) {
         // Badly, not rhythmically: long dead stretches, then a fit of it.
-        f.burst = time + 220 + ((i * 137 + (time | 0)) % 500);
-        f.nextAt = f.burst + 1400 + ((i * 911 + (time | 0)) % 4200);
+        f.burstUntil = time + 260 + ((i * 137 + (time | 0)) % 520);
+        f.nextAt = f.burstUntil + 1600 + ((i * 911 + (time | 0)) % 4400);
       }
-      if (time < f.burst) {
-        // inside a fit — hard on/off, a few times a second, uneven
-        const t = (time * 0.05 + i * 3) | 0;
-        f.o.setFillStyle(0xffe6b0, (t * 2654435761 % 7) > 3 ? 0.55 : 0.04);
+      if (time < f.burstUntil) {
+        const t = (time * 0.045 + i * 3) | 0;
+        f.on = (t * 2654435761 % 7) > 2 ? 1 : 0;
       } else {
-        f.o.setFillStyle(0xffe6b0, 0.02);
+        f.on = 0;
       }
+    });
+  },
+
+  _paintLamps(cam) {
+    if (!this.flickers) return;
+    this.flickers.forEach(f => {
+      if (!f.on) return;
+      const sx = f.x - cam.scrollX, sy = f.y - cam.scrollY;
+      this.lightRT.draw(TORCH_KEY, sx - f.w / 2, sy - f.h * 0.3, 1, 0xffffff, 0.95,
+                        undefined, undefined, f.w, f.h);
     });
   }
 };
@@ -7350,11 +7410,12 @@ class StorageOneScene extends WalkScene {
         { at: 0,    tip: 'L  TORCH ON AND OFF  ·  F  OR RIGHT-CLICK TO CUT' },
         { at: 0.52, say: [['PLAYER', 'Something grew through the wall.']] }
       ],
+      // One way. You go through the storage rooms and out the far side of
+      // the fight; walking back out to the store half way through undoes the
+      // set piece, and is what put the door in the state it would not open.
       exits: [
         { xFrac: 0.985, w: 90, target: 'StorageTwoScene', auto: true,
-          silent: true, fadeMs: 190 },
-        { xFrac: 0.004, w: 80, target: 'StoreScene', auto: true,
-          silent: true, fadeMs: 190, spawnXFrac: 0.93 }
+          silent: true, fadeMs: 190 }
       ],
       drawFallback(WW) {
         const g = this.add.graphics().setDepth(-20);
@@ -7365,8 +7426,8 @@ class StorageOneScene extends WalkScene {
     Object.assign(this, Darkness, Cutting);
     this.buildDark('scene_storage1lit');
     this.buildFlicker([
-      { x0: 0.006, x1: 0.030, y0: 0.196, y1: 0.230 },   // the tube by the door
-      { x0: 0.360, x1: 0.392, y0: 0.196, y1: 0.230 }    // the one over the far shelves
+      { x0: 0.020, x1: 0.040, y0: 0.302, y1: 0.337 },   // the wall lamp by the door
+      { x0: 0.894, x1: 0.923, y0: 0.311, y1: 0.320 }    // the tube at the far end
     ]);
     this.buildCutting();
 
@@ -7400,8 +7461,8 @@ class StorageOneScene extends WalkScene {
   update(time, delta) {
     super.update(time, delta);
     if (!this.player) return;
-    this.paintDark(time);
     this.paintFlicker(time);
+    this.paintDark(time);
     // the swing owns the sprite until its clip finishes
     if (time < this._swingUntil) this.player.setVelocityX(0);
     // a cord you are standing at says which blade it wants
@@ -7440,10 +7501,7 @@ class StorageTwoScene extends WalkScene {
       beats: [
         { at: 0, tip: 'FIND THE LIGHTS' }
       ],
-      exits: [
-        { xFrac: 0.004, w: 80, target: 'StorageOneScene', auto: true,
-          silent: true, fadeMs: 190, spawnXFrac: 0.93 }
-      ],
+      exits: [],
       drawFallback(WW) {
         const g = this.add.graphics().setDepth(-20);
         g.fillStyle(0x0b0c0e, 1); g.fillRect(0, 0, WW, 720);
@@ -7452,7 +7510,6 @@ class StorageTwoScene extends WalkScene {
 
     Object.assign(this, Darkness, Cutting);
     this.buildDark('scene_storage2lit');
-    this.buildFlicker([{ x0: 0.520, x1: 0.560, y0: 0.180, y1: 0.230 }]);
     this.buildCutting();
 
     // ---- the thing in the corner ------------------------------------
@@ -7462,7 +7519,12 @@ class StorageTwoScene extends WalkScene {
     this._buildCreature(0.905);
 
     // ---- the wall switch --------------------------------------------
-    this._buildSwitch(0.500);
+    // Mounted on the painted electrical box, which is the switch this room
+    // already has: a grey box on the wall, measured at x 0.352-0.378 and
+    // y 0.444-0.548, with conduit running from it straight up to the tube
+    // lamp hanging over it. Throw it and the light it is wired to comes on.
+    // It used to float at 0.50 on bare wall at an invented height.
+    this._buildSwitch({ x0: 0.352, x1: 0.378, y0: 0.444, y1: 0.548 });
 
     this._staged = false;
   }
@@ -7502,18 +7564,30 @@ class StorageTwoScene extends WalkScene {
     this.creature.setTint(0x141414);
   }
 
-  _buildSwitch(xf) {
+  // The lever art covers the painted box: centred on it, and sized off the
+  // lever's own PAINTED bounds so the handle unit, not its transparent
+  // margin, is what lines up with the box behind it.
+  _buildSwitch(box) {
     if (!this.textures.exists('scene_leveroff')) return;
-    const x = this.fx(xf);
-    const wantH = Math.round(0.42 * HUMAN_M * this.pxPerM);
-    const y = this.fy(STORAGE_FLOOR) - Math.round(0.28 * HUMAN_M * this.pxPerM);
-    const mk = key => this.add.image(x, y, key).setOrigin(0.5, 1).setDepth(6)
-      .setScale(wantH / this.textures.get(key).getSourceImage().height);
+    const cx = this.fx((box.x0 + box.x1) / 2);
+    const cy = this.fy((box.y0 + box.y1) / 2);
+    const wantH = (box.y1 - box.y0) * this.bgGeom.h * 1.18;   // just covers it
+    const mk = key => {
+      const art = paintedBox(this, key);
+      const o = this.add.image(cx, cy, key).setDepth(6);
+      if (art) {
+        o.setOrigin((art.x0 + art.pw / 2) / art.w, (art.y0 + art.ph / 2) / art.h);
+        o.setScale(wantH / art.ph);
+      } else {
+        o.setScale(wantH / o.height);
+      }
+      return o;
+    };
     this.swOff = mk('scene_leveroff');
     this.swOn = this.textures.exists('scene_leveron') ? mk('scene_leveron') : null;
     if (this.swOn) this.swOn.setAlpha(0);
-    this.swX = x; this.swY = y;
-    this.swLabel = this.add.text(x, y - wantH - 16, 'E  —  THE LIGHTS', {
+    this.swX = cx; this.swY = cy;
+    this.swLabel = this.add.text(cx, cy - wantH / 2 - 14, 'E  —  THE LIGHTS', {
       fontFamily: 'Courier New, monospace', fontSize: '15px', color: '#d9c7a8',
       stroke: '#0d0a08', strokeThickness: 4
     }).setOrigin(0.5, 1).setDepth(8).setAlpha(0);
@@ -7522,8 +7596,8 @@ class StorageTwoScene extends WalkScene {
 
   _atSwitch() {
     return !!this.swOff && !this.roomLit && !!this.player &&
-           Math.abs(this.player.x - this.swX) < 90 &&
-           Math.abs(this.player.y - this.swY) < 210;
+           Math.abs(this.player.x - this.swX) < 110 &&
+           Math.abs(this.player.y - this.swY) < 260;
   }
 
   _throwSwitch() {
@@ -7584,8 +7658,8 @@ class StorageTwoScene extends WalkScene {
   update(time, delta) {
     super.update(time, delta);
     if (!this.player) return;
-    this.paintDark(time);
     this.paintFlicker(time);
+    this.paintDark(time);
     if (this.swLabel) this.swLabel.setAlpha(this._atSwitch() ? 1 : 0);
     if (time < this._swingUntil) this.player.setVelocityX(0);
     // The torch catches it: close, and pointed at it. Only the pale head of the
@@ -7668,10 +7742,10 @@ class EnemyCinematicScene extends Phaser.Scene {
 
 // The two mid-game conversations, in the same panel the game opens with.
 const STORAGE_DARK_LINES = [
-  { who: 'WOLFFEL',  text: "It's black in here. La chimba, I'm not going any further." },
-  { who: 'ETERWOLF', text: "Hold on." },
-  { who: 'ETERWOLF', text: "Torches. A whole crate of them." },
-  { who: 'WOLFFEL',  text: "Now you're talking." }
+  { who: 'ETERWOLF', text: "It's black in here. La chimba, I'm not going any further." },
+  { who: 'WOLFFEL',  text: "Hold on." },
+  { who: 'WOLFFEL',  text: "Torches. A whole crate of them." },
+  { who: 'ETERWOLF', text: "Now you're talking." }
 ];
 
 const STORAGE_MEET_LINES = [
