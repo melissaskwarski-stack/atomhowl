@@ -1449,8 +1449,10 @@ class GameScene extends Phaser.Scene {
     const artRow = this.artFloorRow || COMBAT_FLOOR_ROW;
     this.useCombatArt = this.textures.exists(artKey);
     this.useCustomBg = this.textures.exists('bg_custom');
+    this.artImgs = [];
     if (this.useCombatArt) {
       const img = this.add.image(0, 0, artKey).setOrigin(0, 0).setDepth(-25);
+      this.artImgs.push(img);
       // Scaled from the floor, not the height: the painted street has to meet
       // the physics ground. What hangs below the street is a dark strip and
       // falls off the bottom of the camera.
@@ -1460,7 +1462,8 @@ class GameScene extends Phaser.Scene {
       this.combatArtW = img.width * s;
       // tile a flipped copy if the world is wider than the painting
       if (this.combatArtW < WORLD_W) {
-        this.add.image(this.combatArtW, 0, artKey).setOrigin(0, 0).setDepth(-25).setScale(s).setFlipX(true);
+        this.artImgs.push(this.add.image(this.combatArtW, 0, artKey).setOrigin(0, 0)
+          .setDepth(-25).setScale(s).setFlipX(true));
       }
       this.bgFar = null; this.bgMid = null; this.bgNear = null;
     } else if (this.useCustomBg) {
@@ -7323,10 +7326,12 @@ const STORAGE_PXM = 156;
 // scene draws him at 132 whatever the stage, so the fight is zoomed by the
 // ratio rather than resized — see StorageFightScene.
 const BUNKER_SPRITE_PX = 310;
-// How far the fight pulls back from that. 0.72 puts him at 197px of body
-// against the bunker's 273 and shows 830px of the room across — a bit zoomed
-// out, enough to see it come.
-const FIGHT_PULLBACK = 0.72;
+// How far the fight eases back from the walking room's size once it starts.
+// A touch — 0.72 was tried and read as a small man in a big room, which is
+// the one thing this fight must not look like. The painted band also sets a
+// floor on it: the camera may never be taller than the room.
+const FIGHT_PULLBACK = 0.93;
+const STORAGE_ART_W = 2172, STORAGE_ART_H = 724;
 
 class StorageOneScene extends WalkScene {
   constructor() { super('StorageOneScene'); }
@@ -7740,43 +7745,62 @@ class StorageFightScene extends GameScene {
     this._banner('IT IS AWAKE  —  CUT IT DOWN', '#c93b2a');
   }
 
-  // The combat scene draws the brothers at 132px and the alien at 124, and
-  // every number in the fight — the sword's reach, the jump, the gravity, the
-  // lunge, the knockback — is tuned against those sizes. Scaling the sprites
-  // up would leave all of that behind: he would jump half his own height and
-  // miss things standing next to him.
+  // THE PROPORTION PROBLEM, and why this is not a zoom.
   //
-  // So the fight is played at its own scale and SHOWN at the bunker's. The
-  // camera zooms by the ratio of the two bodies, and everything in the world
-  // grows together; nothing in the simulation changes.
+  // In the walking rooms the painting is shown at ~1.0x with a 310px brother.
+  // The combat scene fits every painting to ITS floor, and its brother is a
+  // fixed 146px sprite — every number in combat, the reach, the jump, the
+  // gravity, the lunge, is tuned against that. So the room came out ~1.05x in
+  // the world with a 146px man in it: relative to the room, less than half
+  // the size he was one scene earlier. No camera zoom can fix that, because a
+  // zoom grows the man and the room together.
   //
-  // What a zoom must not do is enlarge the HUD, which sits at scrollFactor 0
-  // and would be magnified off the edges of the screen. So the HUD gets its
-  // own camera at zoom 1, and each camera ignores the other's half of the
-  // display list. Objects keep appearing for the whole fight — bullets, the
-  // alien, splats, banners — so the split is re-checked before every render
-  // rather than done once.
+  // So the ROOM is rescaled to HIM: the painting is drawn at exactly the
+  // proportion to his sprite that the walking room has to its brother, and
+  // stood so its painted floor lands on the combat floor. At that size one
+  // painting is about a thousand pixels across — less than half the arena —
+  // so it is laid end to end, alternate copies mirrored so every seam is a
+  // clean reflection, and the fight gets its length from that.
+  //
+  // Then the camera. It is held to the painted band so it can never show the
+  // empty world above the ceiling, and it opens at exactly the walking room's
+  // magnification — the cut back in from the cinematic lands on the same size
+  // of man in the same size of room — before easing back a touch for the
+  // fight. The HUD sits at scrollFactor 0 and a zoom would magnify it off the
+  // screen, so it gets a second camera at zoom 1; objects keep arriving for
+  // the whole fight, so the split is re-checked before every render.
   _zoomToBunkerScale() {
-    // Off the SPRITE's height, not the physics body's: setScale updates the
-    // display size at once but the body only on the next physics step, so at
-    // this point in create() the body still has its pre-scale height and the
-    // ratio came out 1.26 instead of 2.1.
-    const drawn = this.player ? this.player.displayHeight : 146;
-    const k = Math.max(1, BUNKER_SPRITE_PX / drawn);
-    this._camZoom = k;
     const main = this.cameras.main;
+    const heroPx = this.player ? this.player.displayHeight : 146;
+    const walkRoomScale = 720 / STORAGE_ART_H;          // how the walking room shows it
+    const s = walkRoomScale * (heroPx / BUNKER_SPRITE_PX);
+    const row = Math.round(STORAGE_FLOOR * STORAGE_ART_H);
+    const top = GROUND_Y - row * s;
+
+    (this.artImgs || []).forEach(o => o.destroy());
+    this.artImgs = [];
+    const w = STORAGE_ART_W * s;
+    for (let i = 0, x = 0; x < WORLD_W + w; i++, x += w) {
+      const im = this.add.image(x, top, this.artKey).setOrigin(0, 0).setDepth(-25)
+        .setScale(s).setFlipX(i % 2 === 1);
+      this.artImgs.push(im);
+    }
+    this._artTop = top;
+
+    // Held to the painting. Below it is the dark lip of the floor, above it is
+    // nothing at all.
+    const bottom = Math.min(WORLD_H, top + STORAGE_ART_H * s);
+    main.setBounds(0, top, WORLD_W, bottom - top);
+
+    const k = BUNKER_SPRITE_PX / heroPx;                 // the walking room's size
+    const minZoom = 720 / (bottom - top);                // never taller than the band
+    const fightZoom = Math.max(minZoom, k * FIGHT_PULLBACK);
+    this._camZoom = k;
+    main.setZoom(k);
+    this.time.delayedCall(700, () => main.zoomTo(fightZoom, 1400, 'Sine.easeInOut'));
+
     this.uiCam = this.cameras.add(0, 0, 1280, 720);
     this.uiCam.setName('hud');
-    // It OPENS at the bunker's scale, the same size he was in the room the
-    // cinematic cut away from, so the cut back in is not a jump. Then the
-    // camera pulls back to the fight's framing as the thing comes at him —
-    // at the bunker's scale the view is 600px of world across and you would
-    // meet it before you ever saw it coming.
-    main.setZoom(k);
-    const fightZoom = Math.max(1, k * FIGHT_PULLBACK);
-    // cam.zoomTo, the camera's own effect — the same call the finisher uses.
-    // A plain tween on the camera object never started at all here.
-    this.time.delayedCall(700, () => main.zoomTo(fightZoom, 1500, 'Sine.easeInOut'));
     const route = () => {
       this.children.list.forEach(o => {
         if (o._camRouted) return;
