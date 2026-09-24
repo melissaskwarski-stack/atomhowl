@@ -6060,10 +6060,9 @@ class BridgeScene extends WalkScene {
     // stone; not so much that the fires stop being fires, which is the thing
     // a flat multiply is always in danger of. The number is here to be moved.
     if (this.bgImage) {
-      const TONE = 0.86;
-      const c = Math.round(255 * TONE);
+      const c = Math.round(255 * BRIDGE_TONE);
       this.bgImage.setTint((c << 16) | (c << 8) | c);
-      this._bgTone = TONE;
+      this._bgTone = BRIDGE_TONE;
     }
     // Coming back from a fall, the span is already gone and stays gone.
     if ((this.sys.settings.data || {}).resumed) {
@@ -6110,7 +6109,11 @@ class BridgeScene extends WalkScene {
     const lum = deckL && deckR ? (deckL.lum + deckR.lum) / 2
                                : (deckL || deckR || {}).lum;
     if (road && lum) {
-      const r = lum / Math.max(1, road.lum);
+      // Matched against the painting as FILE, which is the undimmed one — so
+      // the same dimming has to be applied on top, or the span stands out
+      // brighter than the bridge it is lying on. That is exactly what it did
+      // while only the backdrop was toned.
+      const r = (lum / Math.max(1, road.lum)) * BRIDGE_TONE;
       if (r < 0.985) {
         const c = Math.max(0, Math.min(255, Math.round(255 * r)));
         out.tint = (c << 16) | (c << 8) | c;
@@ -6405,25 +6408,21 @@ class DashScene extends WalkScene {
       // with the zoom together, the ravine included, so the jump is untouched:
       // 342px across and 261 up, against a single jump's 246 of rise. The
       // second jump is still the only way up, by 15px.
-      // The shop street's rule, which is why that stage looks right: the
-      // brothers are drawn at the painting's OWN scale. Measured off the car —
-      // 194px long and 69px tall at zoom 1, a small saloon of about 4.0m by
-      // 1.45m — this picture is ~48px per metre. So it is zoomed to 2.29,
-      // which puts it at 110, and the brothers are 110 too: the same 198px man
-      // as the shop street after it, standing next to a car his own size.
-      worldW: 'auto', bgZoom: 2.29, worldH: 1526, startXFrac: 0.02,
+      // Framed like the tienda, which shows about half its street across with
+      // the brothers at 110 px/m. At the tienda's own zoom (1.3) a single jump
+      // would reach the deck here and the stage would stop teaching anything,
+      // so 1.6 — the widest this painting can go and still need the double.
+      // The whole crossing, ledge to deck, is on screen at once.
+      worldW: 'auto', bgZoom: 1.6, worldH: 1066, startXFrac: 0.02,
       fallRestart: true,
       // The floor line is the roadway he starts on. Nothing else uses it —
       // the whole world is a hole and every surface is a ledge — but a missed
       // jump is put back on solid ground relative to it.
       groundFrac: 0.478,
-      // What makes this crossing need the double jump is the HEIGHT: 298px up
+      // What makes this crossing need the double jump is the HEIGHT: 209px up
       // from the ledge to the deck at this zoom, against 181 for one jump and
-      // 362 for two.
-      // And across it is 392px. A double jump at a walk carries 380 — twelve
-      // short — so you run at it or dash out of the top of it, which is what
-      // this stage is for and what its tip has always said. Sprinting, a
-      // double carries 710.
+      // 362 for two. Across it is 274, and a walking double carries 428, so
+      // the dash helps rather than being required.
       pxPerM: 110,
       title: 'THE DROP',
       castSwitch: true, canReset: true,
@@ -6452,7 +6451,12 @@ class DashScene extends WalkScene {
         // his boots a little into the rubble at the takeoff end rather than a
         // little above the stone at the landing end, because feet buried in
         // debris read as standing and feet in the air do not.
-        { x0: 0.352, x1: 0.507, y: 0.559 },   // the ledge below it
+        // Runs back UNDER the end of the roadway (0.348) rather than starting
+        // at the ledge's painted face at 0.352. That corner is solid cement in
+        // the painting; the four-thousandths between the two left a slot you
+        // could drop straight through. Ledges are one-way, so the overlap
+        // under the roadway costs nothing.
+        { x0: 0.330, x1: 0.507, y: 0.559 },   // the ledge below it
         // The deck's left face is at 0.600 and its surface at 0.378.
         { x0: 0.602, x1: 1.000, y: 0.378 }    // the deck above, and walkable
       ],
@@ -7377,6 +7381,11 @@ const Cutting = {
 //  have given up and stutter. Two alien cords have grown across the   //
 //  far end and have to come down before the door will open.           //
 // ================================================================== //
+// How far the bridge is dimmed — the painting AND the fallen span, together.
+// 0.86 on the painting alone left the span 16% brighter than the deck around
+// it and both still reading as too bright.
+const BRIDGE_TONE = 0.74;
+
 const STORAGE_FLOOR = 0.855;     // both paintings share their geometry
 // The bunker's scale, so the brothers are the same size here as where the game
 // starts. Everything else in these rooms — the cords, the switch, the creature
