@@ -109,6 +109,13 @@ const SCENE_SRC = {
   storage2lit:  ['public/assets/storage2_lit.png'],
   ropethin:     ['public/assets/alien_rope_thin.png'],
   ropebig:      ['public/assets/alien_rope_big.png'],
+  // multiple alien rope.png, turned upright at build-prep time so the game
+  // stretches it floor to ceiling without rotating a sprite
+  ropemulti:    ['public/assets/alien_rope_multi.png'],
+  // the pistol: lying on the floor where the creature drops it, and side-on
+  // for the card that says you have it
+  pistolfloor:  ['public/assets/pistol_floor.png'],
+  pistolsprite: ['public/assets/pistol_sprite.png'],
   // The creature itself, as one horizontal strip of 8 frames cut from the gif
   // to a box shared by every frame, so it does not shift as it plays.
   // CREATURE_FRAMES in the game has to match the 8.

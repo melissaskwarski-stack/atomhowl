@@ -3684,6 +3684,11 @@ function driveWalker(scene, p, keys, onGround) {
   if (p._real) {
     // picking himself up owns the sprite until it finishes
     if (now < (p._downUntil || 0)) { p.setVelocityX(0); return move; }
+    // So does a sword swing. Without this the next frame re-picked idle or
+    // walk, saw it differed from the sword clip, and played over it — the
+    // swing was cut off a frame after it started, which is why pressing the
+    // button looked like it did nothing.
+    if (now < (p._swingUntil || 0)) { if (onGround) p.setVelocityX(0); return move; }
 
     const want = dashing ? 'dash'
                : !onGround ? airAction(hero, p.body.velocity.y, p)
@@ -4826,6 +4831,14 @@ class WalkScene extends Phaser.Scene {
     this.player = makeWalker(this, startX, standY, charH, this.castId);
     this._buildBeats(cfg);
     this.solidsW.forEach(f => this.physics.add.collider(this.player, f));
+    // The sword, in every walking stage — not only the ones with something to
+    // cut. It lived in the storage rooms alone, so opening the chest gave you
+    // blades you could not swing anywhere else. F or right-click; nothing
+    // happens until the blades are yours.
+    this._nextSwingAt = 0;
+    this.input.keyboard.on('keydown-F', () => this.swingBlade());
+    this.input.on('pointerdown', p => { if (p.rightButtonDown()) this.swingBlade(); });
+    if (this.input.mouse) this.input.mouse.disableContextMenu();
     this._safeX = startX; this._safeY = null;
     // ---- collision overlay (F11) ---------------------------------------
     // Every surface in this game is guessed at from a painting, and guessing
@@ -5380,6 +5393,35 @@ class WalkScene extends Phaser.Scene {
     this.tweens.add({ targets: grp, alpha: 1, duration: 250 });
     this.time.delayedCall(3600, () => {
       this.tweens.add({ targets: grp, alpha: 0, duration: 450, onComplete: () => grp.forEach(o => o.destroy()) });
+    });
+  }
+
+  // A sword swing in a walking stage: the brother's own sword clip — the katana
+  // for Eterwolf, the greatsword for Wolffel — and a cut against anything in
+  // this.cuttables that is in front of him and in reach.
+  swingBlade() {
+    const now = this.time.now;
+    if (!armedWithBlade()) return;
+    if (!this.player || now < (this._nextSwingAt || 0) || this._holdInput || this._transitioning) return;
+    this._nextSwingAt = now + 380;
+    const p = this.player, hero = p._hero;
+    Sfx.ensure(); Sfx.sword();
+    if (hero && p._real) {
+      const key = playAction(p, hero, 'sword', p._facing);
+      p._curAnim = key;
+      const a = this.anims.get(key);
+      p._swingUntil = now + ((a && a.duration) || 340) + 40;
+      this._swingUntil = p._swingUntil;
+    }
+    const dir = p._facing || 1;
+    const reach = 1.1 * HUMAN_M * (this.pxPerM || 144);
+    (this.cuttables || []).forEach(c => {
+      if (c.dead) return;
+      const dx = c.im.x - p.x;
+      if (dx * dir < -20 || Math.abs(dx) > reach) return;
+      // a full-height cord spans the room, so only check height for short ones
+      if (!c.full && Math.abs(p.y - c.im.y) > 1.4 * HUMAN_M * this.pxPerM) return;
+      this.cutOnce(c);
     });
   }
 
@@ -6585,58 +6627,42 @@ class StoreScene extends WalkScene {
     const ZOOM = 1.25;
     const PX_PER_M = 92;
 
-    // Every one of these is a red block in the reference, to the thousandth.
-    // The floor is the boardwalk, which was not drawn because it is obvious.
+    // The new room, measured off new store interior.png on 12x crops. It is a
+    // different room from the old one — no staircase, no middle shelf, no low
+    // platform on the right — so every surface below was re-read, not moved.
+    //   floor            lit floorboards, surface 0.835
+    //   left balcony     top 0.399, ends at x 0.340 (the lever's machine on it)
+    //   right balcony    top 0.303, from x 0.722 (the chest, by the locker)
     this.buildWalk({
       bgKey: 'scene_storeint',
-      // The world is as tall as the painting. Without that it is 720 and the
-      // picture's top 180px are cut off — which is exactly where the balcony
-      // is, so a man standing on it had his head outside the world and the
-      // camera had nowhere to follow him to.
+      // The world is as tall as the painting, so the balconies near the top
+      // have headroom and the camera somewhere to follow him.
       worldW: 'auto', worldH: 900, bgZoom: ZOOM, startXFrac: 0.03,
-      groundFrac: 0.805, startOnFloor: true,
+      groundFrac: 0.835, startOnFloor: true,
       pxPerM: PX_PER_M,
       title: 'THE TIENDA — INSIDE',
       castSwitch: true, canReset: true,
       doubleJump: true, dash: true,
       ledges: [
-        // ---- the left climb ----
-        // The stone block and the table beside it were stepping stones up to
-        // the balcony, and they are gone: with the lower jump the balcony is
-        // reached off the moving ledge instead — double-jump onto it from the
-        // floor, ride it to its left end, double-jump up onto the balcony.
-        // It uses the ledge, which is what the room is built around.
-        // 0.392, not 0.385. The lit crenellations along the balcony's edge
-        // have their TOPS at 0.383 and their bases at 0.392, and a man walks
-        // on the deck behind them, not along the teeth.
-        // A slab, not a one-way ledge: jump up under it and you hit your head.
-        // Thin, so the solid underside is the balcony's own and not a block
-        // reaching down to the shop floor.
-        { x0: 0.000, x1: 0.378, y: 0.392, ceiling: true, h: 36 },   // the balcony, and the lever
-        // ---- the right climb ----
-        { x0: 0.675, x1: 0.777, y: 0.500 },   // the shelf the low ledge delivers you to
-        { x0: 0.627, x1: 0.683, y: 0.339 },   // the stairs, three steps
-        { x0: 0.652, x1: 0.706, y: 0.319 },
-        { x0: 0.653, x1: 0.727, y: 0.309 },
-        { x0: 0.664, x1: 0.727, y: 0.268 },   // the top of the stairs
-        // ---- the high gantry, and the way down to the door ----
-        // 0.268: the gantry's lit crenellations run 0.265 to 0.272 and a man
-        // walks on the deck behind them, the same as on the balcony.
-        { x0: 0.782, x1: 0.965, y: 0.268 },
-        { x0: 0.818, x1: 0.908, y: 0.618 }
+        // Both balconies are slabs, not one-way ledges: jump up under one and
+        // your head stops at its underside. Thin, so the solid is the
+        // balcony's own deck and not a block reaching down to the floor.
+        { x0: 0.000, x1: 0.340, y: 0.399, ceiling: true, h: 36 },   // left: the lever
+        { x0: 0.722, x1: 0.982, y: 0.303, ceiling: true, h: 36 }    // right: the chest
       ],
       beats: [
         { at: 0,    say: [['PLAYER', 'Somebody left in a hurry.']],
                     tip: 'DOUBLE JUMP ONTO THE MOVING LEDGE' },
-        { at: 0.40, tip: 'FROM THE LEDGE: UP TO THE BALCONY, OR ACROSS TO THE STAIRS' },
-        { at: 0.74, tip: 'UP TO THE GANTRY — THE CHEST IS UP THERE' }
+        { at: 0.18, tip: 'ONE JUMP FROM THE LEDGE ONTO THE BALCONY — THE LEVER IS UP THERE' },
+        { at: 0.55, tip: 'RIDE THE HIGH LEDGE ACROSS — THE CHEST IS ON THE FAR BALCONY' }
       ],
       exits: [
         // The door at the far right, on the floor, under the sign. It is the
         // end of what is built, so it does not start another scene.
         // The back door was the end of what was built. It opens on the
         // storage rooms now, by way of the conversation in the doorway.
-        { xFrac: 0.940, w: 120, label: 'THROUGH THE BACK DOOR', target: '__DARK__' }
+        // The door painted at the lower right, x 0.925-0.964.
+        { xFrac: 0.944, w: 110, label: 'THROUGH THE BACK DOOR', target: '__DARK__' }
       ],
       drawFallback(WW) {
         const g = this.add.graphics().setDepth(-20);
@@ -6653,28 +6679,26 @@ class StoreScene extends WalkScene {
     // Each is drawn at one end of its dotted line and travels to the other.
     // The low one runs the whole time; the high one is dead until the lever.
     this.movers = [
-      // 5.4s end to end rather than 3.4. It is a platform you wait for and
-      // step onto, not one you chase.
-      // `to` is where the LEADING edge lands, which is the rule the high ledge
-      // was already following and the low one was not. Its dotted line ends at
-      // 0.605 and it travels right, so its RIGHT edge goes there — a left edge
-      // of 0.425, not 0.605. Read as the left edge it swept 0.222 of the room
-      // instead of 0.042 and shuttled half way across the shop.
-      // 0.535 rather than the plan's 0.565, so that ONE jump from it lands on
-      // the balcony. At 0.565 the balcony stood 156px above it against a
-      // single jump's 151 — five pixels short, every time, so it always took
-      // two. At 0.535 it is 129 up: one jump, with room to spare. From the
-      // floor it is 243 up, which is still a double.
-      this._mover({ x0: 0.383, x1: 0.563, y: 0.535, to: 0.425, ms: 5400, live: true }),
-      this._mover({ x0: 0.478, x1: 0.620, y: 0.392, to: 0.390, ms: 4200, live: false })
+      // The low one runs the whole time, beside the left balcony's end.
+      // Floor to it is 261 up — a double jump — and from its left end to the
+      // balcony is 131: ONE jump, as asked, with 20px to spare. At the far end
+      // of its run it is still short of the window, so it never covers it.
+      this._mover({ x0: 0.345, x1: 0.485, y: 0.545, to: 0.440, ms: 5400, live: true }),
+      // The high one is dead until the lever, at the balcony's own height. It
+      // crosses the WHOLE gap: its left edge starts at the balcony's end and
+      // its right edge travels right up against the chest balcony (0.720, a
+      // hair short of 0.722), so at the far end you step off it and one jump
+      // (86 up) puts you on the chest ledge. No gap left to judge.
+      this._mover({ x0: 0.345, x1: 0.485, y: 0.399, to: 0.580, ms: 5200, live: false })
     ];
 
-    // On the high gantry, up against the green locker at 0.885 — the climb
-    // ends at the top of the room, not the start of it.
-    this._buildChest(0.862, 0.268);
-    // On the machine housing partway along the balcony, not out by the
-    // doorway at its far end.
-    this._buildLever(0.215, 0.392);
+    // On the far balcony, against the green locker (x 0.8955-0.9195).
+    this._buildChest(0.866, 0.303);
+    // On the green panel of the machine on the left balcony — measured at
+    // x 0.2085-0.2265, y 0.248-0.335 — covering it exactly.
+    this._buildLever({ x0: 0.2085, x1: 0.2265, y0: 0.248, y1: 0.335 });
+    // The window, glazed. The horde will break it; nothing does yet.
+    this._buildGlass({ x0: 0.408, x1: 0.453, y0: 0.195, y1: 0.372 });
 
     // Phaser builds each scene ONCE and reuses it, so anything set on `this`
     // survives into the next visit unless create() puts it back. Two things
@@ -6793,30 +6817,82 @@ class StoreScene extends WalkScene {
   // off and on, so the throw is a crossfade with the handle's own travel
   // borrowed from the difference between them — plus the squash you feel in
   // your hand when a switch like that goes over.
-  _buildLever(xf, floorFrac) {
+  // The lever covers the painted panel it is bolted to: centred on the box and
+  // sized off the lever's own PAINTED bounds, so the handle unit — not its
+  // transparent margin — is what lines up with the panel behind it. The same
+  // way switch 2 sits on the electrical box in the storage room. The old one
+  // stood at a guessed height beside a machine that had its own painted switch,
+  // so two switches overlapped.
+  _buildLever(box) {
     if (!this.textures.exists('scene_leveroff')) return;
-    const x = this.fx(xf);
-    // Bolted to the pillar at chest height on a man standing beside it, which
-    // is where a hand goes without reaching. 0.75 of his height hung half a
-    // body off the floor and ran off the top of the picture.
-    const wantH = Math.round(0.42 * HUMAN_M * this.pxPerM);
-    const y = this.fy(floorFrac) - Math.round(0.28 * HUMAN_M * this.pxPerM);
+    const cx = this.fx((box.x0 + box.x1) / 2);
+    const cy = this.fy((box.y0 + box.y1) / 2);
+    const wantH = (box.y1 - box.y0) * this.bgGeom.h * 1.12;   // just covers it
     const mk = key => {
-      const o = this.add.image(x, y, key).setOrigin(0.5, 1).setDepth(6);
-      o.setScale(wantH / o.height);
+      const art = paintedBox(this, key);
+      const o = this.add.image(cx, cy, key).setDepth(6);
+      if (art) {
+        o.setOrigin((art.x0 + art.pw / 2) / art.w, (art.y0 + art.ph / 2) / art.h);
+        o.setScale(wantH / art.ph);
+      } else {
+        o.setScale(wantH / o.height);
+      }
       return o;
     };
     this.leverOff = mk('scene_leveroff');
     this.leverOn = this.textures.exists('scene_leveron') ? mk('scene_leveron') : null;
     if (this.leverOn) this.leverOn.setAlpha(0);
-    this.leverX = x;
-    this.leverY = y;
+    this.leverX = cx;
+    this.leverY = cy;
     this.leverOnState = false;
-    // A hint that only shows when he is next to it, like every exit marker.
-    this.leverLabel = this.add.text(x, y - wantH - 16, 'E  —  THROW THE LEVER', {
+    this.leverLabel = this.add.text(cx, cy - wantH / 2 - 14, 'E  —  THROW THE LEVER', {
       fontFamily: 'Courier New, monospace', fontSize: '15px', color: '#d9c7a8',
       stroke: '#0d0a08', strokeThickness: 4
     }).setOrigin(0.5, 1).setDepth(8).setAlpha(0);
+  }
+
+  // Glass in the window: a faint cool pane, and a sheen that drifts across it
+  // now and then, clipped to the frame. It is here so there is something to
+  // break — breakWindow() shatters it, and nothing calls that yet. When the
+  // horde comes in through the front of the shop, that is the call.
+  _buildGlass(box) {
+    const x0 = this.fx(box.x0), x1 = this.fx(box.x1);
+    const y0 = this.fy(box.y0), y1 = this.fy(box.y1);
+    const w = x1 - x0, h = y1 - y0;
+    this.glassBox = { x0, y0, w, h };
+    this.glass = this.add.rectangle(x0 + w / 2, y0 + h / 2, w, h, 0xa8c8dc, 0.11)
+      .setDepth(-15).setBlendMode(Phaser.BlendModes.ADD);
+    const clip = this.make.graphics({ x: 0, y: 0 }, false);
+    clip.fillStyle(0xffffff); clip.fillRect(x0, y0, w, h);
+    const mask = clip.createGeometryMask();
+    this.glassSheen = this.add.rectangle(x0 - w, y0 + h / 2, w * 0.22, h * 1.8, 0xe8f4ff, 0.16)
+      .setDepth(-14).setBlendMode(Phaser.BlendModes.ADD).setRotation(-0.45).setMask(mask);
+    this.glassSheen._mask = clip;
+    const sweep = () => {
+      if (!this.glassSheen) return;
+      this.glassSheen.x = x0 - w * 0.6;
+      this.tweens.add({ targets: this.glassSheen, x: x1 + w * 0.6, duration: 1700,
+        ease: 'Sine.easeInOut', onComplete: () => this.time.delayedCall(3800, sweep) });
+    };
+    this.time.delayedCall(1200, sweep);
+  }
+
+  breakWindow() {
+    if (!this.glass) return;
+    const { x0, y0, w, h } = this.glassBox;
+    Sfx.ensure(); Sfx.burst(0.22, 0.6, 3200, 0.9); Sfx.burst(0.35, 0.35, 1400, 1.2);
+    this.cameras.main.shake(160, 0.004);
+    for (let i = 0; i < 26; i++) {
+      const f = ((i * 2654435761) % 1000) / 1000, g = ((i * 40503) % 997) / 997;
+      const sx = x0 + f * w, sy = y0 + g * h;
+      const sh = this.add.triangle(sx, sy, 0, 0, 6 + f * 10, 2, 3, 8 + g * 12, 0xcfe4f2, 0.8)
+        .setDepth(9).setBlendMode(Phaser.BlendModes.ADD);
+      this.tweens.add({ targets: sh, x: sx + (f - 0.5) * 220, y: this.groundY - 4,
+        angle: (g - 0.5) * 720, alpha: 0, duration: 600 + g * 500, ease: 'Quad.easeIn',
+        onComplete: () => sh.destroy() });
+    }
+    this.glass.destroy(); this.glass = null;
+    if (this.glassSheen) { this.glassSheen._mask.destroy(); this.glassSheen.destroy(); this.glassSheen = null; }
   }
 
   _atChest() {
@@ -6848,7 +6924,7 @@ class StoreScene extends WalkScene {
     const hi = this.movers[1];
     hi.live = this.leverOnState;
     this._showTip(this.leverOnState
-      ? 'THE HIGH LEDGE IS MOVING — RIDE IT TO THE STAIRS'
+      ? 'THE HIGH LEDGE IS MOVING — RIDE IT ACROSS TO THE CHEST'
       : 'THE HIGH LEDGE HAS STOPPED');
   }
 
@@ -7146,10 +7222,10 @@ const Darkness = {
     // beam itself is visible as light in the air rather than only as the
     // things it lands on.
     this.darkScrim = this.add.rectangle(bg.x + bg.w / 2, bg.y + bg.h / 2, bg.w, bg.h,
-                                        0x000000, 0.55).setDepth(-19.5);
+                                        0x000000, 0.72).setDepth(-19.5);
     this.beamRT = this.add.renderTexture(0, 0, 1280, 720)
       .setOrigin(0, 0).setScrollFactor(0).setDepth(12)
-      .setBlendMode(Phaser.BlendModes.ADD).setAlpha(0.16);
+      .setBlendMode(Phaser.BlendModes.ADD).setAlpha(0.06);
     this.lightRT = this.make.renderTexture({ x: 0, y: 0, width: 1280, height: 720 }, false)
       .setOrigin(0, 0).setScrollFactor(0);
     this.lightRT.setVisible(false);          // it is a mask source, not scenery
@@ -7183,22 +7259,22 @@ const Darkness = {
     const sx = this.player.x - cam.scrollX;
     const sy = this.player.y - cam.scrollY;
     const face = this.player._facing || 1;
-    // A held torch is not a lamp: a small pool at his feet so he can see where
-    // he is standing, and a long throw in front of him. Three overlapping
-    // blobs make the throw, each further out and wider, which reads as a cone
-    // without needing a cone.
+    // A torch, not a floodlight. It was a pool the size of a room and a wash
+    // that lit the air around it; now it is a small pool at his feet and a
+    // throw that NARROWS rather than widens as it goes out, fading with
+    // distance the way a hand torch does. Three blobs, each further, smaller
+    // and dimmer, overlap into a cone.
     const flick = 1 + Math.sin(time * 0.013) * 0.03 + Math.sin(time * 0.041) * 0.02;
-    this.lightRT.draw(TORCH_KEY, sx - 150, sy - 150, 1, 0xffffff, 0.62 * flick,
-                      undefined, undefined, 300, 300);
-    for (let i = 1; i <= 3; i++) {
-      const d = i * 150 * face;
-      const r = (200 + i * 90) * flick;
-      this.lightRT.draw(TORCH_KEY, sx + d - r / 2, sy - 40 - r / 2, 1, 0xffffff,
-                        1 - i * 0.16, undefined, undefined, r, r);
-      // the same shape, warm, as light in the air
-      if (this.beamRT) this.beamRT.draw(TORCH_KEY, sx + d - r / 2, sy - 40 - r / 2, 1,
-                                        0xffd9a0, 1 - i * 0.22, undefined, undefined, r, r);
-    }
+    this.lightRT.draw(TORCH_KEY, sx - 80, sy - 60, 1, 0xffffff, 0.45 * flick,
+                      undefined, undefined, 160, 160);
+    const beam = [[110, 190, 0.85], [230, 170, 0.62], [340, 140, 0.38]];
+    beam.forEach(([d, r0, a]) => {
+      const r = r0 * flick, cx = sx + d * face, cy = sy - 50;
+      this.lightRT.draw(TORCH_KEY, cx - r / 2, cy - r / 2, 1, 0xffffff, a,
+                        undefined, undefined, r, r);
+      if (this.beamRT) this.beamRT.draw(TORCH_KEY, cx - r / 2, cy - r / 2, 1,
+                                        0xffd9a0, a, undefined, undefined, r, r);
+    });
   },
 
   // The wall switch: the mask comes off and the room is simply lit.
@@ -7283,14 +7359,10 @@ const Darkness = {
 //  can be cut.                                                        //
 // ================================================================== //
 const Cutting = {
+  // The swing itself is WalkScene's now (every walking stage has one); this
+  // only gives a stage a list of things the swing can cut.
   buildCutting() {
     this.cuttables = [];
-    this._swingUntil = 0;
-    this._nextSwingAt = 0;
-    const swing = () => this.swingBlade();
-    this.input.keyboard.on('keydown-F', swing);
-    this.input.on('pointerdown', p => { if (p.rightButtonDown()) swing(); });
-    this.input.mouse && this.input.mouse.disableContextMenu();
   },
 
   // xf/yf are picture fractions; `owner` is the brother whose blade suits it.
@@ -7303,11 +7375,21 @@ const Cutting = {
     if (art) {
       // by the painted box, never the canvas — see the moving ledges
       im.setOrigin((art.x0 + art.pw / 2) / art.w, (art.y1 + 1) / art.h);
-      im.setScale((o.m * this.pxPerM) / art.ph);
+      if (o.full) {
+        // Floor to the top of the picture. A cord that stops in mid-air reads
+        // as a prop stood on the floor; one that runs up out of the frame
+        // reads as something that has grown through the building.
+        const tall = y - bg.y;
+        const sy = tall / art.ph;
+        im.setScale(sy * (o.widthK || 1), sy);
+      } else {
+        im.setScale((o.m * this.pxPerM) / art.ph);
+      }
     } else {
       im.setScale((o.m * this.pxPerM) / im.height);
     }
-    const c = { im, x, y, owner: o.owner, hits: 0, dead: false, label: o.label };
+    const c = { im, x, y, owner: o.owner, hits: 0, dead: false, label: o.label,
+                full: !!o.full, need: o.need || 0 };
     this.cuttables.push(c);
     return c;
   },
@@ -7318,30 +7400,7 @@ const Cutting = {
   // in a single pass, Eterwolf's katana through the thin one — and it is what
   // makes switching brothers on the cast buttons worth doing rather than a
   // cosmetic choice.
-  hitsFor(c) { return this.castId === c.owner ? 1 : 3; },
-
-  swingBlade() {
-    const now = this.time.now;
-    if (now < this._nextSwingAt || this._holdInput || this._transitioning) return;
-    this._nextSwingAt = now + 380;
-    const hero = this.player._hero;
-    Sfx.ensure(); Sfx.sword();
-    if (hero) {
-      const key = playAction(this.player, hero, 'sword', this.player._facing);
-      this.player._curAnim = key;
-      const a = this.anims.get(key);
-      this._swingUntil = now + ((a && a.duration) || 340) + 40;
-    }
-    const dir = this.player._facing || 1;
-    const reach = 1.1 * HUMAN_M * this.pxPerM;
-    (this.cuttables || []).forEach(c => {
-      if (c.dead) return;
-      const dx = c.im.x - this.player.x;
-      if (Math.abs(this.player.y - c.im.y) > 1.4 * HUMAN_M * this.pxPerM) return;
-      if (dx * dir < -20 || Math.abs(dx) > reach) return;
-      this.cutOnce(c);
-    });
-  },
+  hitsFor(c) { return c.need || (this.castId === c.owner ? 1 : 3); },
 
   cutOnce(c) {
     c.hits++;
@@ -7353,7 +7412,8 @@ const Cutting = {
       this.tweens.add({ targets: c.im, x: c.im.x + 6, duration: 45, yoyo: true, repeat: 2 });
       c.im.setTintFill(0xffffff);
       this.time.delayedCall(55, () => c.im.clearTint());
-      this._showTip(need - c.hits === 1 ? 'ONE MORE' : 'IT IS HOLDING — KEEP CUTTING');
+      const left = need - c.hits;
+      this._showTip(left === 1 ? 'ONE MORE' : left + ' MORE — KEEP CUTTING');
       return;
     }
     // it goes: the top half tears away and the rest sags off its footing
@@ -7451,12 +7511,13 @@ class StorageOneScene extends WalkScene {
 
     // The way out is barred until both are down. Standing clear of the root
     // mass in the middle of the painting and clear of each other.
-    this.cordThin = this.addCuttable({
-      tex: 'scene_ropethin', xFrac: 0.760, yFrac: STORAGE_FLOOR,
-      m: 2.6, owner: 'eterwolf', label: 'THIN' });
-    this.cordBig = this.addCuttable({
-      tex: 'scene_ropebig', xFrac: 0.880, yFrac: STORAGE_FLOOR,
-      m: 3.1, owner: 'wolffel', label: 'THICK' });
+    // The way out is barred by two masses of cord grown floor to ceiling —
+    // multiple alien rope.png, turned upright. A lot of it, so five cuts
+    // each, whichever brother is swinging.
+    this.cordA = this.addCuttable({ tex: 'scene_ropemulti', xFrac: 0.760,
+      yFrac: STORAGE_FLOOR, full: true, need: 5, widthK: 0.8, label: 'CORD' });
+    this.cordB = this.addCuttable({ tex: 'scene_ropemulti', xFrac: 0.880,
+      yFrac: STORAGE_FLOOR, full: true, need: 5, widthK: 0.9, label: 'CORD' });
 
     this.gate = this.add.rectangle(this.fx(0.930), this.groundY - 200, 40, 420,
                                    0x000000, 0).setDepth(-1);
@@ -7481,16 +7542,16 @@ class StorageOneScene extends WalkScene {
     if (!this.player) return;
     this.paintFlicker(time);
     this.paintDark(time);
-    // the swing owns the sprite until its clip finishes
-    if (time < this._swingUntil) this.player.setVelocityX(0);
     // a cord you are standing at says which blade it wants
     const near = (this.cuttables || []).find(c => !c.dead &&
       Math.abs(c.im.x - this.player.x) < 1.2 * HUMAN_M * this.pxPerM);
     if (near && !this._cordTipAt) {
       this._cordTipAt = time + 2600;
-      this._showTip(this.castId === near.owner
-        ? 'YOUR BLADE — ONE CUT'
-        : 'WRONG BLADE — THREE CUTS, OR SWITCH BROTHER');
+      this._showTip(near.need
+        ? 'F  OR RIGHT-CLICK — IT WILL TAKE ' + (near.need - near.hits) + ' CUTS'
+        : (this.castId === near.owner
+          ? 'YOUR BLADE — ONE CUT'
+          : 'WRONG BLADE — THREE CUTS, OR SWITCH BROTHER'));
     }
     if (!near) this._cordTipAt = 0;
   }
@@ -7534,7 +7595,11 @@ class StorageTwoScene extends WalkScene {
     // The supplied clip, cut to a box shared by all eight frames so it does
     // not shift as it breathes. It sits in the goo at the far end and does
     // nothing at all until the lights come on.
-    this._buildCreature(0.905);
+    // In the heart of the web, where the roots converge at x 0.84-0.87 and
+    // the goo pools on the floor under them — the picture the first cinematic
+    // still shows. At 0.905 it stood on a black foreground silhouette that
+    // runs x 0.905-0.94, and read as pasted on.
+    this._buildCreature(0.860, 0.842);
 
     // ---- the wall switch --------------------------------------------
     // Mounted on the painted electrical box, which is the switch this room
@@ -7544,13 +7609,32 @@ class StorageTwoScene extends WalkScene {
     // It used to float at 0.50 on bare wall at an invented height.
     this._buildSwitch({ x0: 0.352, x1: 0.378, y0: 0.444, y1: 0.548 });
 
+    // ---- a cord across the way to it -----------------------------------
+    // Grown floor to ceiling just this side of the switch, so the lights are
+    // behind it: cut it down (five cuts) or you cannot reach them. A solid
+    // gate stands in its footprint until it falls.
+    this.switchCord = this.addCuttable({ tex: 'scene_ropemulti', xFrac: 0.322,
+      yFrac: STORAGE_FLOOR, full: true, need: 5, widthK: 0.8, label: 'CORD' });
+    this.cordGate = this.add.rectangle(this.switchCord.im.x, this.groundY - 300, 40, 600,
+                                       0x000000, 0).setDepth(-1);
+    this.physics.add.existing(this.cordGate, true);
+    this.solidsW.push(this.cordGate);
+    this.physics.add.collider(this.player, this.cordGate);
+    this.onCut = c => {
+      if (c === this.switchCord && this.cordGate) {
+        this.cordGate.body.enable = false;
+        this.cordGate.destroy(); this.cordGate = null;
+        this._showTip('THE SWITCH — E');
+      }
+    };
+
     this._staged = false;
   }
 
   fx(f) { return this.bgGeom.x + f * this.bgGeom.w; }
   fy(f) { return this.bgGeom.y + f * this.bgGeom.h; }
 
-  _buildCreature(xf) {
+  _buildCreature(xf, footFrac) {
     if (!this.textures.exists('scene_creature')) return;
     const CREATURE_FRAMES = 8;
     const tex = this.textures.get('scene_creature');
@@ -7565,7 +7649,8 @@ class StorageTwoScene extends WalkScene {
     if (!this.anims.exists('creature-idle')) {
       this.anims.create({ key: 'creature-idle', frames, frameRate: 5, repeat: -1 });
     }
-    const x = this.fx(xf), y = this.fy(STORAGE_FLOOR);
+    // feet in the goo, which sits a touch behind the floor's front edge
+    const x = this.fx(xf), y = this.fy(footFrac || STORAGE_FLOOR);
     this.creature = this.add.sprite(x, y + 2, 'scene_creature', 'cr0')
       .setOrigin(0.5, 1).setDepth(7);
     // Hunched over its own feet in the corner: a shade under a man's height,
@@ -7614,6 +7699,7 @@ class StorageTwoScene extends WalkScene {
 
   _atSwitch() {
     return !!this.swOff && !this.roomLit && !!this.player &&
+           (!this.switchCord || this.switchCord.dead) &&
            Math.abs(this.player.x - this.swX) < 110 &&
            Math.abs(this.player.y - this.swY) < 260;
   }
@@ -7679,7 +7765,14 @@ class StorageTwoScene extends WalkScene {
     this.paintFlicker(time);
     this.paintDark(time);
     if (this.swLabel) this.swLabel.setAlpha(this._atSwitch() ? 1 : 0);
-    if (time < this._swingUntil) this.player.setVelocityX(0);
+    // the cord says how many cuts it wants when you walk up to it
+    const c = this.switchCord;
+    if (c && !c.dead && Math.abs(c.im.x - this.player.x) < 1.2 * HUMAN_M * this.pxPerM) {
+      if (!this._cordTipAt) {
+        this._cordTipAt = 1;
+        this._showTip('F  OR RIGHT-CLICK — IT WILL TAKE ' + (c.need - c.hits) + ' CUTS');
+      }
+    } else this._cordTipAt = 0;
     // The torch catches it: close, and pointed at it. Only the pale head of the
     // thing comes up out of the dark — enough to make you stop.
     if (this.creature && !this.roomLit) {
@@ -7725,9 +7818,6 @@ class EnemyCinematicScene extends Phaser.Scene {
     this.grain = this.add.rectangle(W / 2, H / 2, W, H, 0xffffff, 0.02)
       .setDepth(3).setBlendMode(Phaser.BlendModes.ADD);
 
-    this.add.text(1264, 700, 'SPACE  SKIP', {
-      fontFamily: 'Courier New, monospace', fontSize: '13px', color: '#6c5c47'
-    }).setOrigin(1, 1).setDepth(9);
 
     // ---- the beats ----
     this.time.delayedCall(1700, () => {
@@ -7739,11 +7829,8 @@ class EnemyCinematicScene extends Phaser.Scene {
     this.time.delayedCall(2500, () => { if (!this._done) this.cameras.main.shake(400, 0.008); });
     this.time.delayedCall(3900, () => this._go());
 
-    const skip = () => this._go();
-    this.input.keyboard.on('keydown-SPACE', skip);
-    this.input.keyboard.on('keydown-ENTER', skip);
-    this.input.keyboard.on('keydown-ESC', skip);
-    this.input.on('pointerdown', skip);
+    // Not skippable. It is four seconds, it is the first time you see the
+    // thing, and it is the whole reason the room was dark.
   }
 
   update(time) {
@@ -7926,31 +8013,62 @@ class StorageFightScene extends GameScene {
     this.time.delayedCall(700, () => this._drop());
   }
 
+  // The pistol it drops: pistol on floor.png, lying where it fell rather than
+  // spinning in the air like a power-up. Walk over it to take it; the card
+  // that follows shows pistol sprite.png, the gun as you will hold it.
   _drop() {
     const x = this._theThing ? this._theThing.x : this.player.x + 120;
-    const key = this.textures.exists('gun_pickup') ? 'gun_pickup' : 'pow_surge';
-    const gun = this.physics.add.sprite(x, GROUND_Y - 220, key).setDepth(9);
-    gun.setScale(1.4);
+    const key = this.textures.exists('scene_pistolfloor') ? 'scene_pistolfloor' : 'gun_pickup';
+    const gun = this.physics.add.sprite(x, GROUND_Y - 160, key).setDepth(9);
+    const art = key === 'scene_pistolfloor' ? paintedBox(this, key) : null;
+    // about a hand's length across, next to a 132px man
+    const want = 46;
+    gun.setScale(art ? want / art.pw : 1.4);
     gun.body.setAllowGravity(true);
     this.physics.add.collider(gun, this.solids);
-    this.tweens.add({ targets: gun, angle: 360, duration: 900, repeat: -1 });
-    const halo = this.add.circle(x, GROUND_Y - 24, 40, 0xf2b13c, 0.22)
-      .setDepth(8).setBlendMode(Phaser.BlendModes.ADD);
-    this.tweens.add({ targets: halo, alpha: 0.5, scale: 1.25, duration: 700,
-                      yoyo: true, repeat: -1 });
+    // a glint rather than a halo: it is a gun on a floor, not a pickup orb
+    const glint = this.add.star(x + 10, GROUND_Y - 18, 4, 2, 7, 0xfff2cc, 0.9)
+      .setDepth(10).setBlendMode(Phaser.BlendModes.ADD).setAlpha(0);
+    this.tweens.add({ targets: glint, alpha: 0.9, scale: 1.4, duration: 260, yoyo: true,
+                      repeat: -1, repeatDelay: 900 });
     this._banner('IT DROPPED SOMETHING');
 
     this.physics.add.overlap(this.player, gun, () => {
       if (gun._taken) return;
       gun._taken = true;
-      gun.destroy(); halo.destroy();
+      gun.destroy(); glint.destroy();
       GameState.hasWeapon = true;
       showBladeUnlocked();
       Sfx.ensure(); Sfx.select();
       this.cameras.main.flash(240, 255, 226, 170);
-      this._banner('PISTOL  —  LMB OR K TO FIRE');
-      this.time.delayedCall(1400, () => this._openTheWayBack());
+      this._gunCard();
+      this.time.delayedCall(3400, () => this._openTheWayBack());
     });
+  }
+
+  // The obtained card, with the gun itself on it.
+  _gunCard() {
+    const grp = [];
+    grp.push(this.add.rectangle(640, 350, 620, 230, 0x0d0a08, 0.93)
+      .setScrollFactor(0).setDepth(90).setStrokeStyle(3, 0xf2b13c));
+    if (this.textures.exists('scene_pistolsprite')) {
+      const im = this.add.image(640, 300, 'scene_pistolsprite').setScrollFactor(0).setDepth(91);
+      const art = paintedBox(this, 'scene_pistolsprite');
+      im.setScale(art ? 200 / art.pw : 200 / im.width);
+      grp.push(im);
+    }
+    grp.push(this.add.text(640, 386, 'OBTAINED — BLACK PISTOL', {
+      fontFamily: 'Courier New, monospace', fontSize: '24px', color: '#f2b13c',
+      stroke: '#0d0a08', strokeThickness: 5
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(91));
+    grp.push(this.add.text(640, 424, 'LMB  or  K  to fire', {
+      fontFamily: 'Courier New, monospace', fontSize: '15px', color: '#d9c7a8'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(91));
+    grp.forEach(o => o.setAlpha(0));
+    this.tweens.add({ targets: grp, alpha: 1, duration: 250 });
+    this.time.delayedCall(3000, () => this.tweens.add({
+      targets: grp, alpha: 0, duration: 450, onComplete: () => grp.forEach(o => o.destroy())
+    }));
   }
 
   _openTheWayBack() {
