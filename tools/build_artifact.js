@@ -134,10 +134,13 @@ body{
   display:flex; flex-direction:column; align-items:center; justify-content:center;
   gap:14px; padding-block:18px; padding-left:16px; padding-right:16px;
 }
-#game{width:100%; max-width:1280px; aspect-ratio:16/9; background:#000;
+/* As big as the window allows, still 16:9, leaving room for the header and
+   the key legend. It was capped at 1280px, so a 1080p screen never got more. */
+:root{ --gw: min(100%, calc((100vh - 150px) * 16 / 9)); }
+#game{width:var(--gw); aspect-ratio:16/9; background:#000;
   border:1px solid var(--edge); box-shadow:0 18px 60px rgba(0,0,0,.65);}
 #game canvas{display:block; width:100%!important; height:100%!important;}
-.legend{width:100%; max-width:1280px; display:flex; flex-wrap:wrap; gap:6px 22px;
+.legend{width:var(--gw); display:flex; flex-wrap:wrap; gap:6px 22px;
   font-size:11px; font-weight:600; letter-spacing:.06em; color:var(--faint);}
 .legend b{color:var(--dim); font-weight:700}
 /* The sword is locked until the chest in the tienda. It reads dimmed until
@@ -149,7 +152,7 @@ body{
 .legend .sword.on::after{content:''}
 .legend .k{color:var(--ember); font-weight:700}
 h1{margin:0; font-size:13px; font-weight:700; letter-spacing:.34em; color:var(--dim);
-  width:100%; max-width:1280px;}
+  width:var(--gw);}
 h1 span{color:var(--faint); letter-spacing:.08em; font-weight:600; float:right}
 @media (max-width:520px){ h1 span{display:none} }
 </style>
@@ -158,17 +161,18 @@ h1 span{color:var(--faint); letter-spacing:.08em; font-weight:600; float:right}
 <div id="game"></div>
 <div class="legend">
   <span><b>MOVE</b> <span class="k">A D</span></span>
-  <span><b>RUN</b> <span class="k">SHIFT</span></span>
+  <span><b>RUN</b> hold <span class="k">SHIFT</span></span>
   <span><b>JUMP</b> <span class="k">W</span> / <span class="k">SPACE</span></span>
   <span><b>DOOR</b> <span class="k">E</span></span>
   <span><b>CROUCH</b> <span class="k">S</span></span>
-  <span><b>DASH</b> <span class="k">SHIFT</span></span>
+  <span><b>DASH</b> tap <span class="k">SHIFT</span></span>
   <span><b>FIRE</b> <span class="k">LMB</span> / <span class="k">K</span></span>
   <span><b>AIM 45&deg;</b> <span class="k">UP</span> + FIRE</span>
   <span><b>WEAPON</b> <span class="k">E</span></span>
   <span class="sword"><b>SWORD</b> <span class="k">F</span> / <span class="k">RMB</span></span>
   <span><b>SANDBOX</b> <span class="k">F9</span></span>
   <span><b>RESTART STAGE</b> <span class="k">R</span></span>
+  <span><b>FULLSCREEN</b> <span class="k">ALT</span>+<span class="k">ENTER</span></span>
   <span><b>MUTE</b> <span class="k">N</span></span>
   <span><b>MENU</b> <span class="k">ESC</span></span>
   <span><b>SKIP DIALOGUE</b> <span class="k">ENTER</span> / click SKIP</span>

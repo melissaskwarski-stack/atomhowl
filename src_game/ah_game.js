@@ -747,6 +747,8 @@ function buildPixelTexture(scene, key, rows, px) {
     }
   }
   scene.textures.addCanvas(key, canvas);
+  const t = scene.textures.get(key);
+  if (t) t.setFilter(Phaser.Textures.FilterMode.NEAREST);
 }
 
 // ------------------------------------------------------------------ //
@@ -809,6 +811,44 @@ function showBladeUnlocked() {
     const el = document.querySelector('.legend .sword');
     if (el) el.classList.add('on');
   } catch (e) { /* the legend is page furniture; the game runs without it */ }
+}
+
+// A new game starts from nothing. GameState lived for the whole page, so NEW
+// GAME after ESC kept the blades, the pistol and every room already cleared.
+function resetProgress() {
+  GameState.hasWeapon = false;
+  GameState.hasSwords = false;
+  GameState.hasPistol = false;
+  GameState.seen = {};
+  try {
+    const el = document.querySelector('.legend .sword');
+    if (el) el.classList.remove('on');
+  } catch (e) { /* page furniture */ }
+}
+
+// ---- the checkpoint ------------------------------------------------------
+// Every walking stage saves where it starts, with the progress it started
+// with, so CONTINUE puts you back at the start of the stage you were on. One
+// slot, in this browser's storage; a PC build would move it to a file.
+const SAVE_KEY = 'atomhowl.save.v1';
+function saveCheckpoint(sceneKey, data) {
+  try {
+    const d = Object.assign({}, data || {});
+    delete d.resumed;
+    localStorage.setItem(SAVE_KEY, JSON.stringify({
+      scene: sceneKey, data: d,
+      state: { hasWeapon: GameState.hasWeapon, hasSwords: GameState.hasSwords,
+               hasPistol: GameState.hasPistol, castId: GameState.castId,
+               seen: Object.assign({}, GameState.seen) }
+    }));
+  } catch (e) { /* no storage (private window): no checkpoint, the game still runs */ }
+}
+function loadCheckpoint() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    const c = raw && JSON.parse(raw);
+    return c && c.scene && c.state ? c : null;
+  } catch (e) { return null; }
 }
 
 const WORLD_W = 2400;
@@ -1167,9 +1207,17 @@ class BootScene extends Phaser.Scene {
     mk('flyer-fly', ['flyer_0', 'flyer_1'], 8, -1);
     mk('boss-walk', ['boss_0', 'boss_1'], 2.5, -1);
 
-    // The game runs pixelArt (NEAREST) for the sprite sheets, but the current
-    // hero is a high-res render shrunk to fit — nearest-sampling that drops
-    // pixels and stipples the edges, so give just his frames linear filtering.
+    // Linear is the game's default now; this stays explicit for the hero
+    // frames, which are high-res renders shown at fractional scales. The old
+    // pixel zombies go the other way and keep their hard pixels.
+    if (window.ZOMBS) {
+      for (const S of Object.keys(window.ZOMBS)) {
+        (window.ZOMBS[S].frames || []).forEach((_, i) => {
+          const t = this.textures.get('zomb_' + S + '_' + i);
+          if (t) t.setFilter(Phaser.Textures.FilterMode.NEAREST);
+        });
+      }
+    }
     for (const c of CAST) {
       if (!c.art.hiRes || !c.art.frames) continue;
       for (const k of Object.keys(c.art.frames)) {
@@ -3967,7 +4015,8 @@ class MenuScene extends Phaser.Scene {
 
     const items = [
       ['NEW GAME', () => this._newGame()],
-      ['CONTINUE', () => this._toast('No save file found.')],
+      ['CONTINUE', () => this._continue()],
+      ['FULLSCREEN', () => toggleFullscreen()],
       ['SETTINGS', () => this._toast('Settings — coming soon.')],
       ['CREDITS',  () => this._toast('Credits — coming soon.')]
     ];
@@ -4056,7 +4105,23 @@ class MenuScene extends Phaser.Scene {
     });
   }
 
+  // Back to the start of the last stage you reached, as you were when you
+  // reached it.
+  _continue() {
+    const c = loadCheckpoint();
+    if (!c || !this.scene.get(c.scene)) { this._toast('No save file found.'); return; }
+    resetProgress();
+    Object.assign(GameState, c.state, { seen: Object.assign({}, c.state.seen || {}) });
+    if (GameState.hasSwords || GameState.hasWeapon) showBladeUnlocked();
+    Sfx.ensure(); Sfx.select();
+    stopMusic(600);
+    this.cameras.main.fadeOut(600, 0, 0, 0);
+    this.cameras.main.once('camerafadeoutcomplete', () =>
+      this.scene.start(c.scene, Object.assign({}, c.data, { cast: GameState.castId })));
+  }
+
   _newGame() {
+    resetProgress();
     this.cameras.main.fadeOut(600, 0, 0, 0);
     this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('CharSelectScene'));
   }
@@ -5027,7 +5092,7 @@ class WalkScene extends Phaser.Scene {
       this._drawSolids();
     });
 
-    this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
+    this.cameras.main.startFollow(this.player, false, 0.1, 0.1);
     this.cameras.main.setDeadzone(160, 100);
 
     // input
@@ -5206,6 +5271,8 @@ class WalkScene extends Phaser.Scene {
       this._gf = 0;
     }
     this._transitioning = false;
+    // Every stage is a checkpoint: CONTINUE puts you back at its start.
+    saveCheckpoint(this.scene.key, this.sys.settings.data);
   }
 
   // Put the stage back the way it started, keeping whoever you are playing.
@@ -6537,8 +6604,7 @@ class JumpScene extends WalkScene {
         { at: 0,    say: [['ETERWOLF', 'Road is buried. We go over it.']],
                     tip: 'PRESS  W  OR  SPACE  TO JUMP' },
         { at: 0.35, tip: 'JUMP ONTO THE WALL, WALK ACROSS, JUMP DOWN THE OTHER SIDE' },
-        { at: 0.65, say: [['ETERWOLF', 'Good. That is as far as it goes.']],
-                    tip: 'THAT IS EVERYTHING BUILT SO FAR' }
+        { at: 0.65, say: [['PLAYER', 'The whole street... where is everybody?']] }
       ],
       exits: [
         // The way back. The bunker is behind a blast door, the bridge comes
@@ -7447,6 +7513,8 @@ class DashScene extends WalkScene {
 class ShopStreetScene extends WalkScene {
   constructor() { super('ShopStreetScene'); }
   create() {
+    this._cardUp = false;       // the scene is reused; the card is per visit
+    this._leavingCard = false;
     this.cameras.main.fadeIn(260, 0, 0, 0);
     this.buildWalk({
       bgKey: 'scene_shopstreet',
@@ -7502,6 +7570,46 @@ class ShopStreetScene extends WalkScene {
         g.fillStyle(0x3a2a1c, 1); g.fillRect(0, 600, WW, 120);
       }
     });
+    // Out of the shop with the horde behind them: that is the end of the
+    // chapter, and the street says so instead of just stopping.
+    if (GameState.seen['tienda-cleared']) this.time.delayedCall(1400, () => this._chapterCard());
+  }
+
+  _chapterCard() {
+    if (this._cardUp) return;
+    this._cardUp = true;
+    this._holdInput = true;
+    this._inConversation = true;
+    const grp = [];
+    grp.push(this.add.rectangle(640, 360, 1280, 720, 0x000000, 0.72).setScrollFactor(0).setDepth(95));
+    grp.push(this.add.text(640, 300, 'CHAPTER 1', {
+      fontFamily: F_UI, fontSize: '18px', fontStyle: '700', color: '#a08d72', letterSpacing: 8
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(96));
+    grp.push(this.add.text(640, 346, 'LA TIENDA', {
+      fontFamily: F_UI, fontSize: '46px', fontStyle: '800', color: '#f2b13c',
+      stroke: '#070605', strokeThickness: 6
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(96));
+    grp.push(this.add.text(640, 398, 'COMPLETE  ·  TO BE CONTINUED', {
+      fontFamily: F_UI, fontSize: '15px', fontStyle: '700', color: '#d9c7a8'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(96));
+    grp.push(this.add.text(640, 470, 'ENTER  —  BACK TO THE MENU', {
+      fontFamily: F_UI, fontSize: '12px', fontStyle: '700', color: '#8a6f4a'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(96));
+    grp.forEach(o => o.setAlpha(0));
+    this.tweens.add({ targets: grp, alpha: 1, duration: 900 });
+    Sfx.ensure(); Sfx.clear();
+    const leave = () => {
+      if (this._leavingCard) return;
+      this._leavingCard = true;
+      this.cameras.main.fadeOut(900, 0, 0, 0);
+      this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('MenuScene'));
+    };
+    this.time.delayedCall(1200, () => {
+      this.input.keyboard.once('keydown-ENTER', leave);
+      this.input.keyboard.once('keydown-SPACE', leave);
+      this.input.once('pointerdown', leave);
+    });
+    this.time.delayedCall(9000, leave);
   }
 }
 
@@ -8772,7 +8880,7 @@ class StorageTwoScene extends WalkScene {
     this._fightPending = false;
     this._holdInput = false;
     this._inConversation = false;
-    this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
+    this.cameras.main.startFollow(this.player, false, 0.1, 0.1);
     const x = this.stander ? this.stander.x : this.fx(STORAGE_GOO_X);
     if (this.stander) { this.stander.destroy(); this.stander = null; }
     // "crawling slowly towards" — a quarter of its height a second until it is
@@ -9324,8 +9432,13 @@ class DebugScene extends GameScene {
 // ------------------------------------------------------------------ //
 const DEV_BUILD = !!window.ATOMHOWL_DEV;
 
+let _sandboxSaved = null;
 function enterSandbox(from) {
   if (!DEV_BUILD || !from || from.scene.key === 'DebugScene') return;
+  // It arms you; the story must not inherit that.
+  if (!_sandboxSaved) _sandboxSaved = { hasWeapon: GameState.hasWeapon,
+                                        hasSwords: GameState.hasSwords,
+                                        hasPistol: GameState.hasPistol };
   stopMusic(200);
   from.scene.start('DebugScene');
 }
@@ -9333,6 +9446,7 @@ function enterSandbox(from) {
 function leaveSandbox(from) {
   if (!from) return;
   from.physics.world.timeScale = 1;
+  if (_sandboxSaved) { Object.assign(GameState, _sandboxSaved); _sandboxSaved = null; }
   from.scene.start('MenuScene');
 }
 
@@ -9367,6 +9481,17 @@ if (Phaser.Scenes && Phaser.Scenes.Systems && !Phaser.Scenes.Systems.prototype._
   Phaser.Scenes.Systems.prototype.__freshData = true;
 }
 
+// Fullscreen, from anywhere: Alt+Enter, or the menu's FULLSCREEN. It has to be
+// started from a real key or click (the browser's rule), which both are.
+function toggleFullscreen() {
+  const g = window.__game;
+  if (!g || !g.scale) return;
+  try { g.scale.isFullscreen ? g.scale.stopFullscreen() : g.scale.startFullscreen(); } catch (e) {}
+}
+window.addEventListener('keydown', e => {
+  if (e.altKey && (e.key === 'Enter' || e.code === 'Enter')) { e.preventDefault(); toggleFullscreen(); }
+});
+
 window.__game = new Phaser.Game({
   type: Phaser.AUTO,
   // The single-file build has no container and Phaser appends to the body,
@@ -9375,7 +9500,16 @@ window.__game = new Phaser.Game({
   parent: (typeof document !== 'undefined' && document.getElementById('game')) ? 'game' : undefined,
   width: 1280,
   height: 720,
-  pixelArt: true,
+  // Smooth, not pixel art. None of the art is pixel art: the brothers are
+  // 256px renders and the stages are paintings, shown at fractional scales.
+  // pixelArt:true sampled every painting nearest-neighbour and told the page
+  // to enlarge the canvas the same way, so fullscreen doubled pixels unevenly
+  // and the scenery shimmered as the camera moved. The few genuinely pixel
+  // sprites ask for NEAREST themselves (buildPixelTexture, the old zombies).
+  pixelArt: false,
+  antialias: true,
+  roundPixels: false,
+  render: { mipmapFilter: 'LINEAR_MIPMAP_LINEAR' },
   backgroundColor: '#0a0807',
   scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
   physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
