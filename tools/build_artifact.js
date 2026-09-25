@@ -42,7 +42,8 @@ const SCRIPTS = [
 // rather than data URIs, which takes ~4MB of base64 out of the page.
 const MEDIA = {
   menuVideo: [['public/assets/main_menu_video.webm', 'main_menu_video.webm']],
-  menuMusic: [['public/assets/Atom_howl_intro_lite.mp3', 'intro.mp3']]
+  menuMusic: [['public/assets/Atom_howl_intro_lite.mp3', 'intro.mp3']],
+  fightMusic: [['public/assets/four_enemies_lite.mp3', 'four_enemies.mp3']]
 };
 
 const files = [];

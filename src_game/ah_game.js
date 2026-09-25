@@ -87,6 +87,71 @@ const Sfx = {
   },
   land()    { this.burst(0.1, 0.4, 900, 0.9); this.blip(70, 0.11, 'sine', 0.22, 42); },
   shoot()   { this.noise(0.06, 0.5, 2600); this.blip(700, 0.05, 'square', 0.25, 180); },
+  // The pistol in the walking stages. The old shot was a puff of noise and a
+  // square-wave chirp — a toy. A gunshot is four things at once: the crack
+  // (a very short bright transient), the blast (a wide band of noise, driven
+  // hard so it has grit), the thump in the chest (a sine falling fast), and
+  // the room giving it back a moment later. Then the slide, a click behind it.
+  pistol() {
+    if (!this.ctx || this.muted) return;
+    const c = this.ctx, t = c.currentTime, sr = c.sampleRate;
+    if (!this._gunNoise) {
+      const len = Math.floor(sr * 0.6);
+      const b = c.createBuffer(1, len, sr), d = b.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      this._gunNoise = b;
+      // a soft clipper for the blast
+      const curve = new Float32Array(1024);
+      for (let i = 0; i < 1024; i++) { const x = i / 511.5 - 1; curve[i] = Math.tanh(x * 3.2); }
+      this._gunCurve = curve;
+    }
+    const v = 0.94 + Math.random() * 0.12;          // no two shots quite alike
+    const bus = c.createGain(); bus.gain.value = 1;
+    bus.connect(this.master);
+    // the room: one early reflection, darkened, dying away
+    const dl = c.createDelay(0.4); dl.delayTime.value = 0.072;
+    const damp = c.createBiquadFilter(); damp.type = 'lowpass'; damp.frequency.value = 1500;
+    const fb = c.createGain(); fb.gain.value = 0.3;
+    const wet = c.createGain(); wet.gain.value = 0.42;
+    bus.connect(dl); dl.connect(damp); damp.connect(fb); fb.connect(dl); damp.connect(wet);
+    wet.connect(this.master);
+    const noiseInto = (node, at, dur) => {
+      const src = c.createBufferSource(); src.buffer = this._gunNoise;
+      src.playbackRate.value = v;
+      src.connect(node); src.start(at, Math.random() * 0.2, dur + 0.05);
+    };
+    const env = (g, peak, at, dur) => {
+      g.gain.setValueAtTime(0.0001, at);
+      g.gain.exponentialRampToValueAtTime(peak, at + 0.0015);
+      g.gain.exponentialRampToValueAtTime(0.0008, at + dur);
+    };
+    // crack
+    const hp = c.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 2400 * v;
+    const g1 = c.createGain(); env(g1, 1.1, t, 0.045);
+    hp.connect(g1); g1.connect(bus); noiseInto(hp, t, 0.05);
+    // blast
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3200 * v;
+    const sh = c.createWaveShaper(); sh.curve = this._gunCurve;
+    const g2 = c.createGain(); env(g2, 1.0, t, 0.17);
+    lp.connect(sh); sh.connect(g2); g2.connect(bus); noiseInto(lp, t, 0.18);
+    // thump
+    const o = c.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(165 * v, t);
+    o.frequency.exponentialRampToValueAtTime(42, t + 0.12);
+    const g3 = c.createGain(); env(g3, 1.0, t, 0.16);
+    o.connect(g3); g3.connect(bus); o.start(t); o.stop(t + 0.2);
+    // tail
+    const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 650; bp.Q.value = 0.7;
+    const g4 = c.createGain(); env(g4, 0.3, t + 0.008, 0.42);
+    bp.connect(g4); g4.connect(bus); noiseInto(bp, t + 0.008, 0.45);
+    // the slide coming back
+    setTimeout(() => this.burst(0.018, 0.22, 4600, 3.5), 70);
+    setTimeout(() => this.burst(0.014, 0.16, 3100, 3.0), 98);
+  },
+  // Acid on skin: a short hiss and something low and unhappy under it.
+  sizzle() { this.burst(0.2, 0.28, 3600, 0.6); this.blip(140, 0.12, 'sawtooth', 0.14, 80); },
+  // A heart coming back.
+  mend()    { this.blip(660, 0.08, 'triangle', 0.16, 880); },
   hit()     { this.blip(170, 0.06, 'square', 0.35, 90); },
   squelch() { this.noise(0.16, 0.5, 650); this.blip(95, 0.13, 'sawtooth', 0.3, 50); },
   sword()   { this.noise(0.11, 0.4, 1800); this.blip(520, 0.09, 'sine', 0.2, 1200); },
@@ -201,6 +266,7 @@ let _musicArmed = false;
 const MUSIC_GESTURES = ['pointerdown', 'mousedown', 'touchstart', 'keydown', 'click'];
 
 function startMusic() {
+  stopTrack(400);
   const audio = primeMusic();
   if (!audio || _musicArmed) return;
   _musicArmed = true;
@@ -212,10 +278,42 @@ function startMusic() {
 
 // Fade out over `ms` so the cut into the bunker is not abrupt.
 function stopMusic(ms) {
+  stopTrack(ms);
   if (!_music) return;
   const a = _music;
   _music = null;
   _musicArmed = false;
+  const step = 50, fall = a.volume / Math.max(1, (ms || 0) / step);
+  const t = setInterval(() => {
+    a.volume = Math.max(0, a.volume - fall);
+    if (a.volume <= 0.001) { clearInterval(t); a.pause(); a.src = ''; }
+  }, step);
+}
+
+// A second track for set pieces — "four enemies" under the first fight. Kept
+// apart from the menu bed so starting one never has to know about the other,
+// and asked for by key, so a scene that restarts mid-fight (he died, R) asks
+// for the track it is already hearing and it simply carries on.
+let _track = null, _trackKey = null;
+function playTrack(key, vol) {
+  if (_track && _trackKey === key) return;
+  stopTrack(300);
+  const list = mediaList(key);
+  if (!list.length) return;
+  try {
+    const a = new Audio(pickAudio(list));
+    a.loop = true;
+    a.volume = vol != null ? vol : MUSIC_BED;
+    a.preload = 'auto';
+    _track = a; _trackKey = key;
+    a.play().catch(() => {});
+  } catch (e) { _track = null; _trackKey = null; }
+}
+
+function stopTrack(ms) {
+  if (!_track) return;
+  const a = _track;
+  _track = null; _trackKey = null;
   const step = 50, fall = a.volume / Math.max(1, (ms || 0) / step);
   const t = setInterval(() => {
     a.volume = Math.max(0, a.volume - fall);
@@ -693,7 +791,7 @@ function waveConfig(n) {
 // conversation, a cutscene, a creature waking up. Stages restart constantly
 // (a fall, R, walking back through a door), and without this every one of
 // them replays its set piece each time you step into the room.
-const GameState = { hasWeapon: false, hasSwords: false, castId: null, seen: {} };
+const GameState = { hasWeapon: false, hasSwords: false, hasPistol: false, castId: null, seen: {} };
 function once(id) {
   if (GameState.seen[id]) return false;
   GameState.seen[id] = true;
@@ -2331,7 +2429,10 @@ class GameScene extends Phaser.Scene {
     }
 
     if (hp <= 0) {
-      if (this.finisherEnabled !== false && this._finisherEarned(fromSword) && this._isLastEnemy(z))
+      // The death blow — the camera pans in on the kill and pulls back out —
+      // is off unless a scene asks for it by name. Nothing in the story does:
+      // a zoom out on every last kill was the thing asked to go.
+      if (this.finisherEnabled === true && this._finisherEarned(fromSword) && this._isLastEnemy(z))
         this.executeKill(z, fromSword);
       else this.killZombie(z, fromSword);
     }
@@ -3696,9 +3797,13 @@ function driveWalker(scene, p, keys, onGround) {
     // jump (going up) or a real fall (90ms off the ground).
     const airborne = !onGround &&
       (p.body.velocity.y < -40 || now - (p._airSince || now) > 90);
+    // The gun out: he aims it standing and fires it on the move, and holds it
+    // up for a moment after the last shot rather than dropping his arm at once.
+    const gunUp = now < (p._gunUntil || 0);
     const want = dashing ? 'dash'
                : airborne ? airAction(hero, p.body.velocity.y, p)
                : now < (p._landUntil || 0) ? 'land'
+               : gunUp     ? (moving ? 'runshoot' : 'shoot')
                : moving    ? (sprint ? 'run' : 'walk')
                : idlePose(hero, p._restSince, now, p._longIdleDone, allowLong,
                            p._idleLooped);
@@ -4685,6 +4790,10 @@ class WalkScene extends Phaser.Scene {
     // The floor is built in segments so a stage can open holes in it. With no
     // gaps declared that is one slab across the world, exactly as before.
     this.solidsW = [];
+    // The floor on its own, too. An enemy walks the floor and nothing else —
+    // it does not climb onto a balcony after you, and a mover sliding past
+    // would otherwise scoop one up and carry it off.
+    this.floorsW = [];
     const gaps = (cfg.gaps || []).map(g => ({
       x0: g.atFrac * WW, x1: (g.atFrac + g.wFrac) * WW
     })).sort((a, b) => a.x0 - b.x0);
@@ -4694,6 +4803,7 @@ class WalkScene extends Phaser.Scene {
       const f = this.add.rectangle((x0 + x1) / 2, groundY + 40, x1 - x0, 80, 0x000000, 0).setDepth(-1);
       this.physics.add.existing(f, true);
       this.solidsW.push(f);
+      this.floorsW.push(f);
     };
     gaps.forEach(g => { slab(cursor, g.x0); cursor = g.x1; });
     slab(cursor, WW);
@@ -4893,7 +5003,9 @@ class WalkScene extends Phaser.Scene {
     // If nothing at or above the floor line is under him, stand on what is.
     if (standY === groundY && lowest !== null && !this._floorUnder(startX)) standY = lowest;
     this.player = makeWalker(this, startX, standY, charH, this.castId);
+    this.charH = charH;
     this._buildBeats(cfg);
+    this._initCombat();
     this.solidsW.forEach(f => this.physics.add.collider(this.player, f));
     // The sword, in every walking stage — not only the ones with something to
     // cut. It lived in the storage rooms alone, so opening the chest gave you
@@ -5072,9 +5184,12 @@ class WalkScene extends Phaser.Scene {
       stroke: '#070605', strokeThickness: 4
     }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(40);
     // The hint bar does not offer a jump the stage has not given you yet.
+    // Nor a sword or a gun before they are yours.
+    const arms = (armedWithBlade() ? '   ·   F SWORD' : '') +
+                 (GameState.hasPistol ? '   ·   LMB / K SHOOT' : '');
     this.add.text(640, 692, cfg.noJump
-      ? 'A/D WALK   ·   SHIFT RUN   ·   E ENTER   ·   N MUTE   ·   M EDIT'
-      : 'A/D WALK   ·   SHIFT RUN   ·   W JUMP   ·   E ENTER   ·   N MUTE   ·   M EDIT',
+      ? 'A/D WALK   ·   SHIFT RUN   ·   E ENTER' + arms + '   ·   N MUTE   ·   M EDIT'
+      : 'A/D WALK   ·   SHIFT RUN   ·   W JUMP   ·   E ENTER' + arms + '   ·   N MUTE   ·   M EDIT',
       { fontFamily: F_UI, fontSize: '10px', fontStyle: '500', color: '#8a6f4a' })
       .setOrigin(0.5, 1).setScrollFactor(0).setDepth(40).setAlpha(0.85);
 
@@ -5091,7 +5206,15 @@ class WalkScene extends Phaser.Scene {
   resetStage() {
     this.cameras.main.fadeOut(180, 0, 0, 0);
     this.cameras.main.once('camerafadeoutcomplete', () =>
-      this.scene.restart({ cast: this.castId }));
+      this.scene.restart(this._keepData({ cast: this.castId })));
+  }
+
+  // What a restart carries over. Normally only the brother; a stage in the
+  // middle of a set piece (`cfg.keep`) — the fight in the storage room, the
+  // horde in the tienda — restarts INTO that set piece rather than back at the
+  // start of the room, whether it was R, the cast buttons or dying that did it.
+  _keepData(extra) {
+    return Object.assign({}, (this.cfg && this.cfg.keep) || {}, extra || {});
   }
 
   // Two buttons to swap brother, so the same stage can be walked as either
@@ -5123,7 +5246,8 @@ class WalkScene extends Phaser.Scene {
         Sfx.ensure(); Sfx.select();
         GameState.castId = c.id;
         this.cameras.main.fadeOut(180, 0, 0, 0);
-        this.cameras.main.once('camerafadeoutcomplete', () => this.scene.restart({ cast: c.id }));
+        this.cameras.main.once('camerafadeoutcomplete',
+          () => this.scene.restart(this._keepData({ cast: c.id })));
       });
       this._castBtns.push({ c, t, box });
       x += t.width + 26;
@@ -5356,7 +5480,8 @@ class WalkScene extends Phaser.Scene {
     }
   }
 
-  update() {
+  update(time, delta) {
+    const now = this.time.now;
     const onGround = this.player.body.blocked.down || this.player.body.touching.down;
     // the last place he stood, to put him back if he misses a jump
     // Both coordinates: putting him back at the right x and the wrong y is
@@ -5369,9 +5494,21 @@ class WalkScene extends Phaser.Scene {
     // A stage can take the controls for a scripted beat — the bridge does it
     // while the span comes down, so the earthquake happens TO him rather than
     // being something he can walk through and out the other side of.
+    // Down, he stays down: nothing drives him and nothing opens.
+    if (this._dead) {
+      this.player.setVelocityX(0);
+      this._runBeats();
+      this._updateCombat(now, delta);
+      return;
+    }
     if (this._holdInput) this.player.setVelocityX(0);
+    // A hit throws him. driveWalker sets his speed every frame, which would
+    // cancel the knock on the very next one — so for its length, nothing does.
+    else if (now < (this.player._knockUntil || 0)) { /* the hit carries him */ }
     else if (!this._transitioning) driveWalker(this, this.player, this.keys, onGround);
     this._runBeats();
+    this._updateGun(now);
+    this._updateCombat(now, delta);
 
     if (this.grain && this.game.loop.frame % 3 === 0) {
       this._gf = (this._gf + 1) % 3;
@@ -5398,11 +5535,22 @@ class WalkScene extends Phaser.Scene {
     // exit prompts + trigger
     // K as well, so the pad's X — the button that does things in combat —
     // also opens a door out here.
+    // Not K once there is a pistol: K fires it, and firing beside a door
+    // would otherwise walk you through it.
     const enterPressed = Phaser.Input.Keyboard.JustDown(this.keys.E)
-                      || Phaser.Input.Keyboard.JustDown(this.keys.K)
+                      || (!GameState.hasPistol && Phaser.Input.Keyboard.JustDown(this.keys.K))
                       || Phaser.Input.Keyboard.JustDown(this.keys.UP)
                       || Phaser.Input.Keyboard.JustDown(this.keys.W);
     this.exitMarkers.forEach(({ m, lbl, glow, ex }) => {
+      // An exit that only exists once something has happened — the way back
+      // out of the storage rooms, once the thing in them is dead. Until then
+      // it is not there at all: no marker, no glow, no walking off the edge.
+      if (ex.when && !ex.when.call(this)) {
+        if (m) m.setAlpha(0);
+        if (lbl) lbl.setAlpha(0);
+        if (glow) glow.setAlpha(0);
+        return;
+      }
       // a combat exit that needs the weapon stays locked until it's picked up
       const locked = ex.needWeapon && !GameState.hasWeapon;
       // hideLocked exits don't exist at all until unlocked (no marker, no message)
@@ -5470,26 +5618,43 @@ class WalkScene extends Phaser.Scene {
   }
 
   // A sword swing in a walking stage: the brother's own sword clip — the katana
-  // for Eterwolf, the greatsword for Wolffel — and a cut against anything in
-  // this.cuttables that is in front of him and in reach.
+  // for Eterwolf, the greatsword for Wolffel — and a cut against whatever is
+  // in front of him and in reach: an enemy first, and a cord if there is none.
+  // Swings that follow each other inside the combo window run down his chain
+  // (sword, sword2, sword3), so a flurry reads as a flurry and not the same
+  // cut three times.
   swingBlade() {
     const now = this.time.now;
     if (!armedWithBlade()) return;
-    if (!this.player || now < (this._nextSwingAt || 0) || this._holdInput || this._transitioning) return;
+    if (!this.player || this._dead || now < (this._nextSwingAt || 0) ||
+        this._holdInput || this._transitioning) return;
     this._nextSwingAt = now + 380;
     const p = this.player, hero = p._hero;
+    const chain = ['sword', 'sword2', 'sword3'].filter(a => heroHas(hero, a));
+    this._comboStep = (chain.length && now < (this._comboUntil || 0))
+      ? ((this._comboStep || 0) + 1) % chain.length : 0;
+    this._comboUntil = now + COMBO_WINDOW_MS;
+    const act = chain[this._comboStep] || 'sword';
     Sfx.ensure(); Sfx.sword();
     if (hero && p._real) {
-      const key = playAction(p, hero, 'sword', p._facing);
+      const key = playAction(p, hero, act, p._facing);
       p._curAnim = key;
       const a = this.anims.get(key);
       p._swingUntil = now + ((a && a.duration) || 340) + 40;
       this._swingUntil = p._swingUntil;
     }
+    const dir = p._facing || 1;
+    // An enemy in reach takes it: the nearest one in front, within an arm and
+    // a blade of him, and at his height.
+    const foe = this._foeInReach(dir);
+    if (foe) {
+      this.hitEnemy(foe, SWORD_DMG_WALK, dir, true);
+      this.cameras.main.shake(70, 0.004);
+      return;
+    }
     // One swing cuts ONE thing: the nearest cord in front of him and in
     // reach. With the cords standing close together a swing used to hit every
     // one in reach, which cut through the first wall into the next.
-    const dir = p._facing || 1;
     const reach = 1.1 * HUMAN_M * (this.pxPerM || 144);
     let best = null, bestD = Infinity;
     (this.cuttables || []).forEach(c => {
@@ -5518,10 +5683,576 @@ class WalkScene extends Phaser.Scene {
     this.cameras.main.fadeOut(ex.fadeMs || 260, 0, 0, 0);
     this.cameras.main.once('camerafadeoutcomplete', () => {
       const target = ex.kind === 'combat' ? 'GameScene' : ex.target;
-      this.scene.start(target, ex.spawnXFrac != null ? { spawnXFrac: ex.spawnXFrac } : undefined);
+      this.scene.start(target, Object.assign({}, ex.data || {},
+        ex.spawnXFrac != null ? { spawnXFrac: ex.spawnXFrac } : {}));
     });
   }
 }
+
+// ================================================================== //
+//  COMBAT IN A WALKING STAGE                                          //
+//                                                                     //
+//  The fights happen in the rooms themselves now — the storage room   //
+//  as it was lit a moment ago, the tienda you walked through — not in //
+//  a combat arena tiled out of copies of the painting. So a walking   //
+//  stage gets what a fight needs: hearts, a blade that hurts things,  //
+//  a pistol, the alien, and what is left of the alien when it dies.   //
+//  Every size here is in the stage's own scale, so the same fight     //
+//  reads the same in a 156 px/m storeroom and a 92 px/m shop.         //
+// ================================================================== //
+const WALK_HP         = 5;
+const WALK_INVULN_MS  = 950;
+const WALK_ALIEN_HP   = 6;       // two cuts, or six rounds
+const SWORD_DMG_WALK  = 3;
+const PISTOL_DMG      = 1;
+const PISTOL_CD       = 210;
+// What a kill leaves: the clip runs the body down into a pool of acid, and the
+// pool stays this long before it dries up.
+const ACID_HOLD_MS    = 7000;
+const ACID_TICK_MS    = 1000;    // a heart burned for every this-long stood in it
+const ACID_HEAL_MS    = 900;     // and one back for every this-long on the move out of it
+// The two clips cut out of the supplied gifs, each onto a grid sheet with a box
+// shared by every frame. Every frame was stood on its own lowest solid row, so
+// the body is always on the floor — the gif's puddle is drawn 33px higher than
+// the feet it starts from, and anchored by the feet the acid floated.
+//   death enemy 1.gif     25 frames: it falls back, melts, pools, dries up
+//   first encounter enemy.gif  20: it turns to you and opens its claws
+const ALIEN_DEATH_SHEET = { key: 'scene_aliendeath', n: 25, cols: 5, cw: 246, ch: 247,
+                            foot: 243, cx: 118.5, standH: 244 };
+const ALIEN_FACE_SHEET  = { key: 'scene_alienface', n: 20, cols: 5, cw: 214, ch: 247,
+                            foot: 243, cx: 109.5, standH: 244 };
+
+// Name the frames of a grid sheet on its texture, once.
+function sheetFrames(scene, S, prefix) {
+  if (!scene.textures.exists(S.key)) return null;
+  const tex = scene.textures.get(S.key);
+  const out = [];
+  for (let i = 0; i < S.n; i++) {
+    const name = prefix + i;
+    if (!tex.has(name)) {
+      tex.add(name, 0, (i % S.cols) * S.cw, Math.floor(i / S.cols) * S.ch, S.cw, S.ch);
+    }
+    out.push({ key: S.key, frame: name });
+  }
+  return out;
+}
+
+function alienClips(scene) {
+  const die = sheetFrames(scene, ALIEN_DEATH_SHEET, 'ad');
+  if (die && !scene.anims.exists('alien-die')) {
+    // down into the pool quickly; the drying-up is slow and comes later
+    scene.anims.create({ key: 'alien-die', frames: die.slice(0, 16), frameRate: 9, repeat: 0 });
+    scene.anims.create({ key: 'alien-dry', frames: die.slice(16), frameRate: 5, repeat: 0 });
+  }
+  const face = sheetFrames(scene, ALIEN_FACE_SHEET, 'ae');
+  if (face && !scene.anims.exists('alien-face')) {
+    scene.anims.create({ key: 'alien-face', frames: face, frameRate: 6, repeat: 0 });
+    // then it just stands there, claws out, breathing
+    scene.anims.create({ key: 'alien-stand', frames: face.slice(8), frameRate: 5,
+                         repeat: -1, yoyo: true });
+  }
+}
+
+const WalkCombat = {
+  // Every stage, every visit: the scene object is reused, so nothing from the
+  // last fight may still be standing in this one.
+  _initCombat() {
+    this.enemies = [];
+    this.bullets = [];
+    this.acids = [];
+    this.hearts = null;
+    this._combat = false;
+    this._dead = false;
+    this._nextFireAt = 0;
+    this._comboStep = 0;
+    this._comboUntil = 0;
+    this._gunDrop = null;
+    this.onEnemyKilled = null;
+    this.onPistol = null;
+    alienClips(this);
+  },
+
+  // How tall the alien stands here: a shade under the brothers, the same
+  // proportion as the creature that gets up in the corner.
+  alienH() { return 0.95 * HUMAN_M * (this.pxPerM || 144); },
+
+  // The hearts come up with the first enemy, not before — a stage with nothing
+  // in it that can hurt you does not show you your health.
+  startCombat() {
+    if (this._combat) return;
+    this._combat = true;
+    this.hp = WALK_HP;
+    this.maxHp = WALK_HP;
+    this._burn = 0;
+    this._invulnUntil = 0;
+    this._acidTickAt = 0;
+    this._healAt = 0;
+    this._inAcid = false;
+    this.hearts = [];
+    for (let i = 0; i < this.maxHp; i++) {
+      this.hearts.push(this.add.image(30 + i * 30, 30, 'heart').setScrollFactor(0).setDepth(60));
+    }
+    this._paintHearts();
+  },
+
+  // Full, burned (green — it comes back if you keep moving) or gone.
+  _paintHearts() {
+    if (!this.hearts) return;
+    this.hearts.forEach((h, i) => {
+      if (i < this.hp) h.setAlpha(1).clearTint();
+      else if (i < this.hp + this._burn) h.setAlpha(0.75).setTint(0xa8d63c);
+      else h.setAlpha(0.18).clearTint();
+    });
+  },
+
+  enemiesAlive() { return this.enemies.filter(z => z.active && z._alive).length; },
+
+  // The alien, out of the same frames and clips as the combat scene's, with
+  // its numbers given in its own height: `speed` and `rage` are heights a
+  // second, calm and after it has been hurt.
+  spawnAlien(o) {
+    const H = this.alienH(), s = H / 244;
+    const E = window.ENEMIES && window.ENEMIES.alien;
+    const body = E ? E.body : { w: 43, h: 236, x: 102, y: 6 };
+    const floorY = this.groundY;
+    // stood on the floor unless it is coming from somewhere else
+    const y = o.y != null ? o.y : floorY - (body.y + body.h - 123.5) * s - 1;
+    const z = this.physics.add.sprite(o.x, y, 'mob_alien_walk_0');
+    z.setScale(s);
+    z.body.setSize(body.w, body.h).setOffset(body.x, body.y);
+    z.setDepth(9);
+    z.setCollideWorldBounds(true);
+    this.physics.add.collider(z, this.floorsW);
+    if (this.anims.exists('alien-walk')) z.play('alien-walk');
+    z._alive = true;
+    z._hp = o.hp || WALK_ALIEN_HP;
+    z._H = H;
+    z._speed = (o.speed || 0.3) * H;
+    z._rage = (o.rage || 0.7) * H;
+    z._calmLunge = !!o.calmLunge;
+    z._enraged = false;
+    z._knockUntil = 0;
+    z._lungeUntil = 0;
+    z._nextLungeAt = this.time.now + (o.lungeDelay || 1200);
+    z._floorY = floorY;
+    z.setFlipX(this.player.x > z.x);        // the art faces west
+    if (o.vx != null || o.vy != null) {
+      z.setVelocity(o.vx || 0, o.vy || 0);
+      z._leaping = true;
+      z._leapAt = this.time.now;
+    }
+    this.enemies.push(z);
+    this.startCombat();
+    return z;
+  },
+
+  _updateEnemies(now) {
+    const p = this.player;
+    const alive = this.enemies.filter(z => z.active && z._alive);
+    alive.forEach(z => {
+      const grounded = z.body.blocked.down || z.body.touching.down;
+      const dx = p.x - z.x, dir = dx >= 0 ? 1 : -1;
+      const H = z._H;
+      // Through the window and down: nothing steers it until it lands.
+      if (z._leaping) {
+        if (!grounded || now < z._leapAt + 150) return;
+        z._leaping = false;
+        z.setVelocityX(0);
+        this.cameras.main.shake(140, 0.005);
+        Sfx.ensure(); Sfx.land();
+      }
+      if (now < z._knockUntil || now < z._lungeUntil) return;
+      if (this._dead || this._holdInput) {
+        z.setVelocityX(0);
+        if (z.anims.isPlaying && z.anims.getName() === 'alien-walk') z.anims.pause();
+        return;
+      }
+      if (z.anims.isPaused) z.anims.resume();
+      z.setFlipX(dir > 0);
+      const speed = z._enraged ? z._rage : z._speed;
+      // The lunge: close, on the floor, and off cooldown. A calm one on its
+      // first approach only if it was sent in hungry.
+      if (grounded && Math.abs(dx) < 1.1 * H && now > z._nextLungeAt &&
+          (z._enraged || z._calmLunge)) {
+        const which = Math.random() < 0.5 ? 'lungeA' : 'lungeB';
+        if (this.anims.exists('alien-' + which)) z.play('alien-' + which);
+        z._lungeUntil = now + 620;
+        z._nextLungeAt = now + 1500 + Math.random() * 700;
+        const g = this.physics.world.gravity.y;
+        z.setVelocity(dir * Math.max(speed * 2.6, 1.7 * H), -Math.sqrt(2 * g * 0.18 * H));
+        Sfx.ensure(); Sfx.swoop();
+        return;
+      }
+      // One at a time: an alien with another between it and him waits its turn
+      // rather than walking into the same spot.
+      const queued = alive.some(o => o !== z && (o.x - z.x) * dir > 0 &&
+                                     Math.abs(o.x - z.x) < 0.38 * H);
+      z.setVelocityX(queued ? 0 : dir * speed);
+      if (grounded && z.anims.getName() !== 'alien-walk' && this.anims.exists('alien-walk')) {
+        z.play('alien-walk');
+      }
+      z.anims.timeScale = queued ? 0.4 : Phaser.Math.Clamp(speed / (0.3 * H), 0.6, 2.2);
+    });
+  },
+
+  // Touching it hurts. Not while he is dashing through, and not twice in the
+  // same breath.
+  _enemyContact(now) {
+    if (this._dead || this._holdInput || now < this._invulnUntil ||
+        now < (this.player._dashUntil || 0)) return;
+    const pb = this.player.body;
+    for (const z of this.enemies) {
+      if (!z.active || !z._alive) continue;
+      const b = z.body;
+      if (pb.right < b.left + 4 || pb.left > b.right - 4 ||
+          pb.bottom < b.top + 8 || pb.top > b.bottom) continue;
+      this.hurtPlayer(1, z.x);
+      return;
+    }
+  },
+
+  hurtPlayer(dmg, fromX) {
+    const now = this.time.now, p = this.player;
+    this.hp = Math.max(0, this.hp - dmg);
+    this._invulnUntil = now + WALK_INVULN_MS;
+    Sfx.ensure(); Sfx.hurt();
+    this.cameras.main.shake(160, 0.008);
+    p.setTintFill(0xff3b1f);
+    this.time.delayedCall(110, () => { if (!this._dead && p.active) p.clearTint(); });
+    this.tweens.add({ targets: p, alpha: 0.35, duration: 90, yoyo: true, repeat: 4,
+                      onComplete: () => p.setAlpha(1) });
+    if (fromX != null) {
+      const away = p.x < fromX ? -1 : 1, k = this.playScale || 1;
+      p.setVelocity(away * 420 * k, -300 * k);
+      p._knockUntil = now + 240;
+      p._swingUntil = 0;
+    }
+    this._paintHearts();
+    if (this.hp <= 0) this._playerDown();
+  },
+
+  // Down. The room comes back as it was when the fight began — the stage's
+  // `keep` says what that is — after a moment to see it.
+  _playerDown() {
+    if (this._dead) return;
+    this._dead = true;
+    const p = this.player, hero = p._hero;
+    this.tweens.killTweensOf(p);
+    p.setAlpha(1);
+    p.setVelocityX(0);
+    p._gunUntil = 0; p._swingUntil = 0;
+    if (hero && heroHas(hero, 'death')) {
+      playAction(p, hero, 'death', p._facing);
+      p._curAnim = heroAnim(hero, 'death', p._facing);
+    } else {
+      if (hero && heroHas(hero, 'crouch')) {
+        playAction(p, hero, 'crouch', p._facing);
+        p._curAnim = heroAnim(hero, 'crouch', p._facing);
+      }
+      p.setTint(0x8a2a1c);
+    }
+    this.enemies.forEach(z => { if (z.active && z._alive) z.setVelocityX(0); });
+    const ov = this.add.rectangle(640, 360, 1280, 720, 0x000000, 0.55)
+      .setScrollFactor(0).setDepth(80).setAlpha(0);
+    const t1 = this.add.text(640, 318, ((hero && hero.name) || 'ETERWOLF') + ' DOWN', {
+      fontFamily: 'Courier New, monospace', fontSize: '54px', color: '#c93b2a',
+      stroke: '#0d0a08', strokeThickness: 8
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(81).setAlpha(0);
+    const t2 = this.add.text(640, 380, 'back on your feet…', {
+      fontFamily: 'Courier New, monospace', fontSize: '18px', color: '#d9c7a8'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(81).setAlpha(0);
+    this.tweens.add({ targets: [ov, t1, t2], alpha: 1, duration: 500 });
+    this.time.delayedCall(2600, () => {
+      if (this._transitioning) return;
+      this._transitioning = true;
+      this.cameras.main.fadeOut(300, 0, 0, 0);
+      this.cameras.main.once('camerafadeoutcomplete',
+        () => this.scene.restart(this._keepData({ cast: this.castId })));
+    });
+  },
+
+  // The nearest living enemy in front of him and in reach of a swing.
+  _foeInReach(dir) {
+    const p = this.player, reach = 0.62 * this.charH;
+    let foe = null, best = Infinity;
+    this.enemies.forEach(z => {
+      if (!z.active || !z._alive) return;
+      const dx = z.x - p.x;
+      if (dx * dir < -0.12 * this.charH || Math.abs(dx) > reach) return;
+      if (Math.abs(z.body.center.y - p.body.center.y) > 0.6 * this.charH) return;
+      if (Math.abs(dx) < best) { best = Math.abs(dx); foe = z; }
+    });
+    return foe;
+  },
+
+  hitEnemy(z, dmg, dir, fromSword) {
+    if (!z._alive) return;
+    const now = this.time.now;
+    z._hp -= dmg;
+    Sfx.ensure(); Sfx.hit();
+    z.setTintFill(0xffffff);
+    this.time.delayedCall(60, () => {
+      if (!z.active || !z._alive) return;
+      z.clearTint();
+      if (z._enraged) z.setTint(ALIEN_RAGE_TINT);      // the rage outlives the flash
+    });
+    this._acidSpray(z.x + dir * 0.08 * z._H, z.y - 0.1 * z._H, fromSword ? 10 : 5);
+    // The first wound wakes it up: it roars and comes on faster, and lunges.
+    if (!z._enraged) {
+      z._enraged = true;
+      z._nextLungeAt = now + 420;
+      Sfx.roar();
+    }
+    z._knockUntil = now + 160;
+    z._lungeUntil = 0;
+    z.setVelocityX(dir * (fromSword ? 2.0 : 0.8) * z._H);
+    if (z._hp <= 0) this.killEnemy(z, dir);
+  },
+
+  // death enemy 1.gif: it goes over backwards, melts, and leaves a pool of
+  // acid that stays a while before it dries up. Standing in the pool burns.
+  killEnemy(z, dir) {
+    z._alive = false;
+    z.body.enable = false;
+    z.anims.stop();
+    Sfx.ensure(); Sfx.squelch();
+    this.cameras.main.shake(120, 0.005);
+    const x = z.x, floorY = z._floorY, H = z._H, faceRight = z.flipX;
+    z.destroy();
+    this.enemies = this.enemies.filter(e => e !== z);
+    const S = ALIEN_DEATH_SHEET, s = H / S.standH;
+    if (!this.anims.exists('alien-die')) {
+      if (this.onEnemyKilled) this.onEnemyKilled(x, dir);
+      return;
+    }
+    const now = this.time.now;
+    const d = this.add.sprite(x, floorY + 2, S.key, 'ad0').setDepth(8).setScale(s)
+      .setFlipX(faceRight)
+      .setOrigin((faceRight ? S.cw - S.cx : S.cx) / S.cw, (S.foot + 1) / S.ch);
+    d.play('alien-die');
+    // Burns from the moment the body has run down into it (frame 11 of 16),
+    // for as long as the pool lies there, and a little into its drying up.
+    const acid = { x, y: floorY, half: 0.42 * H, from: now + 1200, until: Infinity, d };
+    this.acids.push(acid);
+    d.once('animationcomplete', () => {
+      if (!d.active) return;
+      this.tweens.add({ targets: d, scaleY: s * 1.04, duration: 560, yoyo: true, repeat: -1,
+                        ease: 'Sine.easeInOut' });
+      this.time.delayedCall(ACID_HOLD_MS, () => {
+        if (!d.active) return;
+        this.tweens.killTweensOf(d);
+        d.setScale(s);
+        acid.until = this.time.now + 900;
+        d.play('alien-dry');
+        d.once('animationcomplete', () => {
+          acid.dead = true;
+          this.tweens.add({ targets: d, alpha: 0, duration: 600, onComplete: () => d.destroy() });
+        });
+      });
+    });
+    if (this.onEnemyKilled) this.onEnemyKilled(x, dir);
+  },
+
+  // Drops of it: out of a wound and down to the floor, or — `up` — kicked up
+  // off the pool by a foot. Never through the floor.
+  _acidSpray(x, y, n, up) {
+    for (let i = 0; i < n; i++) {
+      const f = ((i * 2654435761 + (x | 0)) % 1000) / 1000;
+      const g = ((i * 40503 + (y | 0)) % 997) / 997;
+      const dot = this.add.circle(x + (f - 0.5) * 30, y + (up ? 0 : (g - 0.5) * 40),
+                                  2 + g * 4, 0xd8d020, 0.9).setDepth(11);
+      const toY = up ? dot.y - 20 - g * 50 : Math.min(dot.y + 40 + g * 110, this.groundY - 2);
+      this.tweens.add({
+        targets: dot, x: dot.x + (f - 0.5) * (up ? 70 : 160), y: toY, alpha: 0,
+        duration: 380 + f * 380, ease: up ? 'Quad.easeOut' : 'Quad.easeIn',
+        onComplete: () => dot.destroy()
+      });
+    }
+  },
+
+  // Stand in the acid and it takes a heart at a time — green, not gone. Get
+  // out and keep moving and they come back, one at a time. Stand still out of
+  // it and they do not. It hurts; it does not kill: the last heart is never
+  // the acid's to take.
+  _updateAcid(now) {
+    if (!this._combat) return;
+    this.acids = this.acids.filter(a => !a.dead);
+    if (this._dead || this._holdInput) return;
+    const p = this.player, pb = p.body;
+    const onFloor = pb.blocked.down || pb.touching.down;
+    const inAcid = onFloor && now >= (p._dashUntil || 0) && this.acids.some(a =>
+      now >= a.from && now < a.until &&
+      Math.abs(p.x - a.x) < a.half + pb.width * 0.3 &&
+      Math.abs(pb.bottom - a.y) < 0.12 * this.charH);
+    if (inAcid) {
+      // a step in gets a moment's grace before the first burn
+      if (!this._inAcid) this._acidTickAt = Math.max(this._acidTickAt, now + 400);
+      this._healAt = now + ACID_HEAL_MS;
+      if (now >= this._acidTickAt) {
+        this._acidTickAt = now + ACID_TICK_MS;
+        Sfx.ensure(); Sfx.sizzle();
+        p.setTint(0xb6e04a);
+        this.time.delayedCall(140, () => { if (!this._dead && p.active) p.clearTint(); });
+        this._acidSpray(p.x, pb.bottom - 6, 4, true);
+        if (this.hp > 1) { this.hp--; this._burn++; this._paintHearts(); }
+      }
+    } else if (this._burn > 0 && Math.abs(pb.velocity.x) > 20 && now >= this._healAt) {
+      this._healAt = now + ACID_HEAL_MS;
+      this._burn--;
+      this.hp = Math.min(this.maxHp, this.hp + 1);
+      Sfx.ensure(); Sfx.mend();
+      this._paintHearts();
+    }
+    this._inAcid = inAcid;
+  },
+
+  // ---- the pistol ------------------------------------------------------
+  // LMB or K, once it is yours, in any walking stage — the same as the blades.
+  _updateGun(now) {
+    if (!GameState.hasPistol || this._dead || this._holdInput || this._transitioning ||
+        this._inConversation || this._editorMode) return;
+    const ptr = this.input.activePointer;
+    const mouse = ptr.isDown && ptr.button === 0;
+    const firing = mouse || (this.keys.K && this.keys.K.isDown);
+    if (!firing) return;
+    const p = this.player;
+    // standing still, the mouse says which way he points it
+    if (mouse && Math.abs(p.body.velocity.x) < 20) {
+      const wx = ptr.positionToCamera(this.cameras.main).x;
+      p._facing = wx >= p.x ? 1 : -1;
+    }
+    p._gunUntil = now + 520;
+    if (now < this._nextFireAt || now < (p._swingUntil || 0)) return;
+    this._nextFireAt = now + PISTOL_CD;
+    this.fireBullet(now);
+  },
+
+  fireBullet(now) {
+    const p = this.player, hero = p._hero, face = p._facing || 1;
+    const sx = Math.abs(p.scaleX), sy = Math.abs(p.scaleY);
+    let mx = p.x + face * 0.25 * this.charH, my = p.y - 0.15 * this.charH;
+    const art = hero && hero.art;
+    if (art && art.canvasW && art.muzzles) {
+      const moving = Math.abs(p.body.velocity.x) > 20;
+      const mp = art.muzzles[moving ? 'runshoot' : 'shoot'] || art.muzzles.pistol;
+      if (mp) {
+        mx = p.x + face * (mp.x - art.canvasW / 2) * sx;
+        my = p.y + (mp.y - p.originY * art.canvasH) * sy;
+      }
+    }
+    Sfx.ensure(); Sfx.pistol();
+    const k = this.charH / 146;          // the combat scene's tracer, at this scale
+    const b = this.add.image(mx, my, 'bullet').setDepth(11).setScale(k)
+      .setBlendMode(Phaser.BlendModes.ADD).setFlipX(face < 0);
+    b._vx = face * 7.2 * this.charH;
+    b._born = now;
+    this.bullets.push(b);
+    const fl = this.add.image(mx, my, 'flash_0').setDepth(12).setScale(k)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    this.tweens.add({ targets: fl, alpha: 0, scale: 0.4 * k, duration: 60,
+                      onComplete: () => fl.destroy() });
+    this.cameras.main.shake(28, 0.0009);
+  },
+
+  // Moved by hand and tested along the whole step, so a round fired at a
+  // slow frame rate cannot jump clean over something thin.
+  _updateBullets(now, dt) {
+    this.bullets = this.bullets.filter(b => {
+      if (!b.active) return false;
+      const px = b.x;
+      b.x += b._vx * dt;
+      if (now - b._born > 1100 || b.x < -40 || b.x > this.worldW + 40) { b.destroy(); return false; }
+      const lo = Math.min(px, b.x), hi = Math.max(px, b.x);
+      for (const z of this.enemies) {
+        if (!z.active || !z._alive) continue;
+        const zb = z.body;
+        if (hi < zb.left || lo > zb.right || b.y < zb.top || b.y > zb.bottom) continue;
+        b.destroy();
+        this.hitEnemy(z, PISTOL_DMG, b._vx > 0 ? 1 : -1, false);
+        return false;
+      }
+      return true;
+    });
+  },
+
+  // ---- the pistol it drops -------------------------------------------
+  // pistol on floor.png, lying where it landed — a pistol's size, not a
+  // pickup's: about a hand and a half long next to him.
+  dropPistol(x) {
+    const key = this.textures.exists('scene_pistolfloor') ? 'scene_pistolfloor' : 'gun_pickup';
+    x = Phaser.Math.Clamp(x, 60, this.worldW - 60);
+    const y = this.groundY;
+    const gun = this.add.image(x, y - 0.5 * this.charH, key).setDepth(9);
+    const art = key === 'scene_pistolfloor' ? paintedBox(this, key) : null;
+    const want = 0.24 * (this.pxPerM || 144);
+    if (art) {
+      gun.setOrigin((art.x0 + art.pw / 2) / art.w, (art.y1 + 1) / art.h);
+      gun.setScale(want / art.pw);
+    } else {
+      gun.setOrigin(0.5, 1).setScale(want / gun.width);
+    }
+    this.tweens.add({ targets: gun, y: y + 1, duration: 420, ease: 'Bounce.easeOut' });
+    Sfx.ensure(); this.time.delayedCall(260, () => Sfx.burst(0.05, 0.3, 2600, 2));
+    // a glint rather than a halo: it is a gun on a floor, not a power-up
+    const glint = this.add.star(x + want * 0.3, y - 6, 4, 2, 7, 0xfff2cc, 0.9)
+      .setDepth(10).setBlendMode(Phaser.BlendModes.ADD).setAlpha(0);
+    this.tweens.add({ targets: glint, alpha: 0.9, scale: 1.4, duration: 260, yoyo: true,
+                      repeat: -1, repeatDelay: 900, delay: 500 });
+    this._gunDrop = { gun, glint, x };
+  },
+
+  _updateGunDrop() {
+    const g = this._gunDrop;
+    if (!g || this._dead) return;
+    const p = this.player, pb = p.body;
+    if (Math.abs(p.x - g.x) > 0.3 * this.charH || Math.abs(pb.bottom - this.groundY) > 0.2 * this.charH) return;
+    this._gunDrop = null;
+    this.tweens.killTweensOf([g.gun, g.glint]);
+    g.gun.destroy(); g.glint.destroy();
+    GameState.hasPistol = true;
+    Sfx.ensure(); Sfx.select();
+    this.cameras.main.flash(240, 255, 226, 170);
+    this._pistolCard();
+    if (this.onPistol) this.onPistol();
+  },
+
+  // The obtained card, with the gun itself on it: pistol sprite.png.
+  _pistolCard() {
+    const grp = [];
+    grp.push(this.add.rectangle(640, 350, 620, 230, 0x0d0a08, 0.93)
+      .setScrollFactor(0).setDepth(90).setStrokeStyle(3, 0xf2b13c));
+    if (this.textures.exists('scene_pistolsprite')) {
+      const im = this.add.image(640, 300, 'scene_pistolsprite').setScrollFactor(0).setDepth(91);
+      const art = paintedBox(this, 'scene_pistolsprite');
+      im.setScale(art ? 200 / art.pw : 200 / im.width);
+      grp.push(im);
+    }
+    grp.push(this.add.text(640, 386, 'OBTAINED — BLACK PISTOL', {
+      fontFamily: 'Courier New, monospace', fontSize: '24px', color: '#f2b13c',
+      stroke: '#0d0a08', strokeThickness: 5
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(91));
+    grp.push(this.add.text(640, 424, 'LMB  or  K  to fire', {
+      fontFamily: 'Courier New, monospace', fontSize: '15px', color: '#d9c7a8'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(91));
+    grp.forEach(o => o.setAlpha(0));
+    this.tweens.add({ targets: grp, alpha: 1, duration: 250 });
+    this.time.delayedCall(3000, () => this.tweens.add({
+      targets: grp, alpha: 0, duration: 450, onComplete: () => grp.forEach(o => o.destroy())
+    }));
+  },
+
+  _updateCombat(now, delta) {
+    const dt = Math.min(0.05, (delta || 16.7) / 1000);
+    if (this.bullets.length) this._updateBullets(now, dt);
+    if (this.enemies.length) {
+      this._updateEnemies(now);
+      this._enemyContact(now);
+    }
+    this._updateAcid(now);
+    this._updateGunDrop();
+  }
+};
+Object.assign(WalkScene.prototype, WalkCombat);
 
 // ================================================================== //
 //  SCENE 1 — THE BUNKER (walk right, climb the stairs to the city)   //
@@ -6714,7 +7445,9 @@ class ShopStreetScene extends WalkScene {
         // he was standing in the air above it.
         { x0: 0.307, x1: 0.462, y: 0.566 }    // the block standing over the drop
       ],
-      beats: [
+      // Coming back out of the shop after the fight in it, none of the
+      // arriving-at-it lines apply: he has been in, and it did not go well.
+      beats: GameState.seen['tienda-cleared'] ? [] : [
         { at: 0,    say: [['PLAYER', 'There. Still has a roof.']],
                     tip: 'WALK OFF THE EDGE — DROP TO THE BLOCK, THEN TO THE STREET' },
         { at: 0.62, say: [['PLAYER', 'Armas, equipo, reparaciones. Let us hope.']],
@@ -6762,6 +7495,11 @@ class StoreScene extends WalkScene {
 
   create() {
     this.cameras.main.fadeIn(260, 0, 0, 0);
+    // Back from the storage rooms with the thing in them dead: the shop is
+    // not empty any more. Three come in the front, and a fourth through the
+    // window. Until they are all down there is no way out.
+    this._horde = !!GameState.seen['fight1-won'] && !GameState.seen['tienda-cleared'];
+    this._cleared = !!GameState.seen['tienda-cleared'];
 
     // Zoomed so the brothers read against a room this wide. The painting's own
     // scale comes off the door on the right — 0.205 of the height for a door a
@@ -6785,6 +7523,8 @@ class StoreScene extends WalkScene {
       title: 'THE TIENDA — INSIDE',
       castSwitch: true, canReset: true,
       doubleJump: true, dash: true,
+      // Going down in the horde puts you back at the back door with it coming.
+      keep: this._horde ? { spawnXFrac: 0.925 } : null,
       ledges: [
         // Both balconies are slabs, not one-way ledges: jump up under one and
         // your head stops at its underside. Thin, so the solid is the
@@ -6795,7 +7535,7 @@ class StoreScene extends WalkScene {
         // you walked off the end of, past the chest.
         { x0: 0.722, x1: 1.000, y: 0.303, ceiling: true, h: 36 }    // right: the chest
       ],
-      beats: [
+      beats: (this._horde || this._cleared) ? [] : [
         { at: 0,    say: [['PLAYER', 'Somebody left in a hurry.']],
                     tip: 'DOUBLE JUMP ONTO THE MOVING LEDGE' },
         { at: 0.18, tip: 'ONE JUMP FROM THE LEDGE ONTO THE BALCONY — THE LEVER IS UP THERE' },
@@ -6807,7 +7547,12 @@ class StoreScene extends WalkScene {
         // The back door was the end of what was built. It opens on the
         // storage rooms now, by way of the conversation in the doorway.
         // The door painted at the lower right, x 0.925-0.964.
-        { xFrac: 0.944, w: 110, label: 'THROUGH THE BACK DOOR', target: '__DARK__' }
+        { xFrac: 0.944, w: 110, label: 'THROUGH THE BACK DOOR', target: '__DARK__',
+          when: () => !this._horde },
+        // The way in from the street — the dark opening in the left wall —
+        // is the way out once the shop is clear.
+        { xFrac: 0.012, w: 100, target: 'ShopStreetScene', spawnXFrac: 0.86,
+          auto: true, silent: true, when: () => !!GameState.seen['tienda-cleared'] }
       ],
       drawFallback(WW) {
         const g = this.add.graphics().setDepth(-20);
@@ -6876,6 +7621,71 @@ class StoreScene extends WalkScene {
     this.input.keyboard.on('keydown-E', () => {
       if (this._atChest()) this._openChest();
       else if (this._atLever()) this._throwLever();
+    });
+
+    if (this._horde) this._startHorde();
+  }
+
+  // ---- the horde ------------------------------------------------------
+  // In through the front: out of the dark opening in the left wall, one after
+  // another, across the shop floor at him. They came for the noise.
+  _startHorde() {
+    this._hordeKills = 0;
+    this.onEnemyKilled = () => this._hordeKill();
+    this.time.delayedCall(700, () => {
+      if (this._dead) return;
+      playTrack('fightMusic');
+      Sfx.ensure(); Sfx.roar();
+      this.cameras.main.shake(300, 0.004);
+      this.startCombat();
+      this._say([['PLAYER', 'The front. Something is coming in the front.']]);
+      this._showTip('THEY ARE COMING IN FROM THE STREET');
+    });
+    [1900, 4700, 7500].forEach((t, i) => this.time.delayedCall(t, () => this._hordeAlien(i)));
+  }
+
+  _hordeAlien(i) {
+    if (this._dead || this._transitioning) return;
+    const z = this.spawnAlien({ x: this.fx(0.035), speed: 0.7 + i * 0.06, rage: 0.95,
+                                calmLunge: true, lungeDelay: 1800 });
+    // out of the dark of the doorway rather than appearing on the floor
+    z.setAlpha(0);
+    this.tweens.add({ targets: z, alpha: 1, duration: 500 });
+  }
+
+  _hordeKill() {
+    this._hordeKills++;
+    if (this._hordeKills === 3) this.time.delayedCall(1500, () => this._windowCrash());
+    if (this._hordeKills >= 4) this._hordeCleared();
+  }
+
+  // The fourth comes through the glass: the pane goes, it drops from the
+  // window to the floor, and comes on. (jump enemy.gif is the clip for this
+  // leap once it is uploaded; until then it is its ordinary walk.)
+  _windowCrash() {
+    if (this._dead || this._transitioning || !this.glassBox) return;
+    this.breakWindow();
+    const gb = this.glassBox;
+    const x = gb.x0 + gb.w / 2, y = gb.y0 + gb.h * 0.55;
+    const dir = this.player.x >= x ? 1 : -1, H = this.alienH();
+    const z = this.spawnAlien({ x, y, speed: 0.6, rage: 0.9, calmLunge: true, lungeDelay: 1300,
+                                vx: dir * 0.9 * H, vy: -0.9 * H });
+    Sfx.ensure(); Sfx.roar();
+    this._say([['PLAYER', 'The window!']]);
+    return z;
+  }
+
+  _hordeCleared() {
+    if (this._cleared) return;
+    this._cleared = true;
+    this._horde = false;
+    once('tienda-cleared');
+    this.cfg.keep = null;
+    stopTrack(3000);
+    this.time.delayedCall(1400, () => {
+      this._say([['ETERWOLF', "That's all of them."],
+                 ['WOLFFEL',  'For now. Out the front — go.']]);
+      this._showTip('OUT THE FRONT  —  LEFT, BACK TO THE STREET');
     });
   }
 
@@ -7662,25 +8472,22 @@ function humpLedges(pts, xa, xb, step) {
 }
 
 const STORAGE_FLOOR = 0.855;     // both paintings share their geometry
+// The goo in storage two, where the thing sits and gets up and where it
+// stands when the lights come back on; and where he is standing when they do.
+const STORAGE_GOO_X = 0.845;
+const STORAGE_FIGHT_X = 0.40;
 // The bunker's scale, so the brothers are the same size here as where the game
 // starts. Everything else in these rooms — the cords, the switch, the creature
 // — is given in metres and grows with it.
 const STORAGE_PXM = 156;
-// The bunker's brother, measured: a 310px sprite on a 273px body. The combat
-// scene draws him at 132 whatever the stage, so the fight is zoomed by the
-// ratio rather than resized — see StorageFightScene.
-const BUNKER_SPRITE_PX = 310;
-// How far the fight eases back from the walking room's size once it starts.
-// A touch — 0.72 was tried and read as a small man in a big room, which is
-// the one thing this fight must not look like. The painted band also sets a
-// floor on it: the camera may never be taller than the room.
-const FIGHT_PULLBACK = 0.93;
-const STORAGE_ART_W = 2172, STORAGE_ART_H = 724;
 
 class StorageOneScene extends WalkScene {
   constructor() { super('StorageOneScene'); }
 
   create() {
+    // On the way back from the fight the cords are already down, and the
+    // left edge — the door in from the tienda — is the way out again.
+    const back = !!GameState.seen['fight1-won'];
     this.cameras.main.fadeIn(260, 0, 0, 0);
     this.buildWalk({
       bgKey: 'scene_storage1dark',
@@ -7690,14 +8497,16 @@ class StorageOneScene extends WalkScene {
       title: 'THE STORAGE ROOM',
       castSwitch: true, canReset: true,
       doubleJump: true, dash: true,
-      beats: [
+      beats: back ? [{ at: 0, tip: 'BACK THROUGH TO THE TIENDA  —  LEFT' }] : [
         { at: 0,    tip: 'L  TORCH ON AND OFF  ·  F  OR RIGHT-CLICK TO CUT' },
         { at: 0.52, say: [['PLAYER', 'Something grew through the wall.']] }
       ],
-      // One way. You go through the storage rooms and out the far side of
-      // the fight; walking back out to the store half way through undoes the
+      // One way in: walking back out to the store half way through undoes the
       // set piece, and is what put the door in the state it would not open.
+      // The way back opens once the thing is dead.
       exits: [
+        { xFrac: 0.012, w: 90, target: 'StoreScene', auto: true, silent: true,
+          fadeMs: 190, spawnXFrac: 0.925, when: () => !!GameState.seen['fight1-won'] },
         { xFrac: 0.985, w: 90, target: 'StorageTwoScene', auto: true,
           silent: true, fadeMs: 190 }
       ],
@@ -7724,10 +8533,12 @@ class StorageOneScene extends WalkScene {
     //   two masses of multiple alien rope — five cuts each, whoever swings
     const cord = (tex, xFrac, extra) => this.addCuttable(Object.assign({
       tex, xFrac, yFrac: STORAGE_FLOOR, full: true, gate: true, label: 'CORD' }, extra));
-    this.cordThin  = cord('scene_ropethin',  0.580, { owner: 'eterwolf' });
-    this.cordThick = cord('scene_ropebig',   0.670, { owner: 'wolffel', widthK: 0.7 });
-    this.cordA     = cord('scene_ropemulti', 0.780, { need: 5, widthK: 0.95 });
-    this.cordB     = cord('scene_ropemulti', 0.890, { need: 5, widthK: 0.95 });
+    if (!back) {
+      this.cordThin  = cord('scene_ropethin',  0.580, { owner: 'eterwolf' });
+      this.cordThick = cord('scene_ropebig',   0.670, { owner: 'wolffel', widthK: 0.7 });
+      this.cordA     = cord('scene_ropemulti', 0.780, { need: 5, widthK: 0.95 });
+      this.cordB     = cord('scene_ropemulti', 0.890, { need: 5, widthK: 0.95 });
+    }
 
     this.onCut = () => {
       if (this.cuttables.every(c => c.dead)) {
@@ -7769,34 +8580,70 @@ class StorageOneScene extends WalkScene {
 class StorageTwoScene extends WalkScene {
   constructor() { super('StorageTwoScene'); }
 
+  // One room, three visits:
+  //   dark   — the first time in: torch, the cord, the switch, the thing in
+  //            the corner, the conversation, the cinematic
+  //   fight  — straight back in from the cinematic, the lights on: it stands
+  //            there, the brothers see what this is, and it comes for them
+  //   after  — it is dead: the lit room, empty, and the way back out
   create() {
-    this.cameras.main.fadeIn(260, 0, 0, 0);
+    const d = this.sys.settings.data || {};
+    this._mode = GameState.seen['fight1-won'] ? 'after' : (d.fight ? 'fight' : 'dark');
+    const lit = this._mode !== 'dark';
+    // Scenes are reused, so everything the dark visit hung on `this` has to be
+    // put back, or the lit visit finds a destroyed torch mask and a creature
+    // that is no longer in the room.
+    this.lit = null; this.lightRT = null; this.beamRT = null; this.darkScrim = null;
+    this.flickers = null; this.torchLabel = null; this.roomLit = false;
+    this.creature = null; this.stander = null; this.switchCord = null;
+    this.cordGate = null; this.darkWall = null; this.cuttables = [];
+    this._fightPending = false; this._won = false;
+
+    this.cameras.main.fadeIn(lit ? 420 : 260, 0, 0, 0);
     this.buildWalk({
-      bgKey: 'scene_storage2dark',
+      bgKey: lit ? 'scene_storage2lit' : 'scene_storage2dark',
       worldW: 'auto', bgZoom: 1.0, startXFrac: 0.03,
       groundFrac: STORAGE_FLOOR, startOnFloor: true,
       pxPerM: STORAGE_PXM,
       title: 'DEEPER IN',
       castSwitch: true, canReset: true,
       doubleJump: true, dash: true,
-      beats: [
-        { at: 0, tip: 'FIND THE LIGHTS' }
+      // Dying, R or the cast buttons in the middle of the fight put you back
+      // at the start of the fight, not in the dark at the start of the room.
+      keep: this._mode === 'fight' ? { fight: true, retry: true, spawnXFrac: STORAGE_FIGHT_X } : null,
+      beats: this._mode === 'dark' ? [{ at: 0, tip: 'FIND THE LIGHTS' }] : [],
+      // The way back is the way in, and it opens when the thing is dead.
+      exits: [
+        { xFrac: 0.012, w: 90, target: 'StorageOneScene', auto: true, silent: true,
+          fadeMs: 190, spawnXFrac: 0.955, when: () => !!GameState.seen['fight1-won'] }
       ],
-      exits: [],
       drawFallback(WW) {
         const g = this.add.graphics().setDepth(-20);
         g.fillStyle(0x0b0c0e, 1); g.fillRect(0, 0, WW, 720);
       }
     });
 
+    // ---- the wall switch --------------------------------------------
+    // Mounted on the painted electrical box, which is the switch this room
+    // already has: a grey box on the wall, measured at x 0.352-0.378 and
+    // y 0.444-0.548, with conduit running from it straight up to the tube
+    // lamp hanging over it. Throw it and the light it is wired to comes on.
+    this._buildSwitch({ x0: 0.352, x1: 0.378, y0: 0.444, y1: 0.548 });
+
+    if (lit) {
+      // Lights on, switch thrown.
+      this.roomLit = true;
+      if (this.swOn) { this.swOff.setAlpha(0); this.swOn.setAlpha(1); }
+      if (this._mode === 'fight') this._setUpFight(d);
+      else this.time.delayedCall(400, () => this._showTip('BACK THE WAY YOU CAME  —  LEFT'));
+      return;
+    }
+
     Object.assign(this, Darkness, Cutting);
     this.buildDark('scene_storage2lit');
     this.buildCutting();
 
     // ---- the thing in the corner ------------------------------------
-    // The supplied clip, cut to a box shared by all eight frames so it does
-    // not shift as it breathes. It sits in the goo at the far end and does
-    // nothing at all until the lights come on.
     // In the heart of the web, where the roots converge at x 0.84-0.87 and
     // the goo pools on the floor under them — the picture the first cinematic
     // still shows. At 0.905 it stood on a black foreground silhouette that
@@ -7804,15 +8651,7 @@ class StorageTwoScene extends WalkScene {
     // 0.845: still in the heart of the web with its feet in the goo, and far
     // enough left that, with the camera pinned at the room's right end, it
     // stands clear of the brothers' portraits while they talk about it.
-    this._buildCreature(0.845, 0.842);
-
-    // ---- the wall switch --------------------------------------------
-    // Mounted on the painted electrical box, which is the switch this room
-    // already has: a grey box on the wall, measured at x 0.352-0.378 and
-    // y 0.444-0.548, with conduit running from it straight up to the tube
-    // lamp hanging over it. Throw it and the light it is wired to comes on.
-    // It used to float at 0.50 on bare wall at an invented height.
-    this._buildSwitch({ x0: 0.352, x1: 0.378, y0: 0.444, y1: 0.548 });
+    this._buildCreature(STORAGE_GOO_X, 0.842);
 
     // ---- a cord across the way to it -----------------------------------
     // Grown floor to ceiling just this side of the switch, so the lights are
@@ -7833,6 +8672,18 @@ class StorageTwoScene extends WalkScene {
       }
     };
 
+    // ---- and nothing past the switch until the lights are on -------------
+    // An invisible stop a step beyond the switch, floor to ceiling. Without it
+    // you could walk the length of the room in the dark and find the thing by
+    // torchlight before anyone had turned a light on, which is the reveal
+    // spent on nothing.
+    const bg = this.bgGeom, wx = this.fx(0.418);
+    this.darkWall = this.add.rectangle(wx, bg.y + (this.groundY - bg.y) / 2, 30,
+                                       this.groundY - bg.y, 0x000000, 0).setDepth(-1);
+    this.physics.add.existing(this.darkWall, true);
+    this.solidsW.push(this.darkWall);
+    this.physics.add.collider(this.player, this.darkWall);
+
     this._staged = false;
     this._leaving = false;
     // Scenes are reused, so a flag left set by the last visit would swallow ESC.
@@ -7840,9 +8691,87 @@ class StorageTwoScene extends WalkScene {
     // If this room goes away while its conversation is still up, take the
     // conversation with it — its callbacks belong to this run.
     this.events.once('shutdown', () => {
-      const d = this.scene.get('IntroDialogueScene');
-      if (d && d.sys.settings.active && d.overlay) this.scene.stop('IntroDialogueScene');
+      const dlg = this.scene.get('IntroDialogueScene');
+      if (dlg && dlg.sys.settings.active && dlg.overlay) this.scene.stop('IntroDialogueScene');
     });
+  }
+
+  // ---- the fight ------------------------------------------------------
+  // Back from the cinematic with "four enemies" already playing. It stands in
+  // the goo where it got up — first encounter enemy.gif: it turns to them and
+  // opens its claws, then holds there — while the brothers say what this is,
+  // over their heads, no panels. Then it comes, slowly, until it is cut.
+  _setUpFight(d) {
+    playTrack('fightMusic');
+    const x = this.fx(STORAGE_GOO_X), y = this.groundY;
+    const S = ALIEN_FACE_SHEET, H = this.alienH();
+    if (this.anims.exists('alien-face')) {
+      this.stander = this.add.sprite(x, y + 2, S.key, 'ae0').setDepth(9)
+        .setOrigin(S.cx / S.cw, (S.foot + 1) / S.ch).setScale(H / S.standH);
+      this.stander.play('alien-face');
+      this.stander.once('animationcomplete', () => {
+        if (this.stander && this.stander.active) this.stander.play('alien-stand');
+      });
+    }
+    // He faces it, and holds still while they talk.
+    this._holdInput = true;
+    this._inConversation = true;
+    const p = this.player;
+    p._facing = 1;
+    heroFlip(p, p._hero, 1);
+    // Both of them in the frame: him on the left, it on the right.
+    const cam = this.cameras.main;
+    cam.stopFollow();
+    cam.scrollX = Phaser.Math.Clamp((p.x + x) / 2 - 640, 0, this.worldW - 1280);
+    const lines = d.retry ? [] : [
+      ['ETERWOLF', "It's not sitting down any more."],
+      ['WOLFFEL',  'Looks like we have to fight.']
+    ];
+    this.time.delayedCall(d.retry ? 200 : 1300, () => this._say(lines));
+    // It starts when they have finished (or been skipped), and never before
+    // the clip has had its moment. A timer, not a deadline read off the
+    // clock: on a reused scene, create() still sees the clock where the room
+    // last left it, so "now + 3s" was already in the past and it came at once.
+    this._fightPending = true;
+    this._fightReady = false;
+    this.time.delayedCall(d.retry ? 1400 : 3200, () => { this._fightReady = true; });
+  }
+
+  _fightStarts() {
+    this._fightPending = false;
+    this._holdInput = false;
+    this._inConversation = false;
+    this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
+    const x = this.stander ? this.stander.x : this.fx(STORAGE_GOO_X);
+    if (this.stander) { this.stander.destroy(); this.stander = null; }
+    // "crawling slowly towards" — a quarter of its height a second until it is
+    // hurt. It does not lunge until then either: the first blow is his.
+    this.spawnAlien({ x, speed: 0.25, rage: 0.62, calmLunge: false, lungeDelay: 1500 });
+    Sfx.ensure(); Sfx.roar();
+    this.cameras.main.shake(260, 0.004);
+    this._showTip('F  OR  RIGHT-CLICK  —  CUT IT DOWN');
+    this.onEnemyKilled = (kx, dir) => this._fightWon(kx, dir);
+  }
+
+  // It dropped something: the pistol skids out of the pool toward him, clear
+  // of the acid. Taking it is what ends the fight and opens the way back.
+  _fightWon(kx, dir) {
+    if (this._won) return;
+    this._won = true;
+    this.time.delayedCall(1300, () => {
+      this.dropPistol(kx - dir * 0.62 * this.alienH());
+      this._showTip('IT DROPPED SOMETHING');
+    });
+    this.onPistol = () => {
+      once('fight1-won');
+      this.cfg.keep = null;
+      stopTrack(3500);
+      this.time.delayedCall(1800, () => {
+        this._say([['ETERWOLF', "Let's get out of here."],
+                   ['WOLFFEL',  'Back the way we came.']]);
+      });
+      this.time.delayedCall(3600, () => this._showTip('WALK BACK  —  THE WAY YOU CAME'));
+    };
   }
 
   fx(f) { return this.bgGeom.x + f * this.bgGeom.w; }
@@ -7934,6 +8863,13 @@ class StorageTwoScene extends WalkScene {
   _throwSwitch() {
     if (this.roomLit || this._staged) return;
     if (this.creature) this.time.delayedCall(620, () => this.creature.clearTint());
+    // the stop beyond the switch goes with the dark
+    if (this.darkWall) {
+      this.darkWall.body.enable = false;
+      const i = this.solidsW.indexOf(this.darkWall);
+      if (i >= 0) this.solidsW.splice(i, 1);
+      this.darkWall.destroy(); this.darkWall = null;
+    }
     Sfx.ensure(); Sfx.select();
     if (this.swOn) {
       this.tweens.add({ targets: this.swOff, alpha: 0, duration: 110 });
@@ -7986,7 +8922,7 @@ class StorageTwoScene extends WalkScene {
             this.time.delayedCall(800, () => {
               this.cameras.main.fadeOut(260, 0, 0, 0);
               this.cameras.main.once('camerafadeoutcomplete',
-                () => this.scene.start('EnemyCinematicScene'));
+                () => this.scene.start('EnemyCinematicScene', { cast: this.castId }));
             });
           };
           // It gets all the way up before the cut: skipped before its line,
@@ -8008,6 +8944,12 @@ class StorageTwoScene extends WalkScene {
   update(time, delta) {
     super.update(time, delta);
     if (!this.player) return;
+    if (this._mode === 'fight') {
+      if (this._fightPending && this._fightReady && !this._sayQueue.length &&
+          this.time.now >= this._sayUntil) this._fightStarts();
+      return;
+    }
+    if (this._mode !== 'dark') return;
     this.paintFlicker(time);
     this.paintDark(time);
     if (this.swLabel) this.swLabel.setAlpha(this._atSwitch() ? 1 : 0);
@@ -8019,6 +8961,13 @@ class StorageTwoScene extends WalkScene {
         this._showTip('F  OR RIGHT-CLICK — IT WILL TAKE ' + (c.need - c.hits) + ' CUTS');
       }
     } else this._cordTipAt = 0;
+    // walking into the dark past the switch: say why he stops
+    if (this.darkWall && this.player.body.blocked.right &&
+        this.player.x > this.darkWall.x - 0.5 * this.charH &&
+        time > (this._wallTipAt || 0)) {
+      this._wallTipAt = time + 4000;
+      this._showTip('TOO DARK TO GO ON  —  THE LIGHTS FIRST');
+    }
     // The torch catches it: close, and pointed at it. Only the pale head of the
     // thing comes up out of the dark — enough to make you stop.
     if (this.creature && !this.roomLit) {
@@ -8034,9 +8983,8 @@ class StorageTwoScene extends WalkScene {
 //  THE CINEMATIC                                                      //
 //                                                                     //
 //  Two stills, held. The second one shakes and screams, and then the  //
-//  fight starts. Skippable like every other cutscene in the game —    //
-//  nothing here is a puzzle and nobody should have to sit through it  //
-//  twice.                                                             //
+//  fight starts — back in the room, lit. "four enemies" comes in on   //
+//  the first frame and plays on under the fight.                      //
 // ================================================================== //
 class EnemyCinematicScene extends Phaser.Scene {
   constructor() { super('EnemyCinematicScene'); }
@@ -8058,6 +9006,11 @@ class EnemyCinematicScene extends Phaser.Scene {
     this.a = show('scene_cine1');
     this.b = show('scene_cine2');
     if (this.b) this.b.setAlpha(0);
+    // The song starts on the cut, not after it.
+    playTrack('fightMusic');
+    // A slow push in on the first still: it is coming, and you are watching.
+    if (this.a) this.tweens.add({ targets: this.a, scale: this.a.scale * 1.06,
+                                  duration: 1800, ease: 'Sine.easeIn' });
 
     // A film grain over both, so a still reads as a held frame rather than a
     // picture the game stopped on.
@@ -8087,7 +9040,9 @@ class EnemyCinematicScene extends Phaser.Scene {
     if (this._done) return;
     this._done = true;
     this.cameras.main.fadeOut(360, 0, 0, 0);
-    this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('StorageFightScene'));
+    // Back into the room it was in, lights on, where it is standing waiting.
+    this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('StorageTwoScene', {
+      fight: true, spawnXFrac: STORAGE_FIGHT_X, cast: GameState.castId }));
   }
 }
 
@@ -8106,237 +9061,6 @@ const STORAGE_MEET_LINES = [
   { who: 'ETERWOLF', text: "..." },
   { who: 'WOLFFEL',  text: "Mk. He looks hungry." }
 ];
-
-// ================================================================== //
-//  THE FIGHT                                                          //
-//                                                                     //
-//  A combat scene, not a walking one, because the thing that comes    //
-//  out of the corner is the alien from the sandbox and everything it  //
-//  does — the walk, the lunge, the rage after the first hit, taking a //
-//  sword, dying — already lives there. Subclassing the combat scene   //
-//  buys all of it; what this turns off is the wave director, so it is //
-//  one creature and not a street full of them.                        //
-// ================================================================== //
-class StorageFightScene extends GameScene {
-  constructor() { super('StorageFightScene'); }
-
-  init(data) { this._wantCast = (data && data.cast) || GameState.castId || DEFAULT_CAST; }
-
-  create() {
-    // The arena is the storage room, lit. The combat world is 2400 wide with
-    // its floor at 648, and this painting is 2172x724 with its floor at 0.855
-    // — 619 — so it scales to 648/619 = 1.047 and comes out 2274 across, which
-    // the combat scene then tiles a flipped copy of to reach 2400. Close
-    // enough that the seam lands off the end of the fight.
-    this.artKey = 'scene_storage2lit';
-    this.artFloorRow = Math.round(STORAGE_FLOOR * 724);
-    this.hideStreet = true;      // the painting has its own floor
-    this.noLedges = true;        // a warehouse floor, nothing to climb
-    this.castId = this._wantCast;
-    super.create();
-
-    // No waves: one creature, placed by hand.
-    this.waveTriggered = true;
-    this.waveActive = false;
-    this.spawnQueue = [];
-    this.waveSpeed = 55;
-    this.finisherEnabled = true;
-    if (this.advanceHint) this.advanceHint.setVisible(false);
-    if (this.waveText) this.waveText.setText('');
-
-    // The street fight opens on its own title card — "HALBERD BAY, advance to
-    // the middle of the street" — which is the wave director talking. Nothing
-    // here obeys it, and a street's name over a storeroom is just wrong.
-    this.bannerText.setText('').setAlpha(0);
-    this.subBannerText.setText('').setAlpha(0);
-    this.tweens.killTweensOf([this.bannerText, this.subBannerText]);
-
-    this._over = false;
-    this.cameras.main.fadeIn(420, 0, 0, 0);
-
-    // It is already up and already coming — the cinematic just showed it
-    // stand. Spawned to the right of where he came in, at the far end.
-    this.time.delayedCall(260, () => {
-      const z = this.spawnZombie('alien');
-      if (z) {
-        z.x = Math.min(WORLD_W - 120, this.player.x + 620);
-        z.y = GROUND_Y - 80;
-        this._theThing = z;
-      }
-      this.cameras.main.shake(300, 0.006);
-    });
-
-    this._zoomToBunkerScale();
-    this._banner('IT IS AWAKE  —  CUT IT DOWN', '#c93b2a');
-  }
-
-  // THE PROPORTION PROBLEM, and why this is not a zoom.
-  //
-  // In the walking rooms the painting is shown at ~1.0x with a 310px brother.
-  // The combat scene fits every painting to ITS floor, and its brother is a
-  // fixed 146px sprite — every number in combat, the reach, the jump, the
-  // gravity, the lunge, is tuned against that. So the room came out ~1.05x in
-  // the world with a 146px man in it: relative to the room, less than half
-  // the size he was one scene earlier. No camera zoom can fix that, because a
-  // zoom grows the man and the room together.
-  //
-  // So the ROOM is rescaled to HIM: the painting is drawn at exactly the
-  // proportion to his sprite that the walking room has to its brother, and
-  // stood so its painted floor lands on the combat floor. At that size one
-  // painting is about a thousand pixels across — less than half the arena —
-  // so it is laid end to end, alternate copies mirrored so every seam is a
-  // clean reflection, and the fight gets its length from that.
-  //
-  // Then the camera. It is held to the painted band so it can never show the
-  // empty world above the ceiling, and it opens at exactly the walking room's
-  // magnification — the cut back in from the cinematic lands on the same size
-  // of man in the same size of room — before easing back a touch for the
-  // fight. The HUD sits at scrollFactor 0 and a zoom would magnify it off the
-  // screen, so it gets a second camera at zoom 1; objects keep arriving for
-  // the whole fight, so the split is re-checked before every render.
-  _zoomToBunkerScale() {
-    const main = this.cameras.main;
-    const heroPx = this.player ? this.player.displayHeight : 146;
-    const walkRoomScale = 720 / STORAGE_ART_H;          // how the walking room shows it
-    const s = walkRoomScale * (heroPx / BUNKER_SPRITE_PX);
-    const row = Math.round(STORAGE_FLOOR * STORAGE_ART_H);
-    const top = GROUND_Y - row * s;
-
-    (this.artImgs || []).forEach(o => o.destroy());
-    this.artImgs = [];
-    const w = STORAGE_ART_W * s;
-    for (let i = 0, x = 0; x < WORLD_W + w; i++, x += w) {
-      const im = this.add.image(x, top, this.artKey).setOrigin(0, 0).setDepth(-25)
-        .setScale(s).setFlipX(i % 2 === 1);
-      this.artImgs.push(im);
-    }
-    this._artTop = top;
-
-    // Held to the painting. Below it is the dark lip of the floor, above it is
-    // nothing at all.
-    const bottom = Math.min(WORLD_H, top + STORAGE_ART_H * s);
-    main.setBounds(0, top, WORLD_W, bottom - top);
-
-    const k = BUNKER_SPRITE_PX / heroPx;                 // the walking room's size
-    const minZoom = 720 / (bottom - top);                // never taller than the band
-    const fightZoom = Math.max(minZoom, k * FIGHT_PULLBACK);
-    this._camZoom = k;
-    main.setZoom(k);
-    this.time.delayedCall(700, () => main.zoomTo(fightZoom, 1400, 'Sine.easeInOut'));
-
-    this.uiCam = this.cameras.add(0, 0, 1280, 720);
-    this.uiCam.setName('hud');
-    const route = () => {
-      this.children.list.forEach(o => {
-        if (o._camRouted) return;
-        o._camRouted = true;
-        if (o.scrollFactorX === 0 && o.scrollFactorY === 0) main.ignore(o);
-        else this.uiCam.ignore(o);
-      });
-    };
-    route();
-    this.events.on('prerender', route);
-    this.events.once('shutdown', () => this.events.off('prerender', route));
-  }
-
-  _banner(text, colour) {
-    const t = this.add.text(640, 132, text, {
-      fontFamily: 'Courier New, monospace', fontSize: '20px', color: colour || '#f2b13c',
-      stroke: '#0d0a08', strokeThickness: 5
-    }).setOrigin(0.5).setScrollFactor(0).setDepth(95);
-    this.tweens.add({ targets: t, alpha: 0, duration: 900, delay: 2200,
-                      onComplete: () => t.destroy() });
-  }
-
-  // Nothing triggers a wave in here.
-  checkWaveTrigger() {}
-
-  // The wave director's "what next" hook. With no waves it is simply the end
-  // of the fight, which is where the pistol comes from.
-  checkWaveCleared() {
-    if (this._over || this.aliveEnemies() > 0) return;
-    this._over = true;
-    this.time.delayedCall(700, () => this._drop());
-  }
-
-  // The pistol it drops: pistol on floor.png, lying where it fell rather than
-  // spinning in the air like a power-up. Walk over it to take it; the card
-  // that follows shows pistol sprite.png, the gun as you will hold it.
-  _drop() {
-    const x = this._theThing ? this._theThing.x : this.player.x + 120;
-    const key = this.textures.exists('scene_pistolfloor') ? 'scene_pistolfloor' : 'gun_pickup';
-    const gun = this.physics.add.sprite(x, GROUND_Y - 160, key).setDepth(9);
-    const art = key === 'scene_pistolfloor' ? paintedBox(this, key) : null;
-    // about a hand's length across, next to a 132px man
-    const want = 46;
-    gun.setScale(art ? want / art.pw : 1.4);
-    gun.body.setAllowGravity(true);
-    this.physics.add.collider(gun, this.solids);
-    // a glint rather than a halo: it is a gun on a floor, not a pickup orb
-    const glint = this.add.star(x + 10, GROUND_Y - 18, 4, 2, 7, 0xfff2cc, 0.9)
-      .setDepth(10).setBlendMode(Phaser.BlendModes.ADD).setAlpha(0);
-    this.tweens.add({ targets: glint, alpha: 0.9, scale: 1.4, duration: 260, yoyo: true,
-                      repeat: -1, repeatDelay: 900 });
-    this._banner('IT DROPPED SOMETHING');
-
-    this.physics.add.overlap(this.player, gun, () => {
-      if (gun._taken) return;
-      gun._taken = true;
-      gun.destroy(); glint.destroy();
-      GameState.hasWeapon = true;
-      showBladeUnlocked();
-      Sfx.ensure(); Sfx.select();
-      this.cameras.main.flash(240, 255, 226, 170);
-      this._gunCard();
-      this.time.delayedCall(3400, () => this._openTheWayBack());
-    });
-  }
-
-  // The obtained card, with the gun itself on it.
-  _gunCard() {
-    const grp = [];
-    grp.push(this.add.rectangle(640, 350, 620, 230, 0x0d0a08, 0.93)
-      .setScrollFactor(0).setDepth(90).setStrokeStyle(3, 0xf2b13c));
-    if (this.textures.exists('scene_pistolsprite')) {
-      const im = this.add.image(640, 300, 'scene_pistolsprite').setScrollFactor(0).setDepth(91);
-      const art = paintedBox(this, 'scene_pistolsprite');
-      im.setScale(art ? 200 / art.pw : 200 / im.width);
-      grp.push(im);
-    }
-    grp.push(this.add.text(640, 386, 'OBTAINED — BLACK PISTOL', {
-      fontFamily: 'Courier New, monospace', fontSize: '24px', color: '#f2b13c',
-      stroke: '#0d0a08', strokeThickness: 5
-    }).setOrigin(0.5).setScrollFactor(0).setDepth(91));
-    grp.push(this.add.text(640, 424, 'LMB  or  K  to fire', {
-      fontFamily: 'Courier New, monospace', fontSize: '15px', color: '#d9c7a8'
-    }).setOrigin(0.5).setScrollFactor(0).setDepth(91));
-    grp.forEach(o => o.setAlpha(0));
-    this.tweens.add({ targets: grp, alpha: 1, duration: 250 });
-    this.time.delayedCall(3000, () => this.tweens.add({
-      targets: grp, alpha: 0, duration: 450, onComplete: () => grp.forEach(o => o.destroy())
-    }));
-  }
-
-  _openTheWayBack() {
-    const t = this.add.text(640, 172, 'WALK LEFT — BACK TO THE STOREFRONT', {
-      fontFamily: 'Courier New, monospace', fontSize: '17px', color: '#8a6f4a'
-    }).setOrigin(0.5).setScrollFactor(0).setDepth(95);
-    this._wayBack = true;
-    this._backText = t;
-  }
-
-  update(time, delta) {
-    super.update(time, delta);
-    if (this._wayBack && this.player && this.player.x < 90 && !this._leaving) {
-      this._leaving = true;
-      // both cameras, or the HUD hangs over a black screen
-      if (this.uiCam) this.uiCam.fadeOut(420, 0, 0, 0);
-      this.cameras.main.fadeOut(420, 0, 0, 0);
-      this.cameras.main.once('camerafadeoutcomplete',
-        () => this.scene.start('ShopStreetScene', { spawnXFrac: 0.80 }));
-    }
-  }
-}
 
 // ================================================================== //
 //  DEBUG SANDBOX                                                     //
@@ -8373,7 +9097,7 @@ class DebugScene extends GameScene {
     this.waveActive = false;
     this.spawnQueue = [];
     this.waveSpeed = 55;               // enemy speeds derive from this; NaN without it
-    this.finisherEnabled = true;
+    this.finisherEnabled = false;      // the toggle still turns it on here
 
     // A face for the wall crawler to live on. It used to be 330px of brick
     // across the middle of the yard, which made it a barricade the whole wave
@@ -8627,7 +9351,7 @@ window.__game = new Phaser.Game({
   scene: [BootScene, StartScene, MenuScene, CharSelectScene, IntroDialogueScene,
           BunkerScene, ExitScene, JumpScene, BridgeScene, DashScene,
           ShopStreetScene, StoreScene,
-          StorageOneScene, StorageTwoScene, EnemyCinematicScene, StorageFightScene,
+          StorageOneScene, StorageTwoScene, EnemyCinematicScene,
           CityScene, ShopFrontScene, ShopScene,
           GameScene, DebugScene]
 });

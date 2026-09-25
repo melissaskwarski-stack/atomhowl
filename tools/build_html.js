@@ -124,6 +124,13 @@ const SCENE_SRC = {
   // sit and stand up enemy.gif, reversed so it sits and then rises: 17 frames
   // on one shared box. The `N = 17` in _buildCreature has to match.
   creaturerise: ['public/assets/creature_rise_strip.png'],
+  // The alien's death (death enemy 1.gif, 25 frames) and its first stand in
+  // the lit room (first encounter enemy.gif, 20 frames), each cut to a 5-wide
+  // grid on one box shared by every frame, every frame stood on its own
+  // lowest row. ALIEN_DEATH_SHEET / ALIEN_FACE_SHEET in the game describe the
+  // grids and have to match them.
+  aliendeath:   ['public/assets/alien_death_sheet.png'],
+  alienface:    ['public/assets/alien_encounter_sheet.png'],
   cine1:        ['public/assets/enemy_cine_1.jpg'],
   cine2:        ['public/assets/enemy_cine_2.jpg'],
   deadplant: ['public/assets/dead_plant.png'],
@@ -187,6 +194,9 @@ const MEDIA_SRC = {
   menuMusic: [['public/assets/Atom_howl_intro_lite.mp3', 'audio/mpeg'],
               ['public/assets/Atom_howl_intro_web.mp3',  'audio/mpeg'],
               ['public/assets/Atom_howl_intro.mp3',      'audio/mpeg']],
+  // "four enemies", under the first fight and the horde after it. 96k mono,
+  // cover art stripped, for the same reason as the menu bed.
+  fightMusic: [['public/assets/four_enemies_lite.mp3', 'audio/mpeg']],
 };
 
 // ---------- dialogue voice ----------
