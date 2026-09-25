@@ -80,7 +80,8 @@ const SCENE_SRC = {
   // they are instead of drawing a second bridge over the top, which is what
   // it used to do and why there were two of them at two heights. Only the
   // span is separate, because it has to break in half and fall.
-  bridgebg:   ['public/assets/bridge_bg.jpg'],
+  // the new bridge.png (2048x768), which replaced bridge_bg.jpg
+  bridgebg:   ['public/assets/bridge_new.png'],
   bridgespan: ['public/assets/bridge_span.png'],
   // ---- FOREGROUND LIST -------------------------------------------------
   // Add a line here to make a picture usable as foreground dressing. The name
@@ -120,6 +121,9 @@ const SCENE_SRC = {
   // to a box shared by every frame, so it does not shift as it plays.
   // CREATURE_FRAMES in the game has to match the 8.
   creature:     ['public/assets/creature_idle_strip.png'],
+  // sit and stand up enemy.gif, reversed so it sits and then rises: 17 frames
+  // on one shared box. The `N = 17` in _buildCreature has to match.
+  creaturerise: ['public/assets/creature_rise_strip.png'],
   cine1:        ['public/assets/enemy_cine_1.jpg'],
   cine2:        ['public/assets/enemy_cine_2.jpg'],
   deadplant: ['public/assets/dead_plant.png'],

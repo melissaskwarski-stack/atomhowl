@@ -3690,8 +3690,14 @@ function driveWalker(scene, p, keys, onGround) {
     // button looked like it did nothing.
     if (now < (p._swingUntil || 0)) { if (onGround) p.setVelocityX(0); return move; }
 
+    // Off the ground but only just — stepping down a 3px ledge on the bridge's
+    // humped road leaves the floor for three frames. That is not a jump, and
+    // it flashed the jump pose at every step. The air pose waits for a real
+    // jump (going up) or a real fall (90ms off the ground).
+    const airborne = !onGround &&
+      (p.body.velocity.y < -40 || now - (p._airSince || now) > 90);
     const want = dashing ? 'dash'
-               : !onGround ? airAction(hero, p.body.velocity.y, p)
+               : airborne ? airAction(hero, p.body.velocity.y, p)
                : now < (p._landUntil || 0) ? 'land'
                : moving    ? (sprint ? 'run' : 'walk')
                : idlePose(hero, p._restSince, now, p._longIdleDone, allowLong,
@@ -4238,26 +4244,49 @@ class IntroDialogueScene extends Phaser.Scene {
     // curtain, so the fades are shorter than the opening's.
     this.fadeMs = d.fadeMs != null ? d.fadeMs : 900;
 
-    this.cameras.main.setBackgroundColor('#0a0807');
-    this.cameras.main.fadeIn(this.fadeMs, 0, 0, 0);
+    // OVERLAY: the conversation runs on top of a stage that keeps playing
+    // underneath, instead of cutting away to a still. Used where something has
+    // to happen IN the room while they talk — the thing in the corner getting
+    // up on its line. So no background colour of its own (that would black the
+    // stage out), no camera fade (same), and it hands back with a callback
+    // instead of starting a scene. `onLine(index, line)` fires as each line
+    // begins; `barTop` moves the bar to the top of the screen, clear of
+    // whatever is standing in the middle of the floor.
+    this.overlay = !!d.overlay;
+    this.barTop = !!d.barTop;
+    this.onLine = d.onLine || null;
+    this.onDone = d.onDone || null;
+    if (!this.overlay) {
+      this.cameras.main.setBackgroundColor('#0a0807');
+      this.cameras.main.fadeIn(this.fadeMs, 0, 0, 0);
+    } else {
+      this.cameras.main.setBackgroundColor('rgba(0,0,0,0)');
+    }
     // The opening takes the menu theme down with it. A cut out of a stage and
     // back has no music of its own to stop, and stopping it would silence the
     // stage it returns to.
     this.keepMusic = !!d.keepMusic;
     if (!this.keepMusic) stopMusic(400);
 
-    if (this.textures.exists(this.bgKey)) {
+    if (!this.overlay && this.textures.exists(this.bgKey)) {
       const bg = this.add.image(W / 2, H / 2, this.bgKey).setDepth(-20);
       bg.setScale(Math.max(W / bg.width, H / bg.height));
     }
-    this.add.rectangle(W / 2, H / 2, W, H, 0x0a0807, 0.5).setDepth(-15);
+    // Over a live stage the scrim is light, so what is happening in the room
+    // still reads through it.
+    this._scrim = this.add.rectangle(W / 2, H / 2, W, H, 0x0a0807,
+                                     this.overlay ? 0.22 : 0.5).setDepth(-15);
 
     this._ui = [];                       // bar + figures, faded in after the beat
     this._buildPanel(W, H);
 
     this.portraits = {
-      WOLFFEL:     this._portrait('WOLFFEL', 238),
-      ETERWOLF: this._portrait('ETERWOLF', 1042)
+      // Over a live stage the brothers stand smaller, right out in the bottom
+      // corners, so the middle of the room — where the thing is — stays clear.
+      // Full size they cover a third of the screen each side, and the thing
+      // stood up behind Eterwolf's shoulder where nobody could see it.
+      WOLFFEL:  this._portrait('WOLFFEL', this.overlay ? 150 : 238),
+      ETERWOLF: this._portrait('ETERWOLF', this.overlay ? 1180 : 1042)
     };
     Object.keys(this.portraits).forEach(k => this._scheduleBlink(k));
 
@@ -4296,7 +4325,8 @@ class IntroDialogueScene extends Phaser.Scene {
   }
 
   _begin() {
-    if (this._started) return;
+    // ESC or SKIP during the hold has already finished the conversation.
+    if (this._started || this._done) return;
     this._started = true;
     this._ui.forEach(o => this.tweens.add({ targets: o, alpha: 1, duration: 420 }));
     this._show();
@@ -4307,8 +4337,10 @@ class IntroDialogueScene extends Phaser.Scene {
     // A narrow bar sits between the two figures rather than spanning the
     // screen, so the scene and both characters stay visible around it.
     const w = 620, h = Math.round(w * 724 / 2172);       // frame art is 3:1
-    const x = Math.round((W - w) / 2), y = H - h - 26;
+    const x = Math.round((W - w) / 2), y = this.barTop ? 26 : H - h - 26;
     this._panel = { x, y, w, h };
+    // the hint and SKIP sit just under the bar, wherever the bar is
+    const underY = this.barTop ? y + h + 22 : H - 6;
 
     const first = this.textures.exists('ui_panel_l') ? 'ui_panel_l' : 'ui_panel_r';
     if (this.textures.exists(first)) {
@@ -4356,7 +4388,7 @@ class IntroDialogueScene extends Phaser.Scene {
     // The hint and the button sit as one row under the panel, straddling its
     // centre line — which is what keeps them reading as belonging to the
     // panel rather than parked in a corner.
-    this._hint = this.add.text(W / 2 - 10, H - 6, 'SPACE / CLICK — NEXT', {
+    this._hint = this.add.text(W / 2 - 10, underY, 'SPACE / CLICK — NEXT', {
       fontFamily: F_UI, fontSize: '9px', fontStyle: '500', color: '#6b5a48'
     }).setOrigin(1, 1).setDepth(22);
 
@@ -4371,7 +4403,7 @@ class IntroDialogueScene extends Phaser.Scene {
     // Under the panel and just right of its centre line, paired with the hint:
     // it belongs to the conversation, so it sits with it rather than off at an
     // edge of the screen. Depth 30 keeps it above the brothers at 25.
-    this._skip = this.add.text(W / 2 + 10, H - 4, 'SKIP  ▸', {
+    this._skip = this.add.text(W / 2 + 10, underY + 2, 'SKIP  ▸', {
       fontFamily: F_UI, fontSize: '11px', fontStyle: '700', color: '#f5c169',
       backgroundColor: '#1a1410', padding: { x: 10, y: 4 }
     }).setOrigin(0, 1).setDepth(30).setAlpha(0.9);
@@ -4413,9 +4445,11 @@ class IntroDialogueScene extends Phaser.Scene {
     const closedKey = openKey + '_closed';
     let img = null;
 
+    // standing y for the speaker; listeners drop 12 below it, a sleeper 40
+    this._figY = this.overlay ? 415 : 232;
     if (this.textures.exists(openKey)) {
-      img = this.add.image(x, 232, openKey).setOrigin(0.5, 0).setDepth(25);
-      img.setScale(560 / img.height);
+      img = this.add.image(x, this._figY, openKey).setOrigin(0.5, 0).setDepth(25);
+      img.setScale((this.overlay ? 350 : 560) / img.height);
       this._ui.push(img);
     } else {
       const g = this.add.graphics().setDepth(25);          // stand-in figure
@@ -4447,6 +4481,7 @@ class IntroDialogueScene extends Phaser.Scene {
   _show() {
     if (this._idx >= this.lines.length) return this._finish();
     const line = this.lines[this._idx];
+    if (this.onLine) { try { this.onLine(this._idx, line); } catch (e) {} }
     this._name.setText(line.who);
 
     // The plate goes on the SPEAKER'S side, so the bar points back at whoever
@@ -4470,7 +4505,7 @@ class IntroDialogueScene extends Phaser.Scene {
       const asleep = k === this.sleeper && !this._awake;
       const on = !asleep && k === line.who;
       this.tweens.add({
-        targets: p.img, y: asleep ? 272 : (on ? 232 : 244),
+        targets: p.img, y: this._figY + (asleep ? 40 : (on ? 0 : 12)),
         duration: line.wake && k === this.sleeper ? 500 : 220, ease: 'Sine.easeOut'
       });
       p.img.setTint(asleep ? 0x4a443e : (on ? 0xffffff : 0x6e6660));
@@ -4524,6 +4559,18 @@ class IntroDialogueScene extends Phaser.Scene {
     if (this._typeEv) this._typeEv.remove();
     stopVoice();                 // ESC out of the scene should not keep talking
     if (!this.keepMusic) stopMusic(900);
+    if (this.overlay) {
+      // fade the bar, the brothers and the scrim, then hand the stage back
+      const all = this._ui.concat([this._scrim, this._hint, this._skip, this._more,
+                                   this._name, this._body]).filter(Boolean);
+      this.tweens.add({ targets: all, alpha: 0, duration: this.fadeMs,
+        onComplete: () => {
+          const cb = this.onDone;
+          this.scene.stop();
+          if (cb) cb();
+        } });
+      return;
+    }
     this.cameras.main.fadeOut(this.fadeMs, 0, 0, 0);
     this.cameras.main.once('camerafadeoutcomplete',
       () => this.scene.start(this.target, this.sys.settings.data &&
@@ -4536,8 +4583,18 @@ class IntroDialogueScene extends Phaser.Scene {
 // ================================================================== //
 class WalkScene extends Phaser.Scene {
   // subclasses set cfg and call buildWalk() in create()
+  // Is there a floor slab (not a ledge) under this x? Gaps are cut out of it.
+  _floorUnder(x) {
+    const WW = this.worldW || 1e9;
+    return !((this.cfg.gaps || []).some(g => x >= g.atFrac * WW && x <= (g.atFrac + g.wFrac) * WW));
+  }
+
   buildWalk(cfg) {
     this.cfg = cfg;
+    // Scenes are reused, so a hold left on by the last run (a restart during
+    // a scripted beat) would start this one with the player frozen.
+    this._holdInput = false;
+    this._inConversation = false;
     const H = 720;                       // the view
     // The world may be taller than the view. Everywhere else it is not, and
     // the camera is pinned vertically as a result — which is fine on a street
@@ -4821,13 +4878,20 @@ class WalkScene extends Phaser.Scene {
     // surface above the entrance is that balcony, and he arrived from the
     // street standing on it.
     let standY = groundY;
+    let lowest = null;          // a surface BELOW the floor line, if that is all there is
     if (!cfg.startOnFloor) (this.solidsW || []).forEach(o => {
       if (!o || !o.body) return;
       const b = o.body;
       if (startX < b.x || startX > b.x + b.width) return;
       // the highest surface at that x that is not below the floor line
       if (b.y <= groundY + 2 && b.y < standY) standY = b.y;
+      else if (b.y > groundY + 2 && (lowest === null || b.y < lowest)) lowest = b.y;
     });
+    // A stage with no floor slab under the start — the bridge, whose road is
+    // humped and LOWER at its ends than its deck line — would otherwise drop
+    // him in from the deck line: 22px of fall and a landing on every entry.
+    // If nothing at or above the floor line is under him, stand on what is.
+    if (standY === groundY && lowest !== null && !this._floorUnder(startX)) standY = lowest;
     this.player = makeWalker(this, startX, standY, charH, this.castId);
     this._buildBeats(cfg);
     this.solidsW.forEach(f => this.physics.add.collider(this.player, f));
@@ -4857,7 +4921,12 @@ class WalkScene extends Phaser.Scene {
     // input
     this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,SHIFT,M,E,ENTER,R,K');
     this.input.keyboard.on('keydown-N', () => Sfx.toggleMute());
-    if (cfg.canReset) this.input.keyboard.on('keydown-R', () => this.resetStage());
+    // Not during a scripted beat or a conversation laid over the stage: the
+    // restart would happen under it and leave it talking over a reset room.
+    if (cfg.canReset) this.input.keyboard.on('keydown-R', () => {
+      if (this._holdInput || this._inConversation) return;
+      this.resetStage();
+    });
     if (cfg.castSwitch) this._buildCastSwitch();
     const wake = () => Sfx.ensure();
     this.input.on('pointerdown', wake);
@@ -4905,8 +4974,11 @@ class WalkScene extends Phaser.Scene {
       console.log('/* Paste into scene config as: props: [ ... ] */');
     });
 
-    // ESC returns to menu
+    // ESC returns to menu — except while a conversation is running over the
+    // stage, where ESC belongs to the conversation (it skips it) and would
+    // otherwise do both at once.
     this.input.keyboard.on('keydown-ESC', () => {
+      if (this._inConversation) return;
       this.cameras.main.fadeOut(300, 0, 0, 0);
       this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('MenuScene'));
     });
@@ -5047,6 +5119,7 @@ class WalkScene extends Phaser.Scene {
       box.on('pointerout', () => this._paintCast());
       box.on('pointerdown', () => {
         if (c.id === this.castId) return;
+        if (this._holdInput || this._inConversation) return;   // same reason as R
         Sfx.ensure(); Sfx.select();
         GameState.castId = c.id;
         this.cameras.main.fadeOut(180, 0, 0, 0);
@@ -6028,7 +6101,15 @@ class BridgeScene extends WalkScene {
     //
     // It also made the ravine look 0.37 of the picture wide when it is 0.155,
     // which is what forced the brothers up to 333px to span it.
-    const GAP0 = 0.410, GAP1 = 0.565, DECK = 0.522;
+    // the new bridge.png, measured four independent ways (by eye at 12x, a
+    // per-column surface profile, registration against the old painting —
+    // it is pixel-aligned, only regraded — and brightness). All agreed:
+    //   the lips     0.410 and 0.566, the edges of the broken stone chunks
+    //                (the iron rods poking out past them are not deck)
+    //   the road     HUMPED: 0.495 at the gap, falling to ~0.53 at each end.
+    // The old DECK of 0.522 fitted the ends and put his feet 19px down in the
+    // stone facing at the gap, right where he jumps.
+    const GAP0 = 0.410, GAP1 = 0.566, DECK = 0.495;
 
     // The gap is the painting's and cannot be moved, so the brothers are sized
     // to IT rather than the other way round: a ravine wants 2.4 of a man's
@@ -6076,7 +6157,16 @@ class BridgeScene extends WalkScene {
       // sprinting single jump outreaches a walking double, so with it there is
       // no ravine width that needs two jumps and not one.
       doubleJump: true, noSprint: true,
-      gaps: [{ atFrac: GAP0, wFrac: GAP1 - GAP0 }],
+      // No flat floor. The road is humped, and one flat line cannot sit on a
+      // hump — at the gap's height he floated 22px over the road at the
+      // start, at the ends' height his feet were in the stone at the gap. So
+      // the road is a staircase of one-way ledges following the measured
+      // profile in steps of at most 3px: the physics lifts a body over a step
+      // that small (it is inside Arcade's overlap bias) where a solid step
+      // would stop him dead. Walking it reads as walking up a slope.
+      gaps: [{ atFrac: 0, wFrac: 1 }],
+      ledges: humpLedges(BRIDGE_ROAD_L, 0.000, GAP0, 3 / 720)
+        .concat(humpLedges(BRIDGE_ROAD_R, GAP1, 1.000, 3 / 720)),
       // The painting has already drawn what is down there — a black slab over
       // the top of it would hide the one thing worth seeing.
       gapShade: false,
@@ -7453,7 +7543,47 @@ const Cutting = {
 // How far the bridge is dimmed — the painting AND the fallen span, together.
 // 0.86 on the painting alone left the span 16% brighter than the deck around
 // it and both still reading as too bright.
-const BRIDGE_TONE = 0.74;
+// 0.88 on the new painting, which is regraded darker than the old: matched on
+// the roadway band so the bridge lands where the old one did at 0.74.
+const BRIDGE_TONE = 0.88;
+
+// The road's height along the bridge, as [x, y] fractions of the painting —
+// the middle of the road band, read off the new bridge.png. Humped: highest
+// at the gap on both sides.
+const BRIDGE_ROAD_L = [[0.00, 0.528], [0.06, 0.525], [0.12, 0.516], [0.27, 0.511],
+                       [0.29, 0.505], [0.31, 0.499], [0.33, 0.494], [0.41, 0.495]];
+const BRIDGE_ROAD_R = [[0.566, 0.495], [0.645, 0.495], [0.66, 0.502], [0.70, 0.510],
+                       [0.84, 0.518], [0.90, 0.529], [0.94, 0.537], [1.00, 0.540]];
+
+// A sloped surface as a run of flat one-way ledges: sample the profile, and
+// start a new ledge whenever the height has moved by `step` (picture
+// fraction). Each ledge sits at its run's HIGHEST point, so a foot is never
+// below the painted road.
+function humpLedges(pts, xa, xb, step) {
+  const yAt = x => {
+    for (let i = 1; i < pts.length; i++) {
+      if (x <= pts[i][0]) {
+        const [x0, y0] = pts[i - 1], [x1, y1] = pts[i];
+        return y0 + (y1 - y0) * ((x - x0) / Math.max(1e-6, x1 - x0));
+      }
+    }
+    return pts[pts.length - 1][1];
+  };
+  const out = [];
+  const N = 400;
+  let runX0 = xa, runTop = yAt(xa), runRef = runTop;
+  for (let i = 1; i <= N; i++) {
+    const x = xa + (xb - xa) * (i / N), y = yAt(x);
+    if (Math.abs(y - runRef) >= step || i === N) {
+      const xEnd = i === N ? xb : x;
+      out.push({ x0: runX0, x1: xEnd, y: Math.min(runTop, y), h: 420 });
+      runX0 = xEnd; runTop = y; runRef = y;
+    } else {
+      runTop = Math.min(runTop, y);
+    }
+  }
+  return out;
+}
 
 const STORAGE_FLOOR = 0.855;     // both paintings share their geometry
 // The bunker's scale, so the brothers are the same size here as where the game
@@ -7599,7 +7729,10 @@ class StorageTwoScene extends WalkScene {
     // the goo pools on the floor under them — the picture the first cinematic
     // still shows. At 0.905 it stood on a black foreground silhouette that
     // runs x 0.905-0.94, and read as pasted on.
-    this._buildCreature(0.860, 0.842);
+    // 0.845: still in the heart of the web with its feet in the goo, and far
+    // enough left that, with the camera pinned at the room's right end, it
+    // stands clear of the brothers' portraits while they talk about it.
+    this._buildCreature(0.845, 0.842);
 
     // ---- the wall switch --------------------------------------------
     // Mounted on the painted electrical box, which is the switch this room
@@ -7629,42 +7762,64 @@ class StorageTwoScene extends WalkScene {
     };
 
     this._staged = false;
+    this._leaving = false;
+    // Scenes are reused, so a flag left set by the last visit would swallow ESC.
+    this._inConversation = false;
+    // If this room goes away while its conversation is still up, take the
+    // conversation with it — its callbacks belong to this run.
+    this.events.once('shutdown', () => {
+      const d = this.scene.get('IntroDialogueScene');
+      if (d && d.sys.settings.active && d.overlay) this.scene.stop('IntroDialogueScene');
+    });
   }
 
   fx(f) { return this.bgGeom.x + f * this.bgGeom.w; }
   fy(f) { return this.bgGeom.y + f * this.bgGeom.h; }
 
+  // The thing in the corner: sit and stand up enemy.gif, PLAYED BACKWARDS.
+  // The clip was drawn standing and then sitting down; reversed, it is
+  // sitting in the goo and then getting up — which is what it does on
+  // Eterwolf's "Señor, are you alright?". Until then it holds the first
+  // (sitting) frame. The strip was cut against one box shared by all 17
+  // frames, so nothing shifts as it rises.
   _buildCreature(xf, footFrac) {
-    if (!this.textures.exists('scene_creature')) return;
-    const CREATURE_FRAMES = 8;
-    const tex = this.textures.get('scene_creature');
+    const KEY = 'scene_creaturerise', N = 17;
+    if (!this.textures.exists(KEY)) return;
+    const tex = this.textures.get(KEY);
     const src = tex.getSourceImage();
-    const fw = Math.floor(src.width / CREATURE_FRAMES), fh = src.height;
+    const fw = Math.floor(src.width / N), fh = src.height;
     const frames = [];
-    for (let i = 0; i < CREATURE_FRAMES; i++) {
-      const n = 'cr' + i;
+    for (let i = 0; i < N; i++) {
+      const n = 'rise' + i;
       if (!tex.has(n)) tex.add(n, 0, i * fw, 0, fw, fh);
-      frames.push({ key: 'scene_creature', frame: n });
+      frames.push({ key: KEY, frame: n });
     }
-    if (!this.anims.exists('creature-idle')) {
-      this.anims.create({ key: 'creature-idle', frames, frameRate: 5, repeat: -1 });
+    if (!this.anims.exists('creature-rise')) {
+      // 7 a second rather than the gif's 5: it gets up in about two and a
+      // half seconds, inside the line that sets it off
+      this.anims.create({ key: 'creature-rise', frames, frameRate: 7, repeat: 0 });
     }
-    // feet in the goo, which sits a touch behind the floor's front edge
     const x = this.fx(xf), y = this.fy(footFrac || STORAGE_FLOOR);
-    this.creature = this.add.sprite(x, y + 2, 'scene_creature', 'cr0')
-      .setOrigin(0.5, 1).setDepth(7);
-    // Hunched over its own feet in the corner: a shade under a man's height,
-    // and squashed down so it reads as crouching rather than standing.
-    this.creature.setScale((1.55 * this.pxPerM) / fh);
-    this.creature.scaleY *= 0.82;
-    this.creature.setFlipX(true);          // facing back up the room
-    this.creature.play('creature-idle');
+    // Feet sit on row 240 of the shared 246-row box (242 sitting, 238 standing).
+    this.creature = this.add.sprite(x, y + 2, KEY, 'rise0')
+      .setOrigin(0.5, 241 / fh).setDepth(7);
+    // Standing, it is about the brothers' height — the same proportion the
+    // fight uses (its alien stands 0.94 of the brother), so it is the same
+    // size when it comes at you.
+    this.creature.setScale((0.95 * HUMAN_M * this.pxPerM) / (238 - 3));
     this.creatureX = x;
-    // It is sitting in a dark room, so it is dark. Drawn at full brightness it
-    // gave the whole reveal away the moment the camera reached the corner.
-    // A torch pointed straight at it catches the pale head and nothing else;
-    // the lights coming on is when it is actually seen.
+    this._risen = false;
+    // Dark with the room until the lights come on; a torch pointed straight at
+    // it catches the pale head and nothing else.
     this.creature.setTint(0x141414);
+  }
+
+  // Gets up. Called from the conversation, on Eterwolf's line.
+  _creatureRise() {
+    if (!this.creature || this._risen) return;
+    this._risen = true;
+    this.creature.play('creature-rise');
+    Sfx.ensure(); Sfx.burst(0.5, 0.18, 180, 0.7);     // a wet, low shift of weight
   }
 
   // The lever art covers the painted box: centred on it, and sized off the
@@ -7720,9 +7875,11 @@ class StorageTwoScene extends WalkScene {
   // Lights on, and then the room is allowed to land before anything moves.
   _stageTheThing() {
     this._staged = true;
-    // Controls off while the room lands. `_hold` is the bridge's, not
-    // WalkScene's, so this does the same thing directly: stop him, stand him
-    // still, and let update() keep him there.
+    // From the first moment, not from when the panel appears: ESC in the gap
+    // before it would otherwise leave for the menu with the launch still
+    // pending, and the panel would come up over the menu.
+    this._inConversation = true;
+    // Controls off while it plays out: he stands still and watches.
     this._holdInput = true;
     this.player.setVelocity(0, 0);
     const hero = this.player._hero;
@@ -7730,32 +7887,49 @@ class StorageTwoScene extends WalkScene {
       playAction(this.player, hero, 'idle', this.player._facing);
       this.player._curAnim = heroAnim(hero, 'idle', this.player._facing);
     }
+    // Swing the camera round so the thing is in the middle of the frame —
+    // between the two figures the conversation brings up — and let the lights
+    // land before anyone speaks.
     const look = Math.max(0, Math.min(this.creatureX - 640, this.worldW - 1280));
     this.cameras.main.stopFollow();
     this.tweens.add({ targets: this.cameras.main, scrollX: look, duration: 900,
                       ease: 'Sine.easeInOut' });
-    this.time.delayedCall(1500, () => {
-      // it notices
-      if (this.creature) this.creature.setFlipX(false);
-      this.cameras.main.shake(420, 0.004);
-    });
-    this.time.delayedCall(2300, () => {
-      // The panel needs a picture behind it, and the room's own painting has
-      // no creature in it. So the frame that is actually on screen — lit room,
-      // the brothers, the thing in the corner — is taken as the backdrop, and
-      // the conversation happens over the moment rather than over wallpaper.
-      const go = key => this.scene.start('IntroDialogueScene', {
+    // The conversation runs OVER the live room, with its bar at the top of the
+    // screen so the thing on the floor stays in view below it. It gets up on
+    // the line that is cued to it; when the last line is done the room shakes
+    // and the cinematic takes over.
+    this.time.delayedCall(1900, () => {
+      this.scene.launch('IntroDialogueScene', {
         lines: STORAGE_MEET_LINES,
-        sleeper: null, keepMusic: true, hold: 500, fadeMs: 420,
-        bgKey: key, target: 'EnemyCinematicScene'
+        sleeper: null, keepMusic: true, hold: 300, fadeMs: 380,
+        overlay: true, barTop: true,
+        onLine: (i, line) => { if (line.cue === 'rise') this._creatureRise(); },
+        onDone: () => {
+          // The guard stays up until the room is gone — ESC during the shake
+          // would otherwise race the cinematic to the next scene.
+          if (this._leaving) return;
+          this._leaving = true;
+          const go = () => {
+            this.cameras.main.shake(700, 0.007);
+            this.time.delayedCall(800, () => {
+              this.cameras.main.fadeOut(260, 0, 0, 0);
+              this.cameras.main.once('camerafadeoutcomplete',
+                () => this.scene.start('EnemyCinematicScene'));
+            });
+          };
+          // It gets all the way up before the cut: skipped before its line,
+          // it rises now; mid-rise, the cut waits for it to finish.
+          if (!this._risen) this._creatureRise();
+          const c = this.creature;
+          if (c && c.anims.isPlaying) {
+            let went = false;
+            const once = () => { if (!went) { went = true; go(); } };
+            c.once('animationcomplete', once);
+            this.time.delayedCall(2800, once);       // never hang on a missed event
+          } else go();
+        }
       });
-      try {
-        this.game.renderer.snapshot(img => {
-          if (this.textures.exists('snap_meet')) this.textures.remove('snap_meet');
-          this.textures.addImage('snap_meet', img);
-          go('snap_meet');
-        });
-      } catch (e) { go('scene_storage2lit'); }
+      this.scene.bringToTop('IntroDialogueScene');
     });
   }
 
@@ -7856,7 +8030,7 @@ const STORAGE_DARK_LINES = [
 const STORAGE_MEET_LINES = [
   { who: 'ETERWOLF', text: "What is that." },
   { who: 'WOLFFEL',  text: "...is that a person?" },
-  { who: 'ETERWOLF', text: "Señor? Señor, are you alright?" },
+  { who: 'ETERWOLF', text: "Señor? Señor, are you alright?", cue: 'rise' },
   { who: 'ETERWOLF', text: "..." },
   { who: 'WOLFFEL',  text: "Mk. He looks hungry." }
 ];
@@ -8351,6 +8525,21 @@ if (DEV_BUILD) {
 // ------------------------------------------------------------------ //
 //  BOOT THE GAME                                                      //
 // ------------------------------------------------------------------ //
+// Phaser 3.87 only REPLACES a scene's settings.data when it is started with
+// data that is truthy (Systems.start: `t && (i.data = t)`). Start a scene with
+// nothing and it keeps whatever it was last started with — and every scene is
+// built once and reused. So a later, data-less start of the dialogue panel
+// replayed the storage room's overlay payload and froze on its callbacks, and
+// a stage entered a second time could inherit `resumed: true` from an old
+// fall. One wrapper, so no call site has to remember: no data means no data.
+if (Phaser.Scenes && Phaser.Scenes.Systems && !Phaser.Scenes.Systems.prototype.__freshData) {
+  const _sysStart = Phaser.Scenes.Systems.prototype.start;
+  Phaser.Scenes.Systems.prototype.start = function (data) {
+    return _sysStart.call(this, data || {});
+  };
+  Phaser.Scenes.Systems.prototype.__freshData = true;
+}
+
 window.__game = new Phaser.Game({
   type: Phaser.AUTO,
   // The single-file build has no container and Phaser appends to the body,
