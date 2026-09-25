@@ -5210,6 +5210,7 @@ class WalkScene extends Phaser.Scene {
     this.charH = charH;
     this._buildBeats(cfg);
     this._initCombat();
+    this._inspects = null;         // reused scene: last visit's things are gone
     this.solidsW.forEach(f => this.physics.add.collider(this.player, f));
     // The sword, in every walking stage — not only the ones with something to
     // cut. It lived in the storage rooms alone, so opening the chest gave you
@@ -5733,6 +5734,7 @@ class WalkScene extends Phaser.Scene {
     this._runBeats();
     this._updateGun(now);
     this._updateCombat(now, delta);
+    this._updateInspects();
 
     if (this.grain && this.game.loop.frame % 3 === 0) {
       this._gf = (this._gf + 1) % 3;
@@ -6509,6 +6511,169 @@ const WalkCombat = {
 Object.assign(WalkScene.prototype, WalkCombat);
 
 // ================================================================== //
+//  THINGS TO LOOK AT                                                  //
+//                                                                     //
+//  A letter in the road, a portrait on a wall. Nothing is drawn big  //
+//  in the world — a small glint says "something here", and E brings //
+//  it up full-screen to read or look at. Nothing here is ever needed //
+//  to go on; it is there for whoever stops to look.                   //
+// ================================================================== //
+const Inspect = {
+  // o: { x, y (world), label ('E — READ'), reach (px), onUse(), once (seen id),
+  //      glint: true }
+  addInspect(o) {
+    if (!this._inspects) {
+      this._inspects = [];
+      this.input.keyboard.on('keydown-E', () => {
+        if (this._inConversation || this._holdInput || this._transitioning || this._dead) return;
+        const it = this._inspects.find(i => i.live && this._nearInspect(i));
+        if (it) it.onUse.call(this, it);
+      });
+    }
+    const it = Object.assign({ reach: 0.55 * this.charH, live: true }, o);
+    if (o.glint !== false) {
+      // a small light that catches now and then — a flash, not a marker
+      it.spark = this.add.star(o.x, o.y, 4, 2, 9, 0xfff2cc, 1).setDepth(9)
+        .setBlendMode(Phaser.BlendModes.ADD).setAlpha(0);
+      it.dot = this.add.circle(o.x, o.y, 2.5, 0xfff2cc, 0.9).setDepth(9)
+        .setBlendMode(Phaser.BlendModes.ADD);
+      this.tweens.add({ targets: it.spark, alpha: 1, scale: 1.6, angle: 45, duration: 240,
+                        yoyo: true, repeat: -1, repeatDelay: 1500 });
+      this.tweens.add({ targets: it.dot, alpha: 0.35, duration: 700, yoyo: true, repeat: -1 });
+    }
+    it.lbl = this.add.text(o.x, (o.labelY != null ? o.labelY : o.y) - 22, o.label || 'E  —  LOOK', {
+      fontFamily: 'Courier New, monospace', fontSize: '15px', color: '#d9c7a8',
+      stroke: '#0d0a08', strokeThickness: 4
+    }).setOrigin(0.5, 1).setDepth(30).setAlpha(0);
+    this._inspects.push(it);
+    return it;
+  },
+
+  _nearInspect(it) {
+    const p = this.player;
+    return !!p && Math.abs(p.x - it.x) < it.reach &&
+           Math.abs(p.body.bottom - (it.floorY != null ? it.floorY : it.y)) < 1.1 * this.charH;
+  },
+
+  _updateInspects() {
+    if (!this._inspects) return;
+    const talking = this._sayText && this._sayText.alpha > 0.05;
+    this._inspects.forEach(it => {
+      const show = it.live && !this._inConversation && !talking && this._nearInspect(it);
+      it.lbl.setAlpha(show ? 1 : 0);
+    });
+  },
+
+  _retireInspect(it) {
+    it.live = false;
+    [it.spark, it.dot].forEach(o => { if (o) { this.tweens.killTweensOf(o); o.destroy(); } });
+    it.spark = it.dot = null;
+    it.lbl.setAlpha(0);
+  },
+
+  // Full screen: a picture (the letter's paper, a portrait), optional
+  // handwriting laid over it, an optional line spoken under it. Any key or a
+  // click puts it away.
+  showDocument(o) {
+    this._inConversation = true;
+    this._holdInput = true;
+    const p = this.player;
+    if (p) {
+      p.setVelocity(0, 0);
+      if (p._hero) { playAction(p, p._hero, 'idle', p._facing); p._curAnim = heroAnim(p._hero, 'idle', p._facing); }
+    }
+    const grp = [];
+    const scrim = this.add.rectangle(640, 360, 1280, 720, 0x050403, 0.78).setScrollFactor(0).setDepth(95);
+    grp.push(scrim);
+    let box = { x: o.cx || 640, y: 350, w: o.maxW || 560, h: o.maxH || 600 };
+    if (o.key && this.textures.exists(o.key)) {
+      const im = this.add.image(o.cx || 640, o.cy || 350, o.key).setScrollFactor(0).setDepth(96);
+      const art = paintedBox(this, o.key);
+      const pw = art ? art.pw : im.width, ph = art ? art.ph : im.height;
+      const sc = Math.min((o.maxW || 560) / pw, (o.maxH || 600) / ph);
+      im.setScale(sc);
+      if (art) im.setOrigin((art.x0 + pw / 2) / art.w, (art.y0 + ph / 2) / art.h);
+      box = { x: o.cx || 640, y: o.cy || 350, w: pw * sc, h: ph * sc };
+      grp.push(im);
+    } else if (o.text) {
+      // no paper art yet: a plain sheet
+      grp.push(this.add.rectangle(640, 350, 520, 600, 0xe7dcc2, 1).setScrollFactor(0).setDepth(96)
+        .setStrokeStyle(2, 0x6b5a40));
+      box = { x: 640, y: 350, w: 520, h: 600 };
+    }
+    if (o.frame) {
+      // a thin dark frame round a picture
+      grp.push(this.add.rectangle(box.x, box.y, box.w + 22, box.h + 22, 0x1c140d, 1)
+        .setStrokeStyle(3, 0x5a4128).setScrollFactor(0).setDepth(95.5));
+    }
+    if (o.text && o.side) {
+      // The paper is somebody's real handwriting, too faded to read; what it
+      // says is written out beside it, in the same hand.
+      const t = this.add.text(o.side.x, o.side.y, o.text, {
+        fontFamily: HAND_FONT, fontSize: (o.fontSize || 30) + 'px', color: '#efe3c8',
+        wordWrap: { width: o.side.w }, lineSpacing: 6, align: 'left'
+      }).setOrigin(0, 0).setScrollFactor(0).setDepth(97).setShadow(0, 2, '#000', 4, false, true);
+      grp.push(t);
+      if (o.sign) grp.push(this.add.text(o.side.x + o.side.w, t.y + t.height + 20, o.sign, {
+        fontFamily: HAND_FONT, fontSize: (o.fontSize || 30) + 6 + 'px', color: '#efe3c8'
+      }).setOrigin(1, 0).setScrollFactor(0).setDepth(97).setShadow(0, 2, '#000', 4, false, true));
+    } else if (o.text) {
+      const t = this.add.text(box.x, box.y - box.h * 0.5 + box.h * (o.textTop || 0.13), o.text, {
+        fontFamily: HAND_FONT, fontSize: (o.fontSize || 27) + 'px', color: '#2b1d12',
+        wordWrap: { width: box.w * (o.textW || 0.74) }, lineSpacing: 4, align: 'left'
+      }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(97);
+      grp.push(t);
+      if (o.sign) {
+        grp.push(this.add.text(box.x + box.w * 0.3, t.y + t.height + 22, o.sign, {
+          fontFamily: HAND_FONT, fontSize: (o.fontSize || 27) + 4 + 'px', color: '#2b1d12'
+        }).setOrigin(1, 0).setScrollFactor(0).setDepth(97));
+      }
+    }
+    if (o.caption) {
+      grp.push(this.add.text(640, 690, o.caption, {
+        fontFamily: F_TXT, fontSize: '20px', color: '#efe6d6', align: 'center'
+      }).setOrigin(0.5, 1).setScrollFactor(0).setDepth(97).setShadow(0, 2, '#000', 5, false, true));
+      if (o.speaker) grp.push(this.add.text(640, 690 - 30, o.speaker, {
+        fontFamily: F_UI, fontSize: '11px', fontStyle: '700', color: '#f5c169'
+      }).setOrigin(0.5, 1).setScrollFactor(0).setDepth(97));
+    }
+    grp.push(this.add.text(1250, 24, 'E  /  SPACE  —  CLOSE', {
+      fontFamily: F_UI, fontSize: '11px', fontStyle: '700', color: '#a08d72'
+    }).setOrigin(1, 0).setScrollFactor(0).setDepth(97));
+    grp.forEach(g => g.setAlpha(0));
+    this.tweens.add({ targets: grp, alpha: (t, k, v, i) => (grp[i] === scrim ? 0.78 : 1), duration: 260 });
+    Sfx.ensure(); (o.sound || (() => Sfx.burst(0.08, 0.2, 2200, 1.2)))();
+    let closing = false;
+    const close = () => {
+      if (closing) return;
+      closing = true;
+      this.input.keyboard.off('keydown', onKey);
+      this.input.off('pointerdown', close);
+      this.tweens.add({ targets: grp, alpha: 0, duration: 200, onComplete: () => {
+        grp.forEach(g => g.destroy());
+        this._inConversation = false;
+        this._holdInput = false;
+        if (o.onClose) o.onClose.call(this);
+      } });
+    };
+    const onKey = e => { if (['E', ' ', 'Enter', 'Escape', 'e', 'Spacebar'].includes(e.key)) close(); };
+    // armed a beat later, so the E that opened it does not also close it
+    this.time.delayedCall(300, () => {
+      if (closing) return;
+      this.input.keyboard.on('keydown', onKey);
+      this.input.on('pointerdown', close);
+    });
+  }
+};
+Object.assign(WalkScene.prototype, Inspect);
+
+// Handwriting for letters: Caveat, embedded in the page by the build. A canvas
+// only draws with a face the document has actually loaded, so it is asked for
+// up front; the system's script faces stand in if it is somehow missing.
+const HAND_FONT = "Caveat, 'Segoe Script', 'Bradley Hand', cursive";
+try { if (document.fonts) document.fonts.load("31px Caveat"); } catch (e) { /* no font API */ }
+
+// ================================================================== //
 //  SCENE 1 — THE BUNKER (walk right, climb the stairs to the city)   //
 // ================================================================== //
 class BunkerScene extends WalkScene {
@@ -6923,8 +7088,36 @@ class ExitScene extends WalkScene {
         g.fillStyle(0x15100c, 1); g.fillRect(0, 576, WW, 144);
       }
     });
+
+    // A page from somebody's diary, lying in the road a little way out of
+    // the bunker. Only a glint shows; E picks it up and it fills the screen.
+    const lx = this.worldW * LETTER_X, ly = this.groundY - 6;
+    this.addInspect({
+      x: lx, y: ly, floorY: this.groundY, labelY: this.groundY - this.charH - 8, label: 'E  —  READ',
+      onUse(it) {
+        this._retireInspect(it);
+        once('letter-lucia');
+        this.showDocument({
+          key: 'scene_letter', text: LETTER_TEXT, sign: LETTER_SIGN,
+          cx: 350, cy: 360, maxW: 500, maxH: 560, fontSize: 31,
+          side: { x: 660, y: 190, w: 500 },
+          sound: () => { Sfx.burst(0.09, 0.26, 2600, 0.9); Sfx.burst(0.06, 0.16, 1500, 1.2); },
+          onClose() { this._say([['ETERWOLF', 'Hell. Yeah. Sounds about right.']]); }
+        });
+      }
+    });
   }
 }
+
+// Where it lies (a fraction of the road) and what it says. Short, like a page
+// torn out of a diary — the man is somebody she heard, not somebody we meet.
+const LETTER_X = 0.36;
+const LETTER_TEXT =
+  "The man on the radio stopped reading the news tonight. He just kept " +
+  "saying it — this is hell now. We are in hell.\n\n" +
+  "The sky has burned for three nights. I don't care anymore what happens " +
+  "to me. I only pray my son made it out alive.";
+const LETTER_SIGN = "— Rosa";
 
 // ================================================================== //
 //  TUTORIAL 2 — THE BURNT STREET (learn to jump)                     //
@@ -8550,6 +8743,9 @@ class StoreScene extends WalkScene {
     this._buildLever({ x0: 0.2085, x1: 0.2265, y0: 0.248, y1: 0.335 });
     // The window, glazed. The horde will break it; nothing does yet.
     this._buildGlass({ x0: 0.408, x1: 0.453, y0: 0.195, y1: 0.372 });
+    // The shop owner's portrait, small, on the lamp-lit wall just left of the
+    // chest (the lamp hangs at 0.788; the chest stands at 0.866).
+    this._buildPortrait(0.800, 0.225, 0.062);
 
     // Phaser builds each scene ONCE and reuses it, so anything set on `this`
     // survives into the next visit unless create() puts it back. Two things
@@ -8765,6 +8961,34 @@ class StoreScene extends WalkScene {
       fontFamily: 'Courier New, monospace', fontSize: '15px', color: '#d9c7a8',
       stroke: '#0d0a08', strokeThickness: 4
     }).setOrigin(0.5, 1).setDepth(8).setAlpha(0);
+  }
+
+  // A framed photo on the wall: small in the room, full-screen when looked at.
+  // xf/yf are its centre, hf its height, as fractions of the painting.
+  _buildPortrait(xf, yf, hf) {
+    const wallKey = this.textures.exists('scene_shopownerblur') ? 'scene_shopownerblur' : 'scene_shopowner';
+    if (!this.textures.exists(wallKey)) return;
+    const x = this.fx(xf), y = this.fy(yf), h = hf * this.bgGeom.h;
+    // on the wall it is the blurred one — too far off and too dark to make out;
+    // looked at, it is the portrait itself
+    const im = this.add.image(x, y, wallKey).setDepth(-18);
+    const art = paintedBox(this, wallKey);
+    const ph = art ? art.ph : im.height, pw = art ? art.pw : im.width;
+    if (art) im.setOrigin((art.x0 + pw / 2) / art.w, (art.y0 + ph / 2) / art.h);
+    im.setScale(h / ph);
+    // it hangs in a room lit by one lamp: a little darker than looking at it
+    im.setTint(0xc8b498);
+    this.addInspect({
+      x, y: y + h / 2 + 4, floorY: this.fy(0.303), labelY: y - h / 2, label: 'E  —  LOOK',
+      reach: 0.5 * this.charH,
+      onUse() {
+        this.showDocument({
+          key: 'scene_shopowner', maxW: 440, maxH: 580, cy: 330,
+          speaker: 'ETERWOLF', caption: 'Looks like a portrait of the shop owner.',
+          onClose() { once('saw-shopowner'); }
+        });
+      }
+    });
   }
 
   // Glass in the window: a faint cool pane, and a sheen that drifts across it
@@ -9431,6 +9655,7 @@ const STORAGE_FLOOR = 0.855;     // both paintings share their geometry
 // The goo in storage two, where the thing sits and gets up and where it
 // stands when the lights come back on; and where he is standing when they do.
 const STORAGE_GOO_X = 0.845;
+const OWNER_CLOTHES_X = 0.79;     // his clothes, on the floor just left of the goo
 const STORAGE_FIGHT_X = 0.40;
 // The bunker's scale, so the brothers are the same size here as where the game
 // starts. Everything else in these rooms — the cords, the switch, the creature
@@ -9585,6 +9810,8 @@ class StorageTwoScene extends WalkScene {
     // y 0.444-0.548, with conduit running from it straight up to the tube
     // lamp hanging over it. Throw it and the light it is wired to comes on.
     this._buildSwitch({ x0: 0.352, x1: 0.378, y0: 0.444, y1: 0.548 });
+    // What he was wearing, left in a heap by the goo: it was a man before.
+    this._buildClothes(OWNER_CLOTHES_X, lit);
 
     if (lit) {
       // Lights on, switch thrown.
@@ -9732,6 +9959,33 @@ class StorageTwoScene extends WalkScene {
 
   fx(f) { return this.bgGeom.x + f * this.bgGeom.w; }
   fy(f) { return this.bgGeom.y + f * this.bgGeom.h; }
+
+  // The shop owner's clothes, dropped in a heap on the floor beside the goo.
+  // Dark with the room until the lights come on; after the fight you can
+  // look at them.
+  _buildClothes(xf, lit) {
+    this.clothes = null;
+    if (!this.textures.exists('scene_ownerclothes')) return;
+    const x = this.fx(xf), y = this.groundY + 2;
+    const im = this.add.image(x, y, 'scene_ownerclothes').setDepth(6.5);
+    const art = paintedBox(this, 'scene_ownerclothes');
+    const pw = art ? art.pw : im.width;
+    if (art) im.setOrigin((art.x0 + pw / 2) / art.w, (art.y1 + 1) / art.h);
+    else im.setOrigin(0.5, 1);
+    im.setScale((1.1 * this.pxPerM) / pw);           // his scarf, dropped, about 1.1m across
+    if (!lit) im.setTint(0x141414);
+    this.clothes = im;
+    if (this._mode === 'after') {
+      this.addInspect({
+        x, y: y - im.displayHeight * 0.5, floorY: this.groundY, label: 'E  —  LOOK',
+        onUse(it) {
+          this._retireInspect(it);
+          this._say([['ETERWOLF', 'His scarf. Same one as in the picture.'],
+                     ['WOLFFEL', 'That thing was the shop owner.']]);
+        }
+      });
+    }
+  }
 
   // The thing in the corner: sit and stand up enemy.gif, PLAYED BACKWARDS.
   // The clip was drawn standing and then sitting down; reversed, it is
@@ -9931,7 +10185,9 @@ class StorageTwoScene extends WalkScene {
       const dx = this.creature.x - this.player.x;
       const lit = this.torchOn && dx * face > 0 && Math.abs(dx) < 520;
       this.creature.setTint(lit ? 0x4a4440 : 0x141414);
+      if (this.clothes) this.clothes.setTint(lit ? 0x4a4440 : 0x141414);
     }
+    if (this.clothes && this.roomLit && this.clothes.tintTopLeft !== 0xffffff) this.clothes.clearTint();
   }
 }
 

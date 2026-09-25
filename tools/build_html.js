@@ -137,6 +137,12 @@ const SCENE_SRC = {
   twingocar:    ['public/assets/twingo_car.png'],
   twingoboom:   ['public/assets/twingo_boom.png'],
   twingowreck:  ['public/assets/twingo_wreck.png'],
+  // Things to look at: the diary page in the village road, the shop owner's
+  // portrait by the chest, and his clothes by the goo in storage two.
+  letter:       ['public/assets/letter.png'],
+  shopowner:    ['public/assets/shop_owner.png'],
+  shopownerblur: ['public/assets/shop_owner_blur.png'],
+  ownerclothes: ['public/assets/owner_clothes.png'],
   cine1:        ['public/assets/enemy_cine_1.jpg'],
   cine2:        ['public/assets/enemy_cine_2.jpg'],
   deadplant: ['public/assets/dead_plant.png'],
@@ -285,6 +291,13 @@ if (fs.existsSync(FONT)) {
   console.log(`font "AtomUI" <- ${path.relative(ROOT, FONT)} (${Math.round(b64.length / 1024)}KB inline)`);
 } else {
   console.log('font "AtomUI" MISSING — UI falls back to a system sans');
+}
+// The handwriting on letters: Caveat (OFL), shipped with the game rather than
+// fetched, so a letter reads the same offline and in the PC build.
+const HAND = p('public/assets/fonts/caveat-latin-500.woff2');
+if (fs.existsSync(HAND)) {
+  fontFace += `@font-face{font-family:'Caveat';font-style:normal;font-weight:400 700;` +
+              `font-display:block;src:url(data:font/woff2;base64,${fs.readFileSync(HAND).toString('base64')}) format('woff2');}`;
 }
 
 // ---------- assemble ----------

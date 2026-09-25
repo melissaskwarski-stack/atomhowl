@@ -102,6 +102,13 @@ if (fs.existsSync(FONT)) {
   fontFace = `@font-face{font-family:'AtomUI';font-style:normal;font-weight:400 900;` +
              `font-display:block;src:url(data:font/woff2;base64,${b64}) format('woff2');}`;
 }
+// The handwriting on letters: Caveat (OFL), shipped with the game rather than
+// fetched, so a letter reads the same offline and in the PC build.
+const HAND = p('public/assets/fonts/caveat-latin-500.woff2');
+if (fs.existsSync(HAND)) {
+  fontFace += `@font-face{font-family:'Caveat';font-style:normal;font-weight:400 700;` +
+              `font-display:block;src:url(data:font/woff2;base64,${fs.readFileSync(HAND).toString('base64')}) format('woff2');}`;
+}
 
 for (const [src, name] of SCRIPTS) {
   total += copy(src, name);
