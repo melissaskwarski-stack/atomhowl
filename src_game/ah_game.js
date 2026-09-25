@@ -152,6 +152,145 @@ const Sfx = {
   sizzle() { this.burst(0.2, 0.28, 3600, 0.6); this.blip(140, 0.12, 'sawtooth', 0.14, 80); },
   // A heart coming back.
   mend()    { this.blip(660, 0.08, 'triangle', 0.16, 880); },
+
+  // ---- sounds that keep going ------------------------------------------
+  // A looping noise bed with a handle: setVolume(v, ms) and stop(ms). The
+  // radio's static and a burning car's crackle are both this — filtered
+  // noise, a slow waver, and random crackle pops riding on top at a rate the
+  // caller picks. It goes through master, so N (mute) silences it too.
+  // Whoever starts one stops it; scenes stop theirs on shutdown.
+  loop(o) {
+    this.ensure();
+    if (!this.ctx) return null;
+    const c = this.ctx, sr = c.sampleRate, len = Math.floor(sr * 2);
+    const buf = c.createBuffer(1, len, sr), d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    const src = c.createBufferSource(); src.buffer = buf; src.loop = true;
+    const hp = c.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = o.hp || 300;
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = o.lp || 1600;
+    const wav = c.createGain(); wav.gain.value = 1;
+    const g = c.createGain(); g.gain.value = 0.0001;
+    src.connect(hp); hp.connect(lp); lp.connect(wav); wav.connect(g); g.connect(this.master);
+    let lfo = null;
+    if (o.waver) {              // the level drifts, the way a weak signal does
+      lfo = c.createOscillator(); lfo.frequency.value = o.waver;
+      const lg = c.createGain(); lg.gain.value = 0.35;
+      lfo.connect(lg); lg.connect(wav.gain); lfo.start();
+    }
+    src.start();
+    let vol = 0, dead = false, timer = null;
+    const h = {
+      setVolume(v, ms) {
+        if (dead) return;
+        vol = v;
+        const t = c.currentTime;
+        g.gain.cancelScheduledValues(t);
+        g.gain.setValueAtTime(Math.max(0.0001, g.gain.value), t);
+        g.gain.linearRampToValueAtTime(Math.max(0.0001, v), t + Math.max(0.02, (ms || 0) / 1000));
+      },
+      get volume() { return vol; },
+      stop(ms) {
+        if (dead) return;
+        h.setVolume(0.0001, ms || 200);
+        dead = true;
+        clearTimeout(timer);
+        setTimeout(() => {
+          try { src.stop(); if (lfo) lfo.stop(); } catch (e) { /* already stopped */ }
+          try { g.disconnect(); } catch (e) { /* gone */ }
+        }, (ms || 200) + 80);
+      }
+    };
+    if (o.crackle) {
+      const tick = () => {
+        if (dead) return;
+        if (vol > 0.005) this.burst(0.008 + Math.random() * 0.022, Math.min(0.9, vol * (1.2 + Math.random() * 1.6)),
+                                    (o.crackleFreq || 3500) * (0.7 + Math.random() * 0.6), 3);
+        timer = setTimeout(tick, 30 + Math.random() * o.crackle);
+      };
+      tick();
+    }
+    h.setVolume(o.vol || 0, o.fadeIn || 300);
+    return h;
+  },
+
+  // A voice through a bad radio: not words, just the rhythm of speech —
+  // syllable-length bursts through a narrow band where a voice sits, with the
+  // pitch wandering a little. Runs for `ms`, or until stopped.
+  radioChatter(ms) {
+    this.ensure();
+    if (!this.ctx) return { stop() {} };
+    let alive = true, t = null;
+    const end = Date.now() + ms;
+    const syl = () => {
+      if (!alive || Date.now() > end) return;
+      const f = 650 + Math.random() * 700;
+      this.burst(0.05 + Math.random() * 0.09, 0.22 + Math.random() * 0.18, f, 5);
+      if (Math.random() < 0.35) this.blip(170 + Math.random() * 90, 0.07, 'sawtooth', 0.035, 150);
+      // words, then a gap between them
+      t = setTimeout(syl, Math.random() < 0.18 ? 170 + Math.random() * 150 : 70 + Math.random() * 70);
+    };
+    syl();
+    return { stop() { alive = false; clearTimeout(t); } };
+  },
+
+  // Somebody eating something they have been thinking about for a while.
+  munch() {
+    [0, 150, 310, 470].forEach((ms, i) => setTimeout(() => {
+      this.burst(0.05, 0.28 - i * 0.03, 900 + Math.random() * 500, 1.4);
+      this.blip(120, 0.04, 'sine', 0.06, 90);
+    }, ms));
+  },
+
+  // A tank letting go: the crack, a chest-deep thump, and a long rumbling
+  // tail with metal coming down in it.
+  explosion() {
+    this.ensure();
+    if (!this.ctx || this.muted) return;
+    const c = this.ctx, t = c.currentTime, sr = c.sampleRate;
+    const len = Math.floor(sr * 2.2);
+    const buf = c.createBuffer(1, len, sr), d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    // the body and its tail, low-passed, falling slowly
+    const src = c.createBufferSource(); src.buffer = buf;
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(2400, t);
+    lp.frequency.exponentialRampToValueAtTime(260, t + 1.8);
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(1.3, t + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.25, t + 0.5);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 2.1);
+    src.connect(lp); lp.connect(g); g.connect(this.master); src.start(t);
+    // the thump
+    const o = c.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(90, t); o.frequency.exponentialRampToValueAtTime(26, t + 0.7);
+    const og = c.createGain();
+    og.gain.setValueAtTime(0.0001, t); og.gain.exponentialRampToValueAtTime(1.4, t + 0.01);
+    og.gain.exponentialRampToValueAtTime(0.001, t + 0.8);
+    o.connect(og); og.connect(this.master); o.start(t); o.stop(t + 0.85);
+    // the crack
+    this.burst(0.05, 0.9, 3200, 0.7);
+    // metal and glass landing
+    [380, 520, 700, 860, 1040, 1300].forEach(ms => setTimeout(() =>
+      this.burst(0.03 + Math.random() * 0.04, 0.12 + Math.random() * 0.12, 2400 + Math.random() * 2600, 4), ms));
+  },
+
+  // Fuel boiling in a tank: a hiss that climbs.
+  hissRise(ms) {
+    this.ensure();
+    if (!this.ctx || this.muted) return;
+    const c = this.ctx, t = c.currentTime, dur = ms / 1000, sr = c.sampleRate;
+    const len = Math.floor(sr * dur);
+    const buf = c.createBuffer(1, len, sr), d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    const src = c.createBufferSource(); src.buffer = buf;
+    const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 2.5;
+    bp.frequency.setValueAtTime(700, t); bp.frequency.exponentialRampToValueAtTime(4200, t + dur);
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.02, t); g.gain.exponentialRampToValueAtTime(0.35, t + dur);
+    src.connect(bp); bp.connect(g); g.connect(this.master); src.start(t);
+    this.blip(260, dur, 'sine', 0.05, 1300);
+  },
   hit()     { this.blip(170, 0.06, 'square', 0.35, 90); },
   squelch() { this.noise(0.16, 0.5, 650); this.blip(95, 0.13, 'sawtooth', 0.3, 50); },
   sword()   { this.noise(0.11, 0.4, 1800); this.blip(520, 0.09, 'sine', 0.2, 1200); },
@@ -4705,7 +4844,7 @@ class IntroDialogueScene extends Phaser.Scene {
         this._body.setText(line.text.slice(0, ++i));
         // The keyclick is the stand-in for a voice; with a real one it is just
         // noise over the top of it.
-        if (!spoken && i % 3 === 0) Sfx.type();
+        if (!spoken && !line.silent && i % 3 === 0) Sfx.type();
         if (i >= line.text.length) { this._typing = false; this._more.setAlpha(0.8); }
       }
     });
@@ -5256,11 +5395,7 @@ class WalkScene extends Phaser.Scene {
     }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(40);
     // The hint bar does not offer a jump the stage has not given you yet.
     // Nor a sword or a gun before they are yours.
-    const arms = (armedWithBlade() ? '   ·   F SWORD' : '') +
-                 (GameState.hasPistol ? '   ·   LMB / K SHOOT' : '');
-    this.add.text(640, 692, cfg.noJump
-      ? 'A/D WALK   ·   SHIFT RUN   ·   E ENTER' + arms + '   ·   N MUTE   ·   M EDIT'
-      : 'A/D WALK   ·   SHIFT RUN   ·   W JUMP   ·   E ENTER' + arms + '   ·   N MUTE   ·   M EDIT',
+    this._hintBar = this.add.text(640, 692, this._hintText(),
       { fontFamily: F_UI, fontSize: '10px', fontStyle: '500', color: '#8a6f4a' })
       .setOrigin(0.5, 1).setScrollFactor(0).setDepth(40).setAlpha(0.85);
 
@@ -5274,6 +5409,18 @@ class WalkScene extends Phaser.Scene {
     // Every stage is a checkpoint: CONTINUE puts you back at its start.
     saveCheckpoint(this.scene.key, this.sys.settings.data);
   }
+
+  // The controls the stage actually has right now. Rebuilt when one is
+  // unlocked mid-stage (the burnt street gives you the jump after the blast).
+  _hintText() {
+    const cfg = this.cfg || {};
+    const arms = (armedWithBlade() ? '   ·   F SWORD' : '') +
+                 (GameState.hasPistol ? '   ·   LMB / K SHOOT' : '');
+    return 'A/D WALK   ·   SHIFT RUN' + (cfg.noJump ? '' : '   ·   W JUMP') +
+           '   ·   E ENTER' + arms + '   ·   N MUTE   ·   M EDIT';
+  }
+
+  _refreshHint() { if (this._hintBar) this._hintBar.setText(this._hintText()); }
 
   // Put the stage back the way it started, keeping whoever you are playing.
   resetStage() {
@@ -5500,6 +5647,7 @@ class WalkScene extends Phaser.Scene {
       // while he has no weapon, so once he has one the beat would otherwise
       // tell him to collect something that is not in the room.
       if (b.needs === 'pickup' && !this.pickup) { b.fired = true; continue; }
+      if (b.needs === 'radio' && GameState.seen['bunker-radio']) { b.fired = true; continue; }
       b.fired = true;
       if (b.say) this._say(b.say);
       if (b.tip) this._showTip(b.tip);
@@ -5575,7 +5723,9 @@ class WalkScene extends Phaser.Scene {
       this._updateCombat(now, delta);
       return;
     }
-    if (this._holdInput) this.player.setVelocityX(0);
+    // A set piece can throw him while it holds the controls (the Twingo does);
+    // the throw plays out rather than being stopped dead on the next frame.
+    if (this._holdInput) { if (now >= (this.player._knockUntil || 0)) this.player.setVelocityX(0); }
     // A hit throws him. driveWalker sets his speed every frame, which would
     // cancel the knock on the very next one — so for its length, nothing does.
     else if (now < (this.player._knockUntil || 0)) { /* the hit carries him */ }
@@ -5638,7 +5788,10 @@ class WalkScene extends Phaser.Scene {
         if (Math.abs(vx) > 20 && Math.sign(vx) === Math.sign(ex.x - this.player.x)) ex._armed = true;
       }
       // a combat exit that needs the weapon stays locked until it's picked up
-      const locked = ex.needWeapon && !GameState.hasWeapon;
+      // Or by the story: a door that stays shut until something has happened
+      // (`locked` returns true while it should), saying why in `lockedLabel`.
+      const locked = (ex.needWeapon && !GameState.hasWeapon) ||
+                     (ex.locked ? !!ex.locked.call(this) : false);
       // hideLocked exits don't exist at all until unlocked (no marker, no message)
       if (locked && ex.hideLocked) {
         if (m) m.setAlpha(0);
@@ -5665,15 +5818,18 @@ class WalkScene extends Phaser.Scene {
       if (near) {
         if (m) m.y = this.markerY + Math.sin(this.time.now * 0.006) * 6;
         if (lbl) {
-          lbl.setText(locked ? 'GRAB THE WEAPON FIRST' : ex.label);
+          lbl.setText(locked ? (ex.lockedLabel || 'GRAB THE WEAPON FIRST') : ex.label);
           lbl.setColor(locked ? '#c93b2a' : '#d9c7a8');   // lbl may be null
         }
         // auto exits fire just by running into them; others want E/W/up
         // Arming gates the AUTO exits only. A door you have to press E at
         // cannot bounce you, so gating those too would just mean standing in
         // a doorway you arrived at and not being able to go back through it.
-        if (!locked && (ex.auto ? ex._armed : enterPressed) && !this._transitioning)
+        // Never while a conversation or a set piece has the controls.
+        const busy = this._transitioning || this._holdInput || this._inConversation;
+        if (!locked && (ex.auto ? ex._armed : enterPressed) && !busy)
           this.goExit(ex);
+        else if (locked && enterPressed && !busy && ex.onLocked) ex.onLocked.call(this);
       }
     });
   }
@@ -6380,11 +6536,12 @@ class BunkerScene extends WalkScene {
       noJump: true,           // no jumping until the broken wall
       title: 'THE BUNKER — quarantine shelter',
       castSwitch: true, canReset: true,
+      // The door is not the first thing any more: the radio is. It tells them
+      // where to go, and the door stays shut until they have heard it.
       beats: [
         { at: 0,    tip: 'HOLD  A  TO GO LEFT,  D  TO GO RIGHT' },
         { at: 0.22, tip: 'HOLD  SHIFT  WHILE WALKING TO RUN' },
-        { at: 0.72, say: [['ETERWOLF', 'Look, Feli, a door.']],
-                    tip: 'PRESS  E  AT THE DOOR' }
+        { at: 0.30, say: [['ETERWOLF', 'Is that... a radio?']], needs: 'radio' }
       ],
       exits: [
         // The blast door's box, measured off bunker_wide.png: the slab runs
@@ -6397,7 +6554,17 @@ class BunkerScene extends WalkScene {
         // the shadows around the frame instead of the door.
         { xFrac: 0.90, w: 180, label: 'EXIT THE BUNKER', target: 'ExitScene',
           glow: true, noArrow: true, glowShape: false,
-          glowFrac: { x0: 0.838, x1: 0.952, y0: 0.264, y1: 0.775 } }
+          glowFrac: { x0: 0.838, x1: 0.952, y0: 0.264, y1: 0.775 },
+          // Out to where, though? Not until the radio has said.
+          locked: () => !GameState.seen['bunker-radio'],
+          lockedLabel: 'GO WHERE, THOUGH?',
+          onLocked() {
+            if (this.time.now < (this._doorNagAt || 0)) return;
+            this._doorNagAt = this.time.now + 2600;
+            Sfx.ensure(); Sfx.deny();
+            this._say([['ETERWOLF', 'Go where, though?']]);
+            this._showTip("THERE'S A RADIO ON THE BENCH  —  E");
+          } }
       ],
       drawFallback(WW) {
         const g = this.add.graphics().setDepth(-20);
@@ -6416,8 +6583,264 @@ class BunkerScene extends WalkScene {
         g.fillStyle(0x241c12, 1); g.fillRect(0, 600, WW, 8);
       }
     });
+
+    // ---- the radio and the food ---------------------------------------
+    // Both stand on the back floor of the painting (the furniture plane, 0.78
+    // or so), behind the brothers, who walk along the front at 0.872.
+    //   radio bench — under the painted wall map (0.42-0.49), which is where
+    //                 you would pin a map if a voice on the radio named a place
+    //   food crate  — in the clear stretch between the pilaster and the door
+    //                 frame (0.667-0.829), its E zone well short of the door's
+    this._radioUsed = !!GameState.seen['bunker-radio'];
+    this._ate = !!GameState.seen['bunker-ate'];
+    this._inConversation = false;
+    this._nudged = false;
+    this._chatter = null;
+    this._buildRadio(0.44, 0.787);
+    this._buildCrate(0.725, 0.78);
+    this.input.keyboard.on('keydown-E', () => {
+      if (this._inConversation || this._holdInput || this._transitioning) return;
+      if (this._atRadio()) this._useRadio();
+      else if (this._atCrate()) this._eat();
+    });
+    this.events.once('shutdown', () => {
+      if (this._static) { this._static.stop(150); this._static = null; }
+      if (this._chatter) { this._chatter.stop(); this._chatter = null; }
+      const dlg = this.scene.get('IntroDialogueScene');
+      if (dlg && dlg.sys.settings.active && dlg.overlay) this.scene.stop('IntroDialogueScene');
+    });
+  }
+
+  // Where a point on a prop's art lands in the world.
+  _artToWorld(im, ax, ay) {
+    return { x: im.x + (ax - im.originX * im.width) * im.scaleX,
+             y: im.y + (ay - im.originY * im.height) * im.scaleY };
+  }
+
+  // A prop stood on its painted feet, sized by its painted width.
+  _floorProp(key, xf, footF, wantW, depth) {
+    if (!this.textures.exists(key)) return null;
+    const bg = this.bgGeom;
+    const im = this.add.image(bg.x + xf * bg.w, bg.y + footF * bg.h, key).setDepth(depth || 5);
+    const art = paintedBox(this, key);
+    if (art) {
+      im.setOrigin((art.x0 + art.pw / 2) / art.w, (art.y1 + 1) / art.h);
+      im.setScale(wantW / art.pw);
+    } else {
+      im.setOrigin(0.5, 1).setScale(wantW / im.width);
+    }
+    return im;
+  }
+
+  // The workbench and the set on it. The art has the dial and the meter lit;
+  // until it is switched on they sit under dark covers, and a red standby
+  // light blinks. Coordinates are on radio_bench.png (960x480).
+  _buildRadio(xf, footF) {
+    const im = this._floorProp('scene_radiobench', xf, footF, 461, 5);
+    if (!im) return;
+    this.bench = im;
+    const W = (ax, ay) => this._artToWorld(im, ax, ay);
+    const s = im.scaleX;
+    const box = (x0, y0, x1, y1) => {
+      const a = W(x0, y0), b = W(x1, y1);
+      return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, w: b.x - a.x, h: b.y - a.y };
+    };
+    const dial = box(525, 127, 622, 158), meter = box(428, 129, 461, 160);
+    this.radioX = W(540, 160).x;               // the middle of the set itself
+    this.radioY = W(540, 160).y;
+    this.radioCovers = [dial, meter].map(b =>
+      this.add.rectangle(b.x, b.y, b.w + 1, b.h + 1, 0x050403, 0.82).setDepth(5.1));
+    torchTexture(this);
+    this.radioGlow = this.add.image(dial.x, dial.y, TORCH_KEY).setDepth(5.2)
+      .setBlendMode(Phaser.BlendModes.ADD).setTint(0xffa040)
+      .setDisplaySize(dial.w * 2.6, dial.h * 4.2).setAlpha(0);
+    const led = W(472, 178);
+    this.radioLed = this.add.circle(led.x, led.y, Math.max(2, 5 * s), 0xff2a1a, 1).setDepth(5.3);
+    const top = W(0, paintedBox(this, 'scene_radiobench').y0).y;
+    this.radioLabel = this.add.text(this.radioX, top - 14, 'E  —  RADIO', {
+      fontFamily: 'Courier New, monospace', fontSize: '15px', color: '#d9c7a8',
+      stroke: '#0d0a08', strokeThickness: 4
+    }).setOrigin(0.5, 1).setDepth(30).setAlpha(0);
+    // A faint hiss even on standby, so walking past it tells you it is alive.
+    this._static = Sfx.loop({ hp: 320, lp: 1600, waver: 0.45, crackle: 220, crackleFreq: 3600, vol: 0 });
+    if (this._radioUsed) this._radioLive(true);
+  }
+
+  _radioLive(instant) {
+    this.radioLed.setFillStyle(0x7cff6b, 1).setAlpha(1);
+    if (instant) {
+      this.radioCovers.forEach(c => c.setAlpha(0));
+    } else {
+      // it catches, stutters, and holds
+      this.radioCovers.forEach(c => {
+        [0, 70, 140, 260, 380].forEach((t, i) => this.time.delayedCall(t, () => c.setAlpha(i % 2 ? 0.5 : 0.05)));
+        this.time.delayedCall(460, () => c.setAlpha(0));
+      });
+    }
+  }
+
+  _buildCrate(xf, footF) {
+    const im = this._floorProp('scene_cratefood', xf, footF, 234, 5);
+    if (!im) return;
+    this.crate = im;
+    this.crateX = im.x;
+    // over his head, not behind him: he stands in front of the crate
+    this.crateLabel = this.add.text(im.x, this.groundY - this.charH - 30, 'E  —  EAT', {
+      fontFamily: 'Courier New, monospace', fontSize: '15px', color: '#d9c7a8',
+      stroke: '#0d0a08', strokeThickness: 4
+    }).setOrigin(0.5, 1).setDepth(30).setAlpha(0);
+  }
+
+  _atRadio() {
+    return !!this.bench && !this._radioUsed && !!this.player &&
+           Math.abs(this.player.x - this.radioX) < 130;
+  }
+
+  _atCrate() {
+    return !!this.crate && !this._ate && !!this.player &&
+           Math.abs(this.player.x - this.crateX) < 115;
+  }
+
+  // Stop, face it, and give the room over to a conversation in the panel.
+  _hold(faceX) {
+    this._inConversation = true;
+    this._holdInput = true;
+    const p = this.player, hero = p._hero;
+    p.setVelocity(0, 0);
+    p._facing = faceX >= p.x ? 1 : -1;
+    if (hero) {
+      playAction(p, hero, 'idle', p._facing);
+      p._curAnim = heroAnim(hero, 'idle', p._facing);
+      heroFlip(p, hero, p._facing);
+    }
+  }
+
+  _release() {
+    this._holdInput = false;
+    this._inConversation = false;
+  }
+
+  _panel(lines, onLine, onDone) {
+    this.scene.launch('IntroDialogueScene', {
+      lines, sleeper: null, keepMusic: true, hold: 300, fadeMs: 380,
+      overlay: true, barTop: true, onLine, onDone
+    });
+    this.scene.bringToTop('IntroDialogueScene');
+  }
+
+  // Click, a sweep across the band, the dial comes up, and static. A voice
+  // under it, broken up, telling whoever is listening where to go.
+  _useRadio() {
+    if (this._radioUsed) return;
+    this._radioUsed = true;
+    once('bunker-radio');
+    this.radioLabel.setAlpha(0);
+    this._hold(this.radioX);
+    Sfx.ensure(); Sfx.select();
+    Sfx.blip(1800, 0.3, 'sine', 0.08, 380);
+    this._radioLive(false);
+    if (this._static) this._static.setVolume(0.24, 350);
+    const stopChatter = () => { if (this._chatter) { this._chatter.stop(); this._chatter = null; } };
+    this.time.delayedCall(1300, () => {
+      if (!this.scene.isActive()) return;
+      this._panel(RADIO_LINES, (i, line) => {
+        this._radioLine = i;
+        stopChatter();
+        if (!this._static) return;
+        if (line.who === 'RADIO') {
+          // loud under the voice, and the voice itself as chatter while it types
+          this._static.setVolume(0.16, 200);
+          this._chatter = Sfx.radioChatter(line.text.length * 26 + 250);
+        } else {
+          this._static.setVolume(0.045, 300);       // down, under them talking
+        }
+        if (line.cue === 'lost') {
+          // the signal goes: a surge of static over the end of the sentence
+          // (only if that line is still up — skipped past, the brothers keep
+          // the quiet they are talking in)
+          this.time.delayedCall(line.text.length * 26 - 150, () => {
+            if (this._radioLine !== i || !this._static) return;
+            stopChatter();
+            this._static.setVolume(0.34, 120);
+            this.time.delayedCall(700, () => {
+              if (this._radioLine === i && this._static) this._static.setVolume(0.16, 400);
+            });
+          });
+        }
+      }, () => {
+        stopChatter();
+        if (this._static) this._static.setVolume(0.04, 900);
+        this._release();
+        this._showTip('THE PLAZA  —  OUT THROUGH THE DOOR');
+      });
+    });
+  }
+
+  // Wolffel said "I'm hungry" before his eyes were open. Here it is.
+  _eat() {
+    if (this._ate) return;
+    this._ate = true;
+    once('bunker-ate');
+    this.crateLabel.setAlpha(0);
+    this._hold(this.crateX);
+    Sfx.ensure(); Sfx.select();
+    this.time.delayedCall(250, () => {
+      if (!this.scene.isActive()) return;
+      this._panel(CRATE_LINES, (i, line) => {
+        if (line.cue === 'munch') this.time.delayedCall(260, () => Sfx.munch());
+      }, () => this._release());
+    });
+  }
+
+  update(time, delta) {
+    super.update(time, delta);
+    if (!this.player || !this.bench) return;
+    const now = this.time.now;
+    // standby light blinks until it is on
+    if (!this._radioUsed) this.radioLed.setAlpha(Math.floor(now / 520) % 2 ? 1 : 0.15);
+    else if (this.radioGlow) {
+      const f = 0.3 + Math.sin(now * 0.021) * 0.04 + Math.sin(now * 0.067) * 0.03;
+      this.radioGlow.setAlpha(f);
+    }
+    // Prompts give way to speech: the line over his head and the prompt were
+    // landing on top of each other.
+    const talking = this._sayText && this._sayText.alpha > 0.05;
+    this.radioLabel.setAlpha(this._atRadio() && !this._inConversation && !talking ? 1 : 0);
+    if (this.crateLabel) this.crateLabel.setAlpha(this._atCrate() && !this._inConversation && !talking ? 1 : 0);
+    // The static carries: faint on standby when you are close, and after the
+    // broadcast a soft crackle that fades as you walk away from it.
+    if (this._static && !this._inConversation) {
+      const dm = Math.abs(this.player.x - this.radioX) / this.pxPerM;      // metres away
+      const near = Math.max(0, 1 - dm / 4.5);
+      const want = (this._radioUsed ? 0.05 : 0.03) * near;
+      if (Math.abs(this._static.volume - want) > 0.004) this._static.setVolume(want, 250);
+    }
+    // Heading for the door with the radio heard and the arepas uneaten.
+    if (this._radioUsed && !this._ate && !this._nudged && this.crate &&
+        this.player.x > this.crateX + 150 && !this._inConversation) {
+      this._nudged = true;
+      this._say([['ETERWOLF', 'Should eat something first.']]);
+    }
   }
 }
+
+// The broadcast: a voice they don't know, cut to pieces by static.
+const RADIO_LINES = [
+  { who: 'RADIO', silent: true,
+    text: '—kkhh— ...all survivors... the quarantine checkpoint at the Plaza is still holding—' },
+  { who: 'RADIO', silent: true, cue: 'lost',
+    text: '—cross the river before dark. Do not... do not let them—' },
+  { who: 'WOLFFEL',  text: 'Let them what?' },
+  { who: 'ETERWOLF', text: 'The Plaza. Across the river.' },
+  { who: 'WOLFFEL',  text: 'And why are we even down here?' },
+  { who: 'ETERWOLF', text: "No idea. Let's go find out." }
+];
+
+const CRATE_LINES = [
+  { who: 'WOLFFEL',  text: 'Arepas! Somebody stocked this place.', cue: 'munch' },
+  { who: 'ETERWOLF', text: "Eat fast. The Plaza's a long way." },
+  { who: 'WOLFFEL',  text: "...I'm taking three.", cue: 'munch' }
+];
 
 // ================================================================== //
 //  SCENE 2 — THE CITY (walk right to the shop on the far edge)        //
@@ -6542,18 +6965,11 @@ class JumpScene extends WalkScene {
       pxPerM: 130,
       title: 'THE BURNT STREET',
       castSwitch: true, canReset: true,
-      // No holes: this stage teaches one thing. A single broken wall sits near
-      // the middle of the road — tall enough that he cannot just walk through
-      // it, low enough that a jump lands him cleanly on top. He climbs on,
-      // crosses it, and jumps down the far side, rather than needing to clear
-      // it in one bound the way the old rubble heaps did.
+      // The jump is taught here, by a car. Until the Twingo in the road goes
+      // up there is nothing to jump over and no jump; after it, its wreck is
+      // the first thing you ever jump onto.
+      noJump: !GameState.seen['twingo-blown'],
       props: [
-        // 0.58m — knee-and-a-bit on a 1.8m man. Came down 1.17 -> 0.9 -> 0.72
-        // -> this. The asset scales evenly, so every step also took the same
-        // percentage off its width, which is what "too thick" was about: the
-        // wall is as deep front-to-back as it is tall.
-        { xFrac: 0.5, kind: 'wall', m: 0.58, topFrac: 0.19 },
-
         // ---- FOREGROUND DRESSING -------------------------------------------
         // Dead growth at both ends of the street, close enough to the camera
         // that the brothers pass BEHIND it — depth 34 against the player's 10,
@@ -6601,10 +7017,7 @@ class JumpScene extends WalkScene {
         // it, scale sizes it, yOff settles it, flip mirrors it.
       ],
       beats: [
-        { at: 0,    say: [['ETERWOLF', 'Road is buried. We go over it.']],
-                    tip: 'PRESS  W  OR  SPACE  TO JUMP' },
-        { at: 0.35, tip: 'JUMP ONTO THE WALL, WALK ACROSS, JUMP DOWN THE OTHER SIDE' },
-        { at: 0.65, say: [['PLAYER', 'The whole street... where is everybody?']] }
+        { at: 0.70, say: [['PLAYER', 'The whole street... where is everybody?']] }
       ],
       exits: [
         // The way back. The bunker is behind a blast door, the bridge comes
@@ -6631,8 +7044,412 @@ class JumpScene extends WalkScene {
         g.fillStyle(0x120d0a, 1); g.fillRect(0, 560, WW, 160);
       }
     });
+    this._twingoSetUp();
+  }
+
+  // ================================================================ //
+  //  THE TWINGO                                                       //
+  //                                                                   //
+  //  A burning car in the road. He walks up to it, stops — something //
+  //  in it is hissing — and it goes up: the flash, the blast, and he  //
+  //  is thrown on his back. What is left is a burning heap across the //
+  //  street, and the only way on is over it: the first jump.          //
+  // ================================================================ //
+  _twingoSetUp() {
+    this._twBlown = !!GameState.seen['twingo-blown'];
+    this._twState = this._twBlown ? 'wreck' : 'intact';
+    this._debris = [];
+    this._twEmitters = [];
+    this._sizzleAt = 0;
+    this._sizzleSaid = false;
+    const art = TWINGO_ART;
+    if (!this.textures.exists(art.car.key)) return;
+    // one scale for all three: the car's wheelbase is a real Twingo's
+    this._twS = (TWINGO_WHEELBASE_M * this.pxPerM) / (art.car.hubs[1] - art.car.hubs[0]);
+    this._twX = this.worldW * TWINGO_X;
+    this._twY = this.groundY + 3;             // tyres a touch into the road
+    const place = a => {
+      const tex = this.textures.get(a.key).getSourceImage();
+      const mid = (a.hubs[0] + a.hubs[1]) / 2;
+      return this.add.image(this._twX, this._twY, a.key)
+        .setOrigin(mid / tex.width, a.ground / tex.height).setScale(this._twS).setDepth(3);
+    };
+    this.twCar = place(art.car);
+    this.twBoom = place(art.boom).setVisible(false);
+    this.twWreck = place(art.wreck).setVisible(false);
+
+    // the fire's light on the road, under whatever is burning
+    torchTexture(this);
+    this._twGlow = this.add.image(this._twX, this._twY - 20, TORCH_KEY).setDepth(2.5)
+      .setBlendMode(Phaser.BlendModes.ADD).setTint(0xff7a1a)
+      .setDisplaySize(620, 260).setAlpha(0.28);
+    this._fire = Sfx.loop({ hp: 60, lp: 1100, waver: 0.9, crackle: 70, crackleFreq: 2100, vol: 0 });
+    this.events.once('shutdown', () => {
+      if (this._fire) { this._fire.stop(150); this._fire = null; }
+    });
+
+    if (this._twBlown) {
+      this.twCar.setVisible(false);
+      this.twWreck.setVisible(true);
+      this._twingoDeck();
+      this._wreckFire();
+      return;
+    }
+    // it is burning already — the drawing says so; this keeps it moving
+    this._carFire();
+    // and it stands in the road: you cannot walk through it
+    const a = this._artX('car', 0.12), b = this._artX('car', 0.9);
+    this._carBlock = this.add.rectangle((a + b) / 2, this.groundY - 90, b - a, 180, 0, 0).setDepth(-1);
+    this.physics.add.existing(this._carBlock, true);
+    this.solidsW.push(this._carBlock);
+    this.physics.add.collider(this.player, this._carBlock);
+    // where he stops: a body and a half short of the front bumper
+    this._twTrigger = a - 1.5 * this.charH;
+  }
+
+  // x of a point given as a fraction across one of the three drawings
+  _artX(which, f) {
+    const a = TWINGO_ART[which], tex = this.textures.get(a.key).getSourceImage();
+    return this._twX + (f * tex.width - (a.hubs[0] + a.hubs[1]) / 2) * this._twS;
+  }
+  _artY(h) { return this._twY - h * this._twS; }
+
+  _emit(x, y, depth, cfg) {
+    const e = this.add.particles(x, y, cfg.tex || 'flash_0', cfg).setDepth(depth);
+    this._twEmitters.push(e);
+    return e;
+  }
+
+  // Flames licking off a spot, embers going up out of them. Many small
+  // tongues rather than a few big ones: each is a soft teardrop, born
+  // yellow-white at the base and going orange, red and out as it rises, so
+  // together they flicker the way fire does instead of reading as glowing balls.
+  _flames(x, y, w, big) {
+    const k = this.charH / 234;
+    flameTexture(this);
+    const f = this._emit(x, y, 3.6, {
+      tex: FLAME_KEY, blendMode: 'ADD', lifespan: { min: 420, max: 820 },
+      speedY: { min: -150 * k, max: -70 * k }, speedX: { min: -14, max: 14 },
+      scale: { start: (big ? 0.8 : 0.5) * k, end: 0.12 * k },
+      alpha: { start: 0.36, end: 0 },
+      color: [0xffc060, 0xff8a2a, 0xe0501a, 0x8a2c10, 0x2a0e08],
+      rotate: { min: -12, max: 12 },
+      frequency: big ? 20 : 40, quantity: 1,
+      emitZone: { type: 'random', source: new Phaser.Geom.Rectangle(-w / 2, -6, w, 12) }
+    });
+    const e = this._emit(x, y - 10, 3.7, {
+      tex: 'flash_1', blendMode: 'ADD', lifespan: { min: 1100, max: 2300 },
+      speedY: { min: -170 * k, max: -60 * k }, speedX: { min: -35, max: 35 },
+      scale: { start: 0.16 * k, end: 0 }, alpha: { start: 1, end: 0 },
+      color: [0xfff2c8, 0xf2b13c, 0xd85a1c], gravityY: -12,
+      frequency: big ? 90 : 170, quantity: 1,
+      emitZone: { type: 'random', source: new Phaser.Geom.Rectangle(-w / 2, -8, w, 16) }
+    });
+    return [f, e];
+  }
+
+  // Black smoke going up and spreading, with a lighter grey through it so it
+  // reads against the dark sky rather than vanishing into it.
+  _smoke(x, y, w, thick) {
+    const k = this.charH / 234;
+    torchTexture(this);
+    return this._emit(x, y, 3.8, {
+      tex: TORCH_KEY, lifespan: { min: 2800, max: 4200 },
+      speedY: { min: -95 * k, max: -45 * k }, speedX: { min: -8, max: 30 },
+      scale: { start: 0.1 * k, end: (thick ? 0.62 : 0.45) * k },
+      alpha: { start: thick ? 0.34 : 0.24, end: 0 },
+      tint: [0x3a322c, 0x4f453c, 0x62564a], frequency: thick ? 120 : 210, quantity: 1,
+      emitZone: { type: 'random', source: new Phaser.Geom.Rectangle(-w / 2, -4, w, 8) }
+    });
+  }
+
+  _carFire() {
+    // the bonnet (painted alight) and the cabin
+    this._carFlames = this._flames(this._artX('car', 0.26), this._artY(215), 70, true);
+    this._flames(this._artX('car', 0.52), this._artY(250), 40, false);
+    this._smoke(this._artX('car', 0.36), this._artY(300), 60, false);
+  }
+
+  _wreckFire() {
+    // the engine at the front and the hatch at the back burn hard; the roof
+    // between them only smoulders — it is the part you are meant to cross
+    this._flames(this._artX('wreck', 0.13), this._artY(120), 80, true);
+    this._flames(this._artX('wreck', 0.82), this._artY(150), 70, true);
+    this._flames(this._artX('wreck', 0.47), this._artY(262), 30, false);
+    this._smoke(this._artX('wreck', 0.40), this._artY(280), 120, true);
+    this._smoke(this._artX('wreck', 0.80), this._artY(260), 60, false);
+  }
+
+  // The crushed roof you can stand on: thin one-way slabs that follow the
+  // painted roof line, never stepping more than 3px (so you walk across them
+  // rather than catching on them), and a solid face at each end (so you
+  // cannot walk into the heap, only jump onto it).
+  _twingoDeck() {
+    const pts = TWINGO_DECK;
+    // smooth the measured line once, three points wide
+    const sm = pts.map((p, i) => [p[0], (pts[Math.max(0, i - 1)][1] + p[1] + pts[Math.min(pts.length - 1, i + 1)][1]) / 3]);
+    const hAt = f => {
+      for (let i = 1; i < sm.length; i++) {
+        if (f <= sm[i][0]) {
+          const [f0, h0] = sm[i - 1], [f1, h1] = sm[i];
+          return h0 + (h1 - h0) * ((f - f0) / Math.max(1e-6, f1 - f0));
+        }
+      }
+      return sm[sm.length - 1][1];
+    };
+    const fa = sm[0][0], fb = sm[sm.length - 1][0];
+    const add = (x0, x1, top, oneWay) => {
+      const h = oneWay ? 26 : (this._twY - top);
+      const r = this.add.rectangle((x0 + x1) / 2, top + h / 2, x1 - x0, h, 0, 0).setDepth(-1);
+      this.physics.add.existing(r, true);
+      if (oneWay) { const c = r.body.checkCollision; c.down = false; c.left = false; c.right = false; }
+      this.solidsW.push(r);
+      this.physics.add.collider(this.player, r);
+      return r;
+    };
+    const N = 120;
+    let runX0 = this._artX('wreck', fa), runTop = this._artY(hAt(fa)), ref = runTop;
+    for (let i = 1; i <= N; i++) {
+      const f = fa + (fb - fa) * (i / N);
+      const x = this._artX('wreck', f), y = this._artY(hAt(f));
+      if (Math.abs(y - ref) >= 3 || i === N) {
+        add(runX0, x, Math.min(runTop, y), true);
+        runX0 = x; runTop = y; ref = y;
+      } else runTop = Math.min(runTop, y);
+    }
+    // the two hot ends
+    const xa = this._artX('wreck', fa), xb = this._artX('wreck', fb);
+    this._wallA = add(xa - 12, xa + 2, this._artY(hAt(fa)) + 2, false);
+    this._wallB = add(xb - 2, xb + 12, this._artY(hAt(fb)) + 2, false);
+    this._deckA = xa; this._deckB = xb;
+  }
+
+  update(time, delta) {
+    super.update(time, delta);
+    if (!this.player || !this.twCar) return;
+    const p = this.player, now = this.time.now;
+    // the fire gets louder the closer he is
+    if (this._fire) {
+      const dm = Math.abs(p.x - this._twX) / this.pxPerM;
+      const base = this._twState === 'intact' ? 0.07 : 0.1;
+      const want = base * Math.max(0.12, 1 - dm / 9) * (this._twState === 'building' ? 1.8 : 1);
+      if (Math.abs(this._fire.volume - want) > 0.004) this._fire.setVolume(want, 300);
+    }
+    if (this._twGlow) {
+      const hot = this._twState === 'building' ? 0.2 : 0;
+      this._twGlow.setAlpha(0.24 + hot + Math.sin(now * 0.017) * 0.04 + Math.sin(now * 0.051) * 0.03);
+    }
+    if (this._twState === 'intact' && !this._transitioning && p.x >= this._twTrigger &&
+        (p.body.blocked.down || p.body.touching.down)) this._twingoGo();
+    this._updateDebris(delta);
+    // Walking into the burning ends: it is hot, and he says so.
+    if (this._twState === 'wreck' && this._deckA != null && !this._holdInput) {
+      const b = p.body, grounded = b.blocked.down || b.touching.down;
+      const intoA = b.blocked.right && Math.abs(b.right - (this._deckA - 12)) < 6;
+      const intoB = b.blocked.left && Math.abs(b.left - (this._deckB + 12)) < 6;
+      if (grounded && (intoA || intoB) && now > this._sizzleAt) {
+        this._sizzleAt = now + 900;
+        const away = intoA ? -1 : 1, k = this.playScale || 1;
+        p.setVelocity(away * 230 * k, -170 * k);
+        p._knockUntil = now + 200;
+        p.setTint(0xff9a5a);
+        this.time.delayedCall(130, () => { if (p.active) p.clearTint(); });
+        Sfx.ensure(); Sfx.sizzle();
+        if (!this._sizzleSaid) {
+          this._sizzleSaid = true;
+          this._say([['ETERWOLF', 'Hot! Over it, not through it.']]);
+        }
+      }
+    }
+  }
+
+  // He stops. Something in the car is hissing, and then it isn't a car.
+  _twingoGo() {
+    this._twState = 'building';
+    this._holdInput = true;
+    this._inConversation = true;          // no R, no ESC mid-blast
+    const p = this.player, hero = p._hero;
+    p.setVelocity(0, 0);
+    p._facing = 1;
+    if (hero) {
+      playAction(p, hero, 'idle', 1);
+      p._curAnim = heroAnim(hero, 'idle', 1);
+      heroFlip(p, hero, 1);
+    }
+    // frame him and the car together
+    const cam = this.cameras.main;
+    cam.stopFollow();
+    const look = Phaser.Math.Clamp((p.x + this._twX) / 2 - 640, 0, this.worldW - 1280);
+    this.tweens.add({ targets: cam, scrollX: look, duration: 650, ease: 'Sine.easeInOut' });
+    this._say([['ETERWOLF', '...back up.']]);
+    this.time.delayedCall(450, () => {
+      Sfx.hissRise(1150);
+      cam.shake(1150, 0.0025);
+      if (this._carFlames) this._carFlames.forEach(e => e.setFrequency(12));
+    });
+    this.time.delayedCall(1050, () => Sfx.burst(0.05, 0.3, 4400, 3));      // a window goes
+    this.time.delayedCall(1600, () => this._twingoBoom());
+  }
+
+  _twingoBoom() {
+    if (this._twState !== 'building') return;
+    this._twState = 'blast';
+    once('twingo-blown');
+    const cam = this.cameras.main, now = this.time.now, k = this.playScale || 1;
+    // the car goes; the blast is in its place, a touch too big and settling
+    this.twCar.setVisible(false);
+    this._twEmitters.forEach(e => e.destroy());
+    this._twEmitters = [];
+    this.twBoom.setVisible(true).setScale(this._twS * 1.07);
+    this.tweens.add({ targets: this.twBoom, scale: this._twS, duration: 220, ease: 'Quad.easeOut' });
+    if (this._carBlock) {
+      const i = this.solidsW.indexOf(this._carBlock);
+      if (i >= 0) this.solidsW.splice(i, 1);
+      this._carBlock.destroy(); this._carBlock = null;
+    }
+    cam.flash(200, 255, 214, 150);
+    cam.shake(480, 0.014);
+    Sfx.explosion();
+    // a beat where everything stops, then it all comes down
+    this.physics.world.pause();
+    this.time.delayedCall(70, () => this.physics.world.resume());
+    const cx = this._artX('boom', 0.31), cy = this._artY(260);
+    // the shockwave along the road
+    const ring = this.add.circle(cx, cy + 40, 40).setStrokeStyle(7, 0xffd98a, 0.85).setDepth(12)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    this.tweens.add({ targets: ring, scale: 5.5, alpha: 0, duration: 380, ease: 'Quad.easeOut',
+                      onComplete: () => ring.destroy() });
+    // embers and dust thrown everywhere
+    const sparks = this.add.particles(cx, cy, 'flash_1', {
+      blendMode: 'ADD', lifespan: { min: 600, max: 1600 }, speed: { min: 240 * k, max: 720 * k },
+      angle: { min: 190, max: 350 }, gravityY: 900 * k, scale: { start: 0.45, end: 0 },
+      color: [0xfff2c8, 0xffd98a, 0xf2b13c, 0xd85a1c], emitting: false
+    }).setDepth(12);
+    sparks.explode(70);
+    this.time.delayedCall(1800, () => sparks.destroy());
+    const dust = this.add.particles(cx, this._twY - 10, 'puff', {
+      lifespan: { min: 900, max: 1700 }, speedX: { min: -320 * k, max: 320 * k },
+      speedY: { min: -140 * k, max: -20 * k }, scale: { start: 2.5, end: 7 },
+      alpha: { start: 0.45, end: 0 }, tint: 0x3a302a, emitting: false
+    }).setDepth(11);
+    dust.explode(26);
+    this.time.delayedCall(1900, () => dust.destroy());
+    this._throwDebris(cx, cy);
+    // and him: thrown back and off his feet
+    const p = this.player;
+    p.setVelocity(-400 * k, -330 * k);
+    p._knockUntil = now + 480;
+    p.setTint(0xffb080);
+    this.time.delayedCall(160, () => { if (p.active) p.clearTint(); });
+    const hero = p._hero;
+    this.time.delayedCall(430, () => {
+      if (!p.active || !hero) return;
+      if (heroHas(hero, 'falldown')) {
+        const key = heroAnim(hero, 'falldown', 1);
+        p.play(key); p._curAnim = key; p._curAction = 'falldown';
+      }
+    });
+    // the blast gives way to what is left
+    this.time.delayedCall(380, () => {
+      this.twWreck.setVisible(true).setAlpha(0);
+      this.tweens.add({ targets: this.twWreck, alpha: 1, duration: 480 });
+      this.tweens.add({ targets: this.twBoom, alpha: 0, duration: 480,
+                        onComplete: () => this.twBoom.setVisible(false) });
+    });
+    this.time.delayedCall(560, () => { this._twingoDeck(); this._wreckFire(); this._twState = 'wreck'; });
+    // up again, and the way on is over it
+    this.time.delayedCall(2100, () => {
+      if (!this.player || !this.player.active) return;
+      this._holdInput = false;
+      this._inConversation = false;
+      this.cfg.noJump = false;
+      this._refreshHint();
+      if (hero) { playAction(p, hero, 'idle', 1); p._curAnim = heroAnim(hero, 'idle', 1); }
+      this.cameras.main.startFollow(p, false, 0.1, 0.1);
+      this._say([['ETERWOLF', '¡Ave María...!'], ['ETERWOLF', "Over it. Don't touch the fire."]]);
+      this._showTip('W  OR  SPACE  —  JUMP ONTO THE WRECK, THEN DOWN THE OTHER SIDE');
+    });
+  }
+
+  // Bits of Twingo: blue panel, black metal, grey steel, glass.
+  _throwDebris(cx, cy) {
+    const k = this.playScale || 1, cols = [0x34507e, 0x2b2622, 0x6a6f78, 0x3a4f7a, 0xcfe4f2];
+    for (let i = 0; i < 18; i++) {
+      const f = ((i * 2654435761) % 1000) / 1000, g = ((i * 40503) % 997) / 997;
+      const w = 6 + f * 16, h = 3 + g * 8, col = cols[i % cols.length];
+      const o = this.add.rectangle(cx + (f - 0.5) * 60, cy + (g - 0.5) * 40, w, h, col, col === 0xcfe4f2 ? 0.75 : 1)
+        .setDepth(11).setRotation(f * 6);
+      this._debris.push({ o, vx: (f - 0.45) * 900 * k, vy: -(260 + g * 520) * k, spin: (g - 0.5) * 18,
+                          floor: this.groundY + 2 + g * 8, bounced: false, t: 0 });
+    }
+  }
+
+  _updateDebris(delta) {
+    if (!this._debris.length) return;
+    const dt = Math.min(0.05, (delta || 16.7) / 1000), g = this.physics.world.gravity.y;
+    this._debris = this._debris.filter(d => {
+      d.t += dt;
+      d.vy += g * dt;
+      d.o.x += d.vx * dt; d.o.y += d.vy * dt;
+      d.o.rotation += d.spin * dt;
+      if (d.o.y >= d.floor && d.vy > 0) {
+        d.o.y = d.floor;
+        if (!d.bounced) { d.bounced = true; d.vy *= -0.28; d.vx *= 0.45; d.spin *= 0.4; }
+        else { d.vy = 0; d.vx *= 0.8; d.spin = 0; }
+      }
+      if (d.t > 2.6) {
+        d.o.setAlpha(Math.max(0, d.o.alpha - dt * 1.5));
+        if (d.o.alpha <= 0) { d.o.destroy(); return false; }
+      }
+      return true;
+    });
   }
 }
+
+// A flame tongue for the fire particles: a soft teardrop, white so the
+// emitter's colours tint it, hottest low and fading out toward its tip.
+const FLAME_KEY = '__flametongue';
+function flameTexture(scene) {
+  if (scene.textures.exists(FLAME_KEY)) return;
+  const W = 28, H = 56, c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  g.save();
+  g.translate(W / 2, H * 0.62);
+  g.scale(1, 2);
+  const r = W / 2;
+  const grd = g.createRadialGradient(0, 0, 0, 0, 0, r);
+  grd.addColorStop(0, 'rgba(255,255,255,1)');
+  grd.addColorStop(0.4, 'rgba(255,255,255,0.7)');
+  grd.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grd;
+  g.beginPath(); g.arc(0, 0, r, 0, Math.PI * 2); g.fill();
+  g.restore();
+  scene.textures.addCanvas(FLAME_KEY, c);
+}
+
+// The three Twingo drawings, locked to one car. They were drawn at the same
+// size but not in the same place: on the 1000px copies the wheel hubs sit at
+// 288/787 (burning), 334/858 (the blast) and 345/835 (the wreck), all with
+// their tyres on row 460. Each is anchored on its own wheel midpoint and tyre
+// line, so swapping one for the next leaves the car exactly where it was.
+const TWINGO_ART = {
+  car:   { key: 'scene_twingocar',   hubs: [287.7, 787.3], ground: 460.5 },
+  boom:  { key: 'scene_twingoboom',  hubs: [333.7, 858.3], ground: 460.5 },
+  wreck: { key: 'scene_twingowreck', hubs: [345.0, 835.0], ground: 460.5 }
+};
+const TWINGO_WHEELBASE_M = 2.35;      // a real Twingo's; sets the car's size
+const TWINGO_X = 0.55;                // the car's wheels, as a fraction of the street
+// The crushed roof: [x fraction across the wreck drawing, height above the
+// tyre line in its pixels], the median first painted row of each slice. The
+// hatch standing up at the back (0.73-0.82, up to 323) is left out: at 1.5m
+// it is nearly his whole jump, so it stays scenery he passes in front of.
+const TWINGO_DECK = [
+  [0.19, 212], [0.22, 227], [0.25, 232], [0.28, 232], [0.31, 219], [0.34, 209],
+  [0.37, 226], [0.40, 251], [0.43, 261], [0.46, 266], [0.49, 265], [0.52, 257],
+  [0.55, 260], [0.58, 250], [0.61, 241], [0.64, 243], [0.67, 261], [0.70, 262],
+  [0.72, 262]
+];
 // A glow the shape of the hole it lights.
 //
 // The generic door glow is a soft slab, which is right for a rectangular blast

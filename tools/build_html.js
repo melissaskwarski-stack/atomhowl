@@ -117,10 +117,6 @@ const SCENE_SRC = {
   // for the card that says you have it
   pistolfloor:  ['public/assets/pistol_floor.png'],
   pistolsprite: ['public/assets/pistol_sprite.png'],
-  // The creature itself, as one horizontal strip of 8 frames cut from the gif
-  // to a box shared by every frame, so it does not shift as it plays.
-  // CREATURE_FRAMES in the game has to match the 8.
-  creature:     ['public/assets/creature_idle_strip.png'],
   // sit and stand up enemy.gif, reversed so it sits and then rises: 17 frames
   // on one shared box. The `N = 17` in _buildCreature has to match.
   creaturerise: ['public/assets/creature_rise_strip.png'],
@@ -131,6 +127,16 @@ const SCENE_SRC = {
   // grids and have to match them.
   aliendeath:   ['public/assets/alien_death_sheet.png'],
   alienface:    ['public/assets/alien_encounter_sheet.png'],
+  // The bunker: the workbench with the radio on it, and the food crate by
+  // the door. Downscaled once from the uploads (radio.png, crate food.png).
+  radiobench:   ['public/assets/radio_bench.png'],
+  cratefood:    ['public/assets/crate_food.png'],
+  // The burnt street's Twingo, in its three states: burning, blowing up, and
+  // the wreck left behind. Each drawn at its own scale and position, so the
+  // game locks them together on the wheels (TWINGO_ART in ah_game.js).
+  twingocar:    ['public/assets/twingo_car.png'],
+  twingoboom:   ['public/assets/twingo_boom.png'],
+  twingowreck:  ['public/assets/twingo_wreck.png'],
   cine1:        ['public/assets/enemy_cine_1.jpg'],
   cine2:        ['public/assets/enemy_cine_2.jpg'],
   deadplant: ['public/assets/dead_plant.png'],
@@ -148,6 +154,9 @@ let prev = { BG_DATA: null, MOBS: {}, SCENES: {} };
 if (fs.existsSync(p('build/scene_assets.js'))) {
   const sandbox = { window: {} };
   new Function('window', fs.readFileSync(p('build/scene_assets.js'), 'utf8'))(sandbox.window);
+  if (fs.existsSync(p('build/scene_assets2.js'))) {
+    new Function('window', fs.readFileSync(p('build/scene_assets2.js'), 'utf8'))(sandbox.window);
+  }
   prev = {
     BG_DATA: sandbox.window.BG_DATA || null,
     MOBS: sandbox.window.MOBS || {},
@@ -170,12 +179,30 @@ for (const [key, candidates] of Object.entries(SCENE_SRC)) {
   }
 }
 
+// Two files, not one. The hosted build is published file by file, and a
+// single file may not pass 16MB; the scene art alone was heading past it. The
+// keys are dealt into two halves by size, and the second half merges into the
+// first when it loads.
+const half = { a: {}, b: {} };
+let sizeA = 0;
+const LIMIT_A = 10.5 * 1024 * 1024;
+for (const [k, uri] of Object.entries(scenes)) {
+  if (sizeA + uri.length <= LIMIT_A) { half.a[k] = uri; sizeA += uri.length; }
+  else half.b[k] = uri;
+}
 const sceneBlock =
   '/* Scene + monster art */ ' +
   `window.BG_DATA = ${JSON.stringify(prev.BG_DATA)}; ` +
   `window.MOBS = ${JSON.stringify(prev.MOBS)}; ` +
-  `window.SCENES = ${JSON.stringify(scenes)};`;
+  `window.SCENES = ${JSON.stringify(half.a)};`;
+const sceneBlock2 =
+  '/* Scene art, second half */ ' +
+  `window.SCENES = Object.assign(window.SCENES || {}, ${JSON.stringify(half.b)});`;
 fs.writeFileSync(p('build/scene_assets.js'), sceneBlock);
+fs.writeFileSync(p('build/scene_assets2.js'), sceneBlock2);
+console.log(`scene art split: ${Object.keys(half.a).length} in scene_assets.js ` +
+  `(${(sceneBlock.length / 1048576).toFixed(1)}MB), ${Object.keys(half.b).length} in ` +
+  `scene_assets2.js (${(sceneBlock2.length / 1048576).toFixed(1)}MB)`);
 
 // ---------- media ----------
 // Inlined, not referenced. The page is opened straight off disk as a single
@@ -270,6 +297,7 @@ const blocks = [
   read('build/zomb_assets.js'),
   read('build/ui_assets.js'),
   sceneBlock,
+  sceneBlock2,
   mediaBlock,
   voiceBlock,
   devBlock,

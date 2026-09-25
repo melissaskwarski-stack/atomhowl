@@ -34,6 +34,7 @@ const SCRIPTS = [
   ['build/zomb_assets.js',     'zomb_assets.js'],
   ['build/ui_assets.js',       'ui_assets.js'],
   ['build/scene_assets.js',    'scene_assets.js'],
+  ['build/scene_assets2.js',   'scene_assets2.js'],
   ['src_game/ah_game.js',      'ah_game.js']
 ];
 
@@ -108,7 +109,7 @@ for (const [src, name] of SCRIPTS) {
 }
 
 const order = ['phaser.min.js', 'ew_assets.js', 'wf_assets.js', 'enemy_assets.js',
-               'zomb_assets.js', 'ui_assets.js', 'scene_assets.js',
+               'zomb_assets.js', 'ui_assets.js', 'scene_assets.js', 'scene_assets2.js',
                'media.js', 'voice.js', 'devflag.js', 'ah_game.js'];
 
 // Shown in the page header so it is possible to tell at a glance whether the
