@@ -5486,16 +5486,21 @@ class WalkScene extends Phaser.Scene {
       p._swingUntil = now + ((a && a.duration) || 340) + 40;
       this._swingUntil = p._swingUntil;
     }
+    // One swing cuts ONE thing: the nearest cord in front of him and in
+    // reach. With the cords standing close together a swing used to hit every
+    // one in reach, which cut through the first wall into the next.
     const dir = p._facing || 1;
     const reach = 1.1 * HUMAN_M * (this.pxPerM || 144);
+    let best = null, bestD = Infinity;
     (this.cuttables || []).forEach(c => {
       if (c.dead) return;
       const dx = c.im.x - p.x;
       if (dx * dir < -20 || Math.abs(dx) > reach) return;
       // a full-height cord spans the room, so only check height for short ones
       if (!c.full && Math.abs(p.y - c.im.y) > 1.4 * HUMAN_M * this.pxPerM) return;
-      this.cutOnce(c);
+      if (Math.abs(dx) < bestD) { bestD = Math.abs(dx); best = c; }
     });
+    if (best) this.cutOnce(best);
   }
 
   goExit(ex) {
@@ -5957,6 +5962,37 @@ function meanColour(scene, key, x0, x1, y0, y1) {
 // the rubble sitting on that road, which is 38 source rows higher. Anchoring
 // by the rubble put the roadway 7px below the deck line it is meant to
 // continue, so what met the eye at the seam was broken stone.
+// The colour of a picture's STONE inside a box: its lighter, low-saturation
+// pixels (the top 40% by brightness among those under 30% saturation), per
+// channel. An average over everything would mix in rebar, rust and shadow;
+// this is the colour of the faces of the blocks, which is what the eye
+// compares when one stone thing sits against another.
+function stoneColour(scene, key, x0, x1, y0, y1) {
+  try {
+    const src = scene.textures.get(key).getSourceImage();
+    const cv = document.createElement('canvas');
+    cv.width = src.width; cv.height = src.height;
+    const cx = cv.getContext('2d');
+    cx.drawImage(src, 0, 0);
+    const X0 = Math.max(0, Math.round(x0 * src.width)), X1 = Math.min(src.width, Math.round(x1 * src.width));
+    const Y0 = Math.max(0, Math.round(y0 * src.height)), Y1 = Math.min(src.height, Math.round(y1 * src.height));
+    if (X1 <= X0 || Y1 <= Y0) return null;
+    const d = cx.getImageData(X0, Y0, X1 - X0, Y1 - Y0).data;
+    const px = [];
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i + 3] < 200) continue;
+      const r = d[i], g = d[i + 1], b = d[i + 2];
+      const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+      if (mx && (mx - mn) / mx < 0.30) px.push([r, g, b, 0.2126 * r + 0.7152 * g + 0.0722 * b]);
+    }
+    if (!px.length) return null;
+    px.sort((a, c) => c[3] - a[3]);
+    const top = px.slice(0, Math.max(1, Math.floor(px.length * 0.4)));
+    const m = k => top.reduce((acc, q) => acc + q[k], 0) / top.length;
+    return { r: m(0), g: m(1), b: m(2) };
+  } catch (e) { return null; }
+}
+
 function brightestRow(scene, key, y0, y1, x0, x1) {
   try {
     const src = scene.textures.get(key).getSourceImage();
@@ -6249,18 +6285,26 @@ class BridgeScene extends WalkScene {
                                Math.min(0.98, g1 + 0.01), Math.min(1, g1 + 0.10));
     const lum = deckL && deckR ? (deckL.lum + deckR.lum) / 2
                                : (deckL || deckR || {}).lum;
-    if (road && lum) {
-      // Matched against the painting as FILE, which is the undimmed one — so
-      // the same dimming has to be applied on top, or the span stands out
-      // brighter than the bridge it is lying on. That is exactly what it did
-      // while only the backdrop was toned.
+    // COLOUR, not just brightness. The span's stone is painted warm and
+    // brownish (its faces average 114,100,91) and the bridge's is a neutral,
+    // faintly cool grey (64,66,66). A grey tint could only darken it, so the
+    // span stayed brown against a grey bridge. The tint is worked out per
+    // channel — bridge stone over span stone, times the bridge's own dimming
+    // since the painting is drawn toned — which pulls red down hardest and
+    // lands the span on the bridge's grey.
+    const bS = stoneColour(this, 'scene_bridgespan', x0, x1, 0, 1);
+    const pL = stoneColour(this, 'scene_bridgebg', Math.max(0, g0 - 0.11), Math.max(0.01, g0 - 0.01), dy - 0.005, dy + 0.105);
+    const pR = stoneColour(this, 'scene_bridgebg', Math.min(0.99, g1 + 0.01), Math.min(1, g1 + 0.11), dy - 0.005, dy + 0.105);
+    const pS = pL && pR ? { r: (pL.r + pR.r) / 2, g: (pL.g + pR.g) / 2, b: (pL.b + pR.b) / 2 } : (pL || pR);
+    if (bS && pS) {
+      const ch = k => Math.max(0, Math.min(255, Math.round(255 * Math.min(1, (pS[k] * BRIDGE_TONE) / Math.max(1, bS[k])))));
+      out.tint = (ch('r') << 16) | (ch('g') << 8) | ch('b');
+      out.lift = 0;
+    } else if (road && lum) {
+      // no stone to read: fall back to the brightness match
       const r = (lum / Math.max(1, road.lum)) * BRIDGE_TONE;
-      if (r < 0.985) {
-        const c = Math.max(0, Math.min(255, Math.round(255 * r)));
-        out.tint = (c << 16) | (c << 8) | c;
-      } else if (r > 1.015) {
-        out.lift = Math.min(0.55, r - 1);
-      }
+      const c = Math.max(0, Math.min(255, Math.round(255 * Math.min(1, r))));
+      out.tint = (c << 16) | (c << 8) | c;
     }
     this.__spanLook = out;
     return out;
@@ -6318,7 +6362,9 @@ class BridgeScene extends WalkScene {
     // was wrong: a slab dropped across a hole rests ON the road either side,
     // so its surface sits a little above the road's, and that small step is
     // most of what says "laid over" rather than "part of".
-    this._proud = Math.round(0.013 * this.bgGeom.h);
+    // Down onto the deck. It stood 9px proud and read as hovering over the
+    // road rather than lying across it.
+    this._proud = 0;
 
     // The span and the backdrop are different files, and the span came out of
     // its pass a cooler, lighter grey than the warm stone it has to sit in.
@@ -6580,7 +6626,13 @@ class DashScene extends WalkScene {
         // floated him a few pixels over it, and stopping at 0.335 walked him
         // off into air with a body-width of painted stone still in front of
         // him — which is what "you go before the brick floor" was.
-        { x0: 0.000, x1: 0.348, y: 0.478 },   // the roadway, with the car
+        // SOLID, not one-way. Under the end of the road the painting is a wall
+        // of stone blocks stepping down to the ledge, and a one-way ledge only
+        // collides from above — from the middle ledge you could walk left
+        // under the road and stand inside that stone. A solid block has a real
+        // right face: you drop off the end of the road beside the wall and you
+        // cannot get back under it.
+        { x0: 0.000, x1: 0.350, y: 0.478, solid: true },   // the roadway, with the car
         // Read at 12x this time. The lit top edge runs dead flat at 0.549 and
         // carries on to 0.507, where it turns down a face you can see — 0.470
         // was a shadow across the stone, not the end of it, and stopping there
@@ -6597,7 +6649,7 @@ class DashScene extends WalkScene {
         // the painting; the four-thousandths between the two left a slot you
         // could drop straight through. Ledges are one-way, so the overlap
         // under the roadway costs nothing.
-        { x0: 0.330, x1: 0.507, y: 0.559 },   // the ledge below it
+        { x0: 0.346, x1: 0.507, y: 0.559 },   // the ledge below it (tucked just under the wall's foot)
         // The deck's left face is at 0.600 and its surface at 0.378.
         { x0: 0.602, x1: 1.000, y: 0.378 }    // the deck above, and walkable
       ],
@@ -6738,7 +6790,10 @@ class StoreScene extends WalkScene {
         // your head stops at its underside. Thin, so the solid is the
         // balcony's own deck and not a block reaching down to the floor.
         { x0: 0.000, x1: 0.340, y: 0.399, ceiling: true, h: 36 },   // left: the lever
-        { x0: 0.722, x1: 0.982, y: 0.303, ceiling: true, h: 36 }    // right: the chest
+        // Runs right up to the end of the room: the painted balcony meets the
+        // wall at 0.98, and stopping the floor there left a slot at the wall
+        // you walked off the end of, past the chest.
+        { x0: 0.722, x1: 1.000, y: 0.303, ceiling: true, h: 36 }    // right: the chest
       ],
       beats: [
         { at: 0,    say: [['PLAYER', 'Somebody left in a hurry.']],
@@ -6773,7 +6828,12 @@ class StoreScene extends WalkScene {
       // Floor to it is 261 up — a double jump — and from its left end to the
       // balcony is 131: ONE jump, as asked, with 20px to spare. At the far end
       // of its run it is still short of the window, so it never covers it.
-      this._mover({ x0: 0.345, x1: 0.485, y: 0.545, to: 0.440, ms: 5400, live: true }),
+      // Smaller, and a shorter run. There is no sprint in here (Shift is the
+      // dash), so the furthest anyone can go from its end is a walking double
+      // jump plus one air dash: about 500px. At 0.140 wide running out to
+      // 0.580 its end was 341px from the chest balcony — you could skip the
+      // lever entirely. Now 0.050 wide, running to 0.430: 700px short.
+      this._mover({ x0: 0.345, x1: 0.395, y: 0.545, to: 0.380, ms: 3600, live: true }),
       // The high one is dead until the lever, at the balcony's own height. It
       // crosses the WHOLE gap: its left edge starts at the balcony's end and
       // its right edge travels right up against the chest balcony (0.720, a
@@ -7479,7 +7539,17 @@ const Cutting = {
       im.setScale((o.m * this.pxPerM) / im.height);
     }
     const c = { im, x, y, owner: o.owner, hits: 0, dead: false, label: o.label,
-                full: !!o.full, need: o.need || 0 };
+                full: !!o.full, need: o.need || 0, gate: null };
+    if (o.gate) {
+      // A solid post in the cord's footprint, floor to the top of the room.
+      // Walk into it and you stop; cut the cord down and it goes with it.
+      const top = bg.y, h = y - top;
+      const g = this.add.rectangle(x, top + h / 2, 34, h, 0x000000, 0).setDepth(-1);
+      this.physics.add.existing(g, true);
+      this.solidsW.push(g);
+      if (this.player) this.physics.add.collider(this.player, g);
+      c.gate = g;
+    }
     this.cuttables.push(c);
     return c;
   },
@@ -7508,6 +7578,12 @@ const Cutting = {
     }
     // it goes: the top half tears away and the rest sags off its footing
     c.dead = true;
+    if (c.gate) {
+      c.gate.body.enable = false;
+      const i = this.solidsW.indexOf(c.gate);
+      if (i >= 0) this.solidsW.splice(i, 1);
+      c.gate.destroy(); c.gate = null;
+    }
     Sfx.ensure(); Sfx.squelch ? Sfx.squelch() : Sfx.land();
     this.cameras.main.shake(180, 0.006);
     this._goo(c.im.x, c.im.y - c.im.displayHeight * 0.5, 26);
@@ -7639,26 +7715,22 @@ class StorageOneScene extends WalkScene {
     ]);
     this.buildCutting();
 
-    // The way out is barred until both are down. Standing clear of the root
-    // mass in the middle of the painting and clear of each other.
-    // The way out is barred by two masses of cord grown floor to ceiling —
-    // multiple alien rope.png, turned upright. A lot of it, so five cuts
-    // each, whichever brother is swinging.
-    this.cordA = this.addCuttable({ tex: 'scene_ropemulti', xFrac: 0.760,
-      yFrac: STORAGE_FLOOR, full: true, need: 5, widthK: 0.8, label: 'CORD' });
-    this.cordB = this.addCuttable({ tex: 'scene_ropemulti', xFrac: 0.880,
-      yFrac: STORAGE_FLOOR, full: true, need: 5, widthK: 0.9, label: 'CORD' });
-
-    this.gate = this.add.rectangle(this.fx(0.930), this.groundY - 200, 40, 420,
-                                   0x000000, 0).setDepth(-1);
-    this.physics.add.existing(this.gate, true);
-    this.solidsW.push(this.gate);
-    this.physics.add.collider(this.player, this.gate);
+    // Four growths wall off the way out, every one floor to ceiling, and
+    // every one its OWN wall: you cannot walk through a cord, only cut it
+    // down. There was a single wall behind the last one, so you could walk
+    // straight through the first three.
+    //   thin   — Eterwolf's katana goes through it in one; Wolffel needs three
+    //   thick  — Wolffel's greatsword in one; Eterwolf needs three
+    //   two masses of multiple alien rope — five cuts each, whoever swings
+    const cord = (tex, xFrac, extra) => this.addCuttable(Object.assign({
+      tex, xFrac, yFrac: STORAGE_FLOOR, full: true, gate: true, label: 'CORD' }, extra));
+    this.cordThin  = cord('scene_ropethin',  0.580, { owner: 'eterwolf' });
+    this.cordThick = cord('scene_ropebig',   0.670, { owner: 'wolffel', widthK: 0.7 });
+    this.cordA     = cord('scene_ropemulti', 0.780, { need: 5, widthK: 0.95 });
+    this.cordB     = cord('scene_ropemulti', 0.890, { need: 5, widthK: 0.95 });
 
     this.onCut = () => {
       if (this.cuttables.every(c => c.dead)) {
-        this.gate.body.enable = false;
-        this.gate.destroy();
         this._showTip('THE WAY THROUGH IS CLEAR');
         this._say([['PLAYER', 'Through here.']]);
       }
