@@ -5035,8 +5035,11 @@ class WalkScene extends Phaser.Scene {
     this.input.keyboard.on('keydown-N', () => Sfx.toggleMute());
     // Not during a scripted beat or a conversation laid over the stage: the
     // restart would happen under it and leave it talking over a reset room.
+    // Nor while he is down or the stage is already leaving: the death restart
+    // is on its way, and a second exit racing it left two scenes running.
     if (cfg.canReset) this.input.keyboard.on('keydown-R', () => {
-      if (this._holdInput || this._inConversation) return;
+      if (this._holdInput || this._inConversation || this._dead || this._transitioning) return;
+      this._transitioning = true;
       this.resetStage();
     });
     if (cfg.castSwitch) this._buildCastSwitch();
@@ -5090,7 +5093,10 @@ class WalkScene extends Phaser.Scene {
     // stage, where ESC belongs to the conversation (it skips it) and would
     // otherwise do both at once.
     this.input.keyboard.on('keydown-ESC', () => {
-      if (this._inConversation) return;
+      if (this._inConversation || this._transitioning) return;
+      // Down, ESC still goes to the menu — and takes the pending restart with it.
+      if (this._downTimer) { this._downTimer.remove(); this._downTimer = null; }
+      this._transitioning = true;
       this.cameras.main.fadeOut(300, 0, 0, 0);
       this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('MenuScene'));
     });
@@ -5242,7 +5248,8 @@ class WalkScene extends Phaser.Scene {
       box.on('pointerout', () => this._paintCast());
       box.on('pointerdown', () => {
         if (c.id === this.castId) return;
-        if (this._holdInput || this._inConversation) return;   // same reason as R
+        if (this._holdInput || this._inConversation || this._dead || this._transitioning) return;   // same reason as R
+        this._transitioning = true;
         Sfx.ensure(); Sfx.select();
         GameState.castId = c.id;
         this.cameras.main.fadeOut(180, 0, 0, 0);
@@ -5546,10 +5553,22 @@ class WalkScene extends Phaser.Scene {
       // out of the storage rooms, once the thing in them is dead. Until then
       // it is not there at all: no marker, no glow, no walking off the edge.
       if (ex.when && !ex.when.call(this)) {
+        ex._gated = true;
         if (m) m.setAlpha(0);
         if (lbl) lbl.setAlpha(0);
         if (glow) glow.setAlpha(0);
         return;
+      }
+      // Opened this frame. If he is already standing at it — the fight ended
+      // by the door — it arms the moment he walks toward it, rather than
+      // making him walk away and come back.
+      if (ex._gated) {
+        ex._gated = false;
+        ex._armOnApproach = true;
+      }
+      if (ex._armOnApproach && !ex._armed) {
+        const vx = this.player.body.velocity.x;
+        if (Math.abs(vx) > 20 && Math.sign(vx) === Math.sign(ex.x - this.player.x)) ex._armed = true;
       }
       // a combat exit that needs the weapon stays locked until it's picked up
       const locked = ex.needWeapon && !GameState.hasWeapon;
@@ -5767,7 +5786,13 @@ const WalkCombat = {
     this._comboStep = 0;
     this._comboUntil = 0;
     this._gunDrop = null;
+    this._downTimer = null;
     this.onEnemyKilled = null;
+    // A left click is a shot only if it did not land on a button — SKIP, the
+    // cast switch — which would otherwise fire as well as press.
+    this._ptrFire = false;
+    this.input.on('pointerdown', (ptr, over) => { this._ptrFire = ptr.button === 0 && !over.length; });
+    this.input.on('pointerup', () => { this._ptrFire = false; });
     this.onPistol = null;
     alienClips(this);
   },
@@ -5939,6 +5964,7 @@ const WalkCombat = {
     const p = this.player, hero = p._hero;
     this.tweens.killTweensOf(p);
     p.setAlpha(1);
+    p.clearTint();            // the last hit's red fill would cover the whole clip
     p.setVelocityX(0);
     p._gunUntil = 0; p._swingUntil = 0;
     if (hero && heroHas(hero, 'death')) {
@@ -5962,7 +5988,8 @@ const WalkCombat = {
       fontFamily: 'Courier New, monospace', fontSize: '18px', color: '#d9c7a8'
     }).setOrigin(0.5).setScrollFactor(0).setDepth(81).setAlpha(0);
     this.tweens.add({ targets: [ov, t1, t2], alpha: 1, duration: 500 });
-    this.time.delayedCall(2600, () => {
+    this._downTimer = this.time.delayedCall(2600, () => {
+      this._downTimer = null;
       if (this._transitioning) return;
       this._transitioning = true;
       this.cameras.main.fadeOut(300, 0, 0, 0);
@@ -6112,7 +6139,7 @@ const WalkCombat = {
     if (!GameState.hasPistol || this._dead || this._holdInput || this._transitioning ||
         this._inConversation || this._editorMode) return;
     const ptr = this.input.activePointer;
-    const mouse = ptr.isDown && ptr.button === 0;
+    const mouse = ptr.isDown && ptr.button === 0 && this._ptrFire;
     const firing = mouse || (this.keys.K && this.keys.K.isDown);
     if (!firing) return;
     const p = this.player;
@@ -6146,6 +6173,9 @@ const WalkCombat = {
       .setBlendMode(Phaser.BlendModes.ADD).setFlipX(face < 0);
     b._vx = face * 7.2 * this.charH;
     b._born = now;
+    // The first step is tested from him, not from the muzzle, or an alien
+    // already on top of him sits between the two and every round misses it.
+    b._x0 = p.x;
     this.bullets.push(b);
     const fl = this.add.image(mx, my, 'flash_0').setDepth(12).setScale(k)
       .setBlendMode(Phaser.BlendModes.ADD);
@@ -6159,7 +6189,8 @@ const WalkCombat = {
   _updateBullets(now, dt) {
     this.bullets = this.bullets.filter(b => {
       if (!b.active) return false;
-      const px = b.x;
+      const px = b._x0 != null ? b._x0 : b.x;
+      b._x0 = null;
       b.x += b._vx * dt;
       if (now - b._born > 1100 || b.x < -40 || b.x > this.worldW + 40) { b.destroy(); return false; }
       const lo = Math.min(px, b.x), hi = Math.max(px, b.x);
