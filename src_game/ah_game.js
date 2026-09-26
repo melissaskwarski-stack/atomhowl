@@ -5303,8 +5303,17 @@ class WalkScene extends Phaser.Scene {
 
     this.hudCam = null;
     this._overview = false;
+    // A stage can pull the camera back to take in more of itself: 'fitHeight'
+    // shows the whole height of the world, so the camera never has to move up
+    // or down and only follows along. The screen's furniture goes on its own
+    // camera and keeps its size.
+    if (cfg.camZoom) {
+      const cam = this.cameras.main;
+      cam.setZoom(cfg.camZoom === 'fitHeight' ? cam.height / (cfg.worldH || 720) : cfg.camZoom);
+    }
     this.cameras.main.startFollow(this.player, false, 0.1, 0.1);
     this.cameras.main.setDeadzone(100, 80);
+    if (cfg.camZoom) this.time.delayedCall(0, () => this._hudCamOn());
     this._look = 0;
     this._camBias = { v: 0 };
 
@@ -8824,6 +8833,9 @@ class DashScene extends WalkScene {
       // so 1.6 — the widest this painting can go and still need the double.
       // The whole crossing, ledge to deck, is on screen at once.
       worldW: 'auto', bgZoom: 1.6, worldH: 1066, startXFrac: 0.02,
+      // Pulled back so the whole drop is in the picture top to bottom: you see
+      // where the ledges are before you jump for them.
+      camZoom: 'fitHeight',
       fallRestart: true,
       // The floor line is the roadway he starts on. Nothing else uses it —
       // the whole world is a hole and every surface is a ledge — but a missed
