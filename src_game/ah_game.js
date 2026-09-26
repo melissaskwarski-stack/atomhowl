@@ -6658,6 +6658,12 @@ Object.assign(WalkScene.prototype, WalkCombat);
 
 // The tienda's horde: three in the front, three through the window.
 const HORDE_TOTAL = 6;
+// The window: how see-through the pane is (the fire outside glows through),
+// where on it the thing outside hits, and the shards cut from window
+// shattered.png — 40 pieces, biggest first, each centred in an 80px cell.
+const PANE_ALPHA = 0.8;
+const GLASS_HIT = { x: 0.54, y: 0.44 };
+const GLASS_SHARDS = { key: 'scene_glassshards', n: 40, cols: 8, cw: 80, ch: 80 };
 
 // ================================================================== //
 //  THINGS TO LOOK AT                                                  //
@@ -9060,7 +9066,7 @@ class StoreScene extends WalkScene {
     [900, 1350].forEach((ms, i) => at(ms, () => {
       Sfx.ensure(); Sfx.burst(0.09, 0.45 + i * 0.1, 260, 1.1); Sfx.burst(0.05, 0.2, 2600, 3);
       cam.shake(90, 0.002 + i * 0.001);
-      if (this.glass) this.tweens.add({ targets: this.glass, alpha: 0.35, duration: 60, yoyo: true });
+      this._knockGlass(i);
     }));
     at(1900, () => this._windowCrash(true));
     at(2900, () => { Sfx.ensure(); Sfx.roar(); cam.shake(260, 0.004); });
@@ -9268,48 +9274,161 @@ class StoreScene extends WalkScene {
     });
   }
 
-  // Glass in the window: a faint cool pane, and a sheen that drifts across it
-  // now and then, clipped to the frame. It is here so there is something to
-  // break — breakWindow() shatters it, and nothing calls that yet. When the
-  // horde comes in through the front of the shop, that is the call.
+  // Glass in the window: window glass.png, fitted to the painted opening with
+  // its rim kept (tienda_pane.png, baked to the window's shape) and a little
+  // see-through so the fire outside glows behind the grime. A soft glint
+  // drifts across it now and then. Once the shop has been cleared the window
+  // stays broken.
   _buildGlass(box) {
     const x0 = this.fx(box.x0), x1 = this.fx(box.x1);
     const y0 = this.fy(box.y0), y1 = this.fy(box.y1);
     const w = x1 - x0, h = y1 - y0;
     this.glassBox = { x0, y0, w, h };
-    this.glass = this.add.rectangle(x0 + w / 2, y0 + h / 2, w, h, 0xa8c8dc, 0.11)
-      .setDepth(-15).setBlendMode(Phaser.BlendModes.ADD);
+    this._shards = [];
+    const broken = !!GameState.seen['tienda-cleared'];
+    const key = broken ? 'scene_panebroken' : 'scene_panewhole';
+    if (this.textures.exists(key)) {
+      this.pane = this.add.image(x0, y0, key).setOrigin(0, 0).setDisplaySize(w, h)
+        .setDepth(-15).setAlpha(PANE_ALPHA);
+    }
+    this.glass = broken ? null : (this.pane || this.add.rectangle(x0 + w / 2, y0 + h / 2, w, h, 0xa8c8dc, 0.11).setDepth(-15));
+    if (broken) return;
     const clip = this.make.graphics({ x: 0, y: 0 }, false);
     clip.fillStyle(0xffffff); clip.fillRect(x0, y0, w, h);
+    this._glassClip = clip;
     const mask = clip.createGeometryMask();
-    this.glassSheen = this.add.rectangle(x0 - w, y0 + h / 2, w * 0.22, h * 1.8, 0xe8f4ff, 0.16)
+    this.glassSheen = this.add.rectangle(x0 - w, y0 + h / 2, w * 0.2, h * 1.8, 0xe8f4ff, 0.09)
       .setDepth(-14).setBlendMode(Phaser.BlendModes.ADD).setRotation(-0.45).setMask(mask);
-    this.glassSheen._mask = clip;
     const sweep = () => {
       if (!this.glassSheen) return;
       this.glassSheen.x = x0 - w * 0.6;
-      this.tweens.add({ targets: this.glassSheen, x: x1 + w * 0.6, duration: 1700,
-        ease: 'Sine.easeInOut', onComplete: () => this.time.delayedCall(3800, sweep) });
+      this.tweens.add({ targets: this.glassSheen, x: x1 + w * 0.6, duration: 1900,
+        ease: 'Sine.easeInOut', onComplete: () => this.time.delayedCall(4200, sweep) });
     };
     this.time.delayedCall(1200, sweep);
   }
 
+  // Something hits it from outside: the pane jolts and catches the light, and
+  // the second time a spider crack spreads from where it hit.
+  _knockGlass(i) {
+    const pane = this.pane, gb = this.glassBox;
+    if (!pane || !this.glass) return;
+    const x = pane.x;
+    this.tweens.add({ targets: pane, x: x + (i ? -2 : 1.5), duration: 40, yoyo: true, repeat: 1,
+                      onComplete: () => { pane.x = x; } });
+    const glint = this.add.rectangle(gb.x0 + gb.w / 2, gb.y0 + gb.h / 2, gb.w, gb.h, 0xdfefff, 0.22)
+      .setDepth(-14).setBlendMode(Phaser.BlendModes.ADD);
+    this.tweens.add({ targets: glint, alpha: 0, duration: 140, onComplete: () => glint.destroy() });
+    if (i === 1 && !this._crack) {
+      const cx = gb.x0 + gb.w * GLASS_HIT.x, cy = gb.y0 + gb.h * GLASS_HIT.y;
+      const g = this.add.graphics().setDepth(-14.5).setBlendMode(Phaser.BlendModes.ADD);
+      g.lineStyle(1, 0xd8ecf8, 0.4);
+      for (let k = 0; k < 9; k++) {
+        const th = k / 9 * Math.PI * 2 + (k % 3) * 0.21;
+        const len = gb.w * (0.18 + ((k * 37) % 10) / 30);
+        const mx = cx + Math.cos(th) * len * 0.5 + Math.sin(th) * 2, my = cy + Math.sin(th) * len * 0.5;
+        g.beginPath(); g.moveTo(cx, cy); g.lineTo(mx, my);
+        g.lineTo(cx + Math.cos(th + 0.12) * len, cy + Math.sin(th + 0.12) * len); g.strokePath();
+      }
+      g.lineStyle(1, 0xd8ecf8, 0.3);
+      g.strokeCircle(cx, cy, gb.w * 0.05);
+      if (this._glassClip) g.setMask(this._glassClip.createGeometryMask());
+      this._crack = g;
+    }
+  }
+
+  // The pane goes: a flash, your shatter art bursting out of the frame, and
+  // the shards themselves — cut out of it — flying into the room, spinning and
+  // catching the light, bouncing once on the floorboards and lying there a
+  // moment before they fade. What is left in the frame is the broken pane.
   breakWindow() {
     if (!this.glass) return;
     const { x0, y0, w, h } = this.glassBox;
+    const hx = x0 + w * GLASS_HIT.x, hy = y0 + h * GLASS_HIT.y;
     Sfx.ensure(); Sfx.burst(0.22, 0.6, 3200, 0.9); Sfx.burst(0.35, 0.35, 1400, 1.2);
-    this.cameras.main.shake(160, 0.004);
-    for (let i = 0; i < 26; i++) {
-      const f = ((i * 2654435761) % 1000) / 1000, g = ((i * 40503) % 997) / 997;
-      const sx = x0 + f * w, sy = y0 + g * h;
-      const sh = this.add.triangle(sx, sy, 0, 0, 6 + f * 10, 2, 3, 8 + g * 12, 0xcfe4f2, 0.8)
-        .setDepth(9).setBlendMode(Phaser.BlendModes.ADD);
-      this.tweens.add({ targets: sh, x: sx + (f - 0.5) * 220, y: this.groundY - 4,
-        angle: (g - 0.5) * 720, alpha: 0, duration: 600 + g * 500, ease: 'Quad.easeIn',
-        onComplete: () => sh.destroy() });
+    Sfx.blip(3400, 0.12, 'triangle', 0.08, 5200);
+    this.cameras.main.shake(180, 0.005);
+    // the frame keeps its teeth
+    if (this.pane && this.textures.exists('scene_panebroken')) this.pane.setTexture('scene_panebroken').setDisplaySize(w, h);
+    else if (this.pane) this.pane.destroy();
+    this.glass = null;
+    if (this.glassSheen) { this.glassSheen.destroy(); this.glassSheen = null; }
+    if (this._crack) { this._crack.destroy(); this._crack = null; }
+    // the flash
+    torchTexture(this);
+    const fl = this.add.image(hx, hy, TORCH_KEY).setDepth(9.5).setBlendMode(Phaser.BlendModes.ADD)
+      .setTint(0xdcecff).setDisplaySize(w * 2.6, h * 1.8).setAlpha(0.95);
+    this.tweens.add({ targets: fl, alpha: 0, duration: 160, onComplete: () => fl.destroy() });
+    // your burst, the frame's size, blowing out
+    if (this.textures.exists('scene_glassburst')) {
+      // in front of whatever comes through, and a lit copy on top for the glints
+      const s0 = (w * 1.6) / this.textures.get('scene_glassburst').getSourceImage().width;
+      [[9.6, Phaser.BlendModes.NORMAL, 1], [9.7, Phaser.BlendModes.ADD, 0.7]].forEach(([d, mode, a]) => {
+        const bu = this.add.image(hx, hy, 'scene_glassburst').setDepth(d).setBlendMode(mode)
+          .setScale(s0).setAlpha(a);
+        this.tweens.add({ targets: bu, scale: s0 * 2.3, alpha: 0, duration: 340, ease: 'Quad.easeOut',
+                          onComplete: () => bu.destroy() });
+      });
     }
-    this.glass.destroy(); this.glass = null;
-    if (this.glassSheen) { this.glassSheen._mask.destroy(); this.glassSheen.destroy(); this.glassSheen = null; }
+    // and the pieces
+    const frames = sheetFrames(this, GLASS_SHARDS, 'gs');
+    const H = this.alienH(), into = this.player.x >= hx ? 1 : -1;
+    const n = frames ? 30 : 26;
+    for (let i = 0; i < n; i++) {
+      const f = ((i * 2654435761) >>> 0) % 1000 / 1000, g = ((i * 40503 + 7) >>> 0) % 997 / 997;
+      const sx = x0 + w * (0.15 + 0.7 * f), sy = y0 + h * (0.15 + 0.7 * g);
+      let sp;
+      if (frames) {
+        // the big pieces first, then the rest; each cell is shown at half size
+        const fr = frames[i % frames.length];
+        sp = this.add.image(sx, sy, fr.key, fr.frame).setScale(0.5 * (0.6 + 0.6 * g));
+      } else {
+        sp = this.add.triangle(sx, sy, 0, 0, 6 + f * 10, 2, 3, 8 + g * 12, 0xcfe4f2, 0.8);
+      }
+      sp.setDepth(9).setAngle(f * 360);
+      // out from where it was hit, most of it into the room, a few back out
+      const away = Math.atan2(sy - hy, sx - hx);
+      const back = i % 7 === 6;
+      const spd = H * (1.2 + 1.8 * f);
+      this._shards.push({ sp, vx: Math.cos(away) * spd * 0.6 + (back ? -1 : 1) * into * spd * 0.8,
+                          vy: Math.sin(away) * spd * 0.5 - H * (0.6 + g), spin: (g - 0.5) * 900,
+                          floor: this.groundY - 2 - g * 6, bounced: false, rest: 0, big: i < 12,
+                          glint: 400 + f * 900, back });
+    }
+  }
+
+  // Each frame: gravity, spin, a glint as they turn, one low bounce, then a
+  // rest on the floor and a fade.
+  _updateShards(now, delta) {
+    if (!this._shards || !this._shards.length) return;
+    const dt = Math.min(0.05, delta / 1000), G = this.physics.world.gravity.y || 1400;
+    let tinkles = 0;
+    this._shards = this._shards.filter(s => {
+      const sp = s.sp;
+      if (!sp.active) return false;
+      if (s.rest) {
+        if (now - s.rest > 2600) { this.tweens.add({ targets: sp, alpha: 0, duration: 700, onComplete: () => sp.destroy() }); return false; }
+        return true;
+      }
+      s.vy += G * dt;
+      sp.x += s.vx * dt; sp.y += s.vy * dt; sp.angle += s.spin * dt;
+      // the ones knocked back out the window fall away behind the wall
+      if (s.back && sp.y > this.glassBox.y0 + this.glassBox.h) { sp.setDepth(-16); }
+      s.glint -= delta;
+      if (s.glint < 0) { s.glint = 500 + Math.random() * 700; sp.setTintFill && sp.setTintFill(0xffffff);
+        this.time.delayedCall(40, () => { if (sp.active && sp.clearTint) sp.clearTint(); }); }
+      if (sp.y >= s.floor && s.vy > 0) {
+        sp.y = s.floor;
+        if (!s.bounced && s.vy > 120) {
+          s.bounced = true; s.vy *= -0.22; s.vx *= 0.45; s.spin *= 0.3;
+          if (s.big && tinkles < 2 && now > (this._tinkleAt || 0)) {
+            tinkles++; this._tinkleAt = now + 90;
+            Sfx.blip(2600 + Math.random() * 1800, 0.05, 'triangle', 0.035, 3800);
+          }
+        } else { s.rest = now; s.vx = s.vy = 0; if (s.back) sp.setVisible(false); }
+      }
+      return true;
+    });
   }
 
   _atChest() {
@@ -9393,6 +9512,7 @@ class StoreScene extends WalkScene {
   update(time, delta) {
     super.update(time, delta);
     if (!this.player || this._transitioning) return;
+    this._updateShards(this.time.now, delta || 16);
 
     // ---- carry the ledges, and whoever is standing on them ----------
     const d = Math.min(48, delta || 16);

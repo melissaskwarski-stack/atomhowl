@@ -129,6 +129,12 @@ const SCENE_SRC = {
   alienface:    ['public/assets/alien_encounter_sheet.png'],
   // jump through window.gif, 17 frames on the walk's 247 box (ALIEN_JUMP_SHEET)
   alienjump:    ['public/assets/alien_window_jump.png'],
+  // The tienda window: window glass.png baked to the window's shape (whole and
+  // broken), and window shattered.png as a burst plus its shards cut apart.
+  panewhole:    ['public/assets/tienda_pane.png'],
+  panebroken:   ['public/assets/tienda_pane_broken.png'],
+  glassshards:  ['public/assets/glass_shards.png'],
+  glassburst:   ['public/assets/glass_burst.png'],
   // The bunker's food box: closed (closed box.png, trimmed and downscaled),
   // and open (cut from bunker new.png, where the painting has it).
   bunkerboxclosed: ['public/assets/bunker_box_closed.png'],
