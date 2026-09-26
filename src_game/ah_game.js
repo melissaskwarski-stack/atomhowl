@@ -9201,31 +9201,36 @@ class StoreScene extends WalkScene {
 
   // The whole shop in the picture and the camera still: a horde fight you
   // can see all of — the front door they come in by, the window, him.
+  // The horde fight: a little further back than walking about, so there is
+  // room to see them coming — but still following him, and never past the
+  // painting's own top and bottom (it is exactly the room's height at this
+  // zoom), so there is no black anywhere.
   _hordeView(ms) {
-    const cam = this.cameras.main;
+    const cam = this.cameras.main, p = this.player;
     const wh = (this.cfg && this.cfg.worldH) || 720;
-    const z = Math.min(cam.width / this.worldW, cam.height / wh);
+    const z = cam.height / wh;
     this._hudCamOn();
     this._overview = true;
-    cam.stopFollow();
-    // the shop is wider than it is tall, so the picture has room above and
-    // below it: let the camera sit centred rather than clamped to the top
-    cam.useBounds = false;
-    cam.pan(this.worldW / 2, wh / 2, ms, 'Sine.easeInOut', true);
+    cam.useBounds = true;
     cam.zoomTo(z, ms, 'Sine.easeInOut', true);
+    if (cam._follow !== p) {
+      // coming back from the window: over to him first, then follow
+      cam.pan(p.x, p.y, ms, 'Sine.easeInOut', true, (c, t) => {
+        if (t < 1 || !p.active) return;
+        cam.startFollow(p, false, 0.1, 0.1);
+        this._look = 0;
+        if (this._camBias) this._camBias.v = 0;
+      });
+    }
   }
 
-  // The fight over: back in on him, and the camera follows again.
+  // The fight over: back in to the usual distance.
   _followAgain(ms) {
     const cam = this.cameras.main, p = this.player;
     this._overview = false;
-    cam.pan(p.x, p.y, ms, 'Sine.easeInOut', true);
     cam.zoomTo(1, ms, 'Sine.easeInOut', true, (c, t) => {
       if (t < 1 || !p.active) return;
-      cam.useBounds = true;
-      cam.startFollow(p, false, 0.1, 0.1);
-      this._look = 0;
-      if (this._camBias) this._camBias.v = 0;
+      if (cam._follow !== p) cam.startFollow(p, false, 0.1, 0.1);
       this._hudCamOff();
     });
   }
