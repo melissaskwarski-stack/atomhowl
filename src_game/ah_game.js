@@ -5301,6 +5301,8 @@ class WalkScene extends Phaser.Scene {
       this._drawSolids();
     });
 
+    this.hudCam = null;
+    this._overview = false;
     this.cameras.main.startFollow(this.player, false, 0.1, 0.1);
     this.cameras.main.setDeadzone(100, 80);
     this._look = 0;
@@ -5309,15 +5311,6 @@ class WalkScene extends Phaser.Scene {
     // input
     this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,SHIFT,M,E,ENTER,R,K');
     this.input.keyboard.on('keydown-N', () => Sfx.toggleMute());
-    // Walked in off the last stage: that stage is still on screen, and this
-    // one pushes it off. Whatever he was holding he is still holding.
-    if (XFER.img) {
-      ['A', 'D', 'LEFT', 'RIGHT', 'SHIFT'].forEach(n => {
-        const k = this.keys[n];
-        if (k && HELD_KEYS.has(k.keyCode)) { k.isDown = true; k.isUp = false; k.timeDown = this.time.now; }
-      });
-      this._xferIn();
-    }
     // Not during a scripted beat or a conversation laid over the stage: the
     // restart would happen under it and leave it talking over a reset room.
     // Nor while he is down or the stage is already leaving: the death restart
@@ -5501,6 +5494,42 @@ class WalkScene extends Phaser.Scene {
     if (!p._real || !hero) return;
     const key = heroAnim(hero, 'idle', p._facing);
     if (p._curAnim !== key) { playAction(p, hero, 'idle', p._facing); p._curAnim = key; }
+  }
+
+  // When the main camera pulls back to take in a whole room, the screen's own
+  // furniture — hearts, tips, the hint bar, the bars of a cutscene, anything
+  // pinned to the screen — goes on a second camera that never zooms, so it
+  // stays its size. Everything in the world stays on the main one. New
+  // things are sorted as they appear.
+  _hudCamOn() {
+    if (this.hudCam) return;
+    const main = this.cameras.main;
+    this.hudCam = this.cameras.add(0, 0, main.width, main.height);
+    this.hudCam.setScroll(0, 0);
+    this.children.list.forEach(o => { o._camSorted = false; });
+    this._sortCams();
+  }
+
+  _hudCamOff() {
+    if (!this.hudCam) return;
+    this.cameras.remove(this.hudCam);
+    this.hudCam = null;
+    this.children.list.forEach(o => { o.cameraFilter = 0; o._camSorted = false; });
+    [this._sayText, this._sayName].forEach(t => t && t.setScale(1));
+  }
+
+  _sortCams() {
+    if (!this.hudCam) return;
+    const main = this.cameras.main;
+    this.children.list.forEach(o => {
+      if (o._camSorted) return;
+      o._camSorted = true;
+      if (o.scrollFactorX === 0 && o.scrollFactorY === 0) main.ignore(o);
+      else this.hudCam.ignore(o);
+    });
+    // what he says, drawn over his head in the world, at a size you can read
+    const k = 1 / main.zoom;
+    [this._sayText, this._sayName].forEach(t => t && t.scaleX !== k && t.setScale(k));
   }
 
   // The camera leads him a little the way he is facing, so he sees more of
@@ -5849,6 +5878,7 @@ class WalkScene extends Phaser.Scene {
     this._updateCombat(now, delta);
     this._updateInspects();
     this._updateCamera(onGround);
+    this._sortCams();
 
     if (this.grain && this.game.loop.frame % 3 === 0) {
       this._gf = (this._gf + 1) % 3;
@@ -6026,36 +6056,6 @@ class WalkScene extends Phaser.Scene {
     if (best) this.cutOnce(best);
   }
 
-  // The last stage, pushed off by this one: the camera's viewport comes in
-  // from the side he walked out of while the picture of the last stage slides
-  // out the other way, the two edge to edge, so it is one move to the right
-  // (or left, or down) and never a cut through black. A doorway dissolves.
-  _xferIn() {
-    const img = XFER.img, dir = XFER.dir;
-    XFER.img = null;
-    const cam = this.cameras.main;
-    const v = { right: [1, 0], left: [-1, 0], down: [0, 1], up: [0, -1] }[dir] || [0, 0];
-    const t = { k: 0 };
-    const apply = () => {
-      const e = t.k;
-      if (v[0] || v[1]) {
-        cam.setPosition(v[0] * cam.width * (1 - e), v[1] * cam.height * (1 - e));
-        img.style.transform = `translate(${-v[0] * 100 * e}%, ${-v[1] * 100 * e}%)`;
-      } else {
-        img.style.opacity = String(1 - e);
-      }
-    };
-    const done = () => { cam.setPosition(0, 0); if (img.parentNode) img.parentNode.removeChild(img); };
-    // Once create has run: undo its fade in from black, and go.
-    this.events.once('update', () => {
-      cam.resetFX();
-      apply();
-      this.tweens.add({ targets: t, k: 1, duration: v[0] || v[1] ? XFER_MS : XFER_DOOR_MS,
-                        ease: 'Sine.easeInOut', onUpdate: apply, onComplete: done });
-    });
-    this.events.once('shutdown', done);
-  }
-
   goExit(ex) {
     this._transitioning = true;
     this.player.setVelocityX(0);
@@ -6065,59 +6065,16 @@ class WalkScene extends Phaser.Scene {
       this.player._curAnim = heroAnim(this.player._hero, 'idle', this.player._facing);
     }
     Sfx.ensure(); Sfx.dash();
-    const target = ex.kind === 'combat' ? 'GameScene' : ex.target;
-    const data = Object.assign({}, ex.data || {}, ex.spawnXFrac != null ? { spawnXFrac: ex.spawnXFrac } : {});
-    // Walking stage to walking stage: no black at all. Off an edge the next
-    // one pushes this one aside; through a doorway it dissolves in. Only an
-    // exit that asks for it (out of the bunker) still fades.
-    const next = this.scene.get(target);
-    if (next instanceof WalkScene && !ex.fade) {
-      const dir = ex.dir || (ex.auto ? (ex.xFrac > 0.5 ? 'right' : 'left') : 'door');
-      xferOut(this, dir, () => this.scene.start(target, data));
-      return;
-    }
     // Short. One stage running into the next is a step, not a scene change,
     // and 450 out plus 600 in is a second of black every time you walk off
     // the edge of a screen — which is what made the walk feel broken up.
     this.cameras.main.fadeOut(ex.fadeMs || 260, 0, 0, 0);
-    this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start(target, data));
+    this.cameras.main.once('camerafadeoutcomplete', () => {
+      const target = ex.kind === 'combat' ? 'GameScene' : ex.target;
+      this.scene.start(target, Object.assign({}, ex.data || {},
+        ex.spawnXFrac != null ? { spawnXFrac: ex.spawnXFrac } : {}));
+    });
   }
-}
-
-// ---- stage to stage ---------------------------------------------------------
-// The picture of the stage being left, laid over the canvas as a plain image
-// so it outlives the scene; the next stage's _xferIn moves it off.
-const XFER = { img: null, dir: null };
-const XFER_MS = 480;
-const XFER_DOOR_MS = 380;
-function xferOut(scene, dir, go) {
-  const canvas = scene.game.canvas, host = canvas.parentNode;
-  let fired = false;
-  const fire = img => {
-    if (fired) return;
-    fired = true;
-    if (img && host) {
-      if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
-      const cr = canvas.getBoundingClientRect(), hr = host.getBoundingClientRect();
-      img.style.cssText = `position:absolute;left:${cr.left - hr.left + host.scrollLeft - host.clientLeft}px;` +
-        `top:${cr.top - hr.top + host.scrollTop - host.clientTop}px;width:${cr.width}px;height:${cr.height}px;` +
-        'pointer-events:none;z-index:5;will-change:transform,opacity;';
-      host.appendChild(img);
-      XFER.img = img; XFER.dir = dir;
-    }
-    go();
-  };
-  try { scene.game.renderer.snapshot(fire); } catch (e) { fire(null); }
-  // no picture in time (a lost context, a blocked read): just go
-  scene.time.delayedCall(250, () => fire(null));
-}
-// Keys held down right now, whichever scene is listening, so walking off one
-// stage keeps him walking in the next.
-const HELD_KEYS = new Set();
-if (typeof window !== 'undefined') {
-  window.addEventListener('keydown', e => HELD_KEYS.add(e.keyCode), true);
-  window.addEventListener('keyup', e => HELD_KEYS.delete(e.keyCode), true);
-  window.addEventListener('blur', () => HELD_KEYS.clear());
 }
 
 // ================================================================== //
@@ -6803,9 +6760,15 @@ const Inspect = {
 
   _retireInspect(it) {
     it.live = false;
-    [it.spark, it.dot].forEach(o => { if (o) { this.tweens.killTweensOf(o); o.destroy(); } });
+    // the glint goes out slowly, not all at once
+    [it.spark, it.dot].forEach(o => {
+      if (!o) return;
+      this.tweens.killTweensOf(o);
+      this.tweens.add({ targets: o, alpha: 0, scale: o.scale * 0.6, duration: 900, ease: 'Sine.easeOut',
+                        onComplete: () => o.destroy() });
+    });
     it.spark = it.dot = null;
-    it.lbl.setAlpha(0);
+    this.tweens.add({ targets: it.lbl, alpha: 0, duration: 300 });
   },
 
   // Full screen: a picture (the letter's paper, a portrait), optional
@@ -6956,18 +6919,24 @@ class BunkerScene extends WalkScene {
         // for a hole knocked in a wall — it lights whatever is DARK inside the
         // box, and a blast door is the brightest thing in this room, so it lit
         // the shadows around the frame instead of the door.
-        { xFrac: 0.90, w: 180, label: 'EXIT THE BUNKER', target: 'ExitScene', fade: true,
+        { xFrac: 0.90, w: 180, label: 'EXIT THE BUNKER', target: 'ExitScene',
           glow: true, noArrow: true, glowShape: false,
           glowFrac: { x0: 0.838, x1: 0.952, y0: 0.264, y1: 0.775 },
-          // Out to where, though? Not until the radio has said.
-          locked: () => !GameState.seen['bunker-radio'],
+          // Out to where, though? Not until the radio has said — and not on
+          // an empty stomach. Both, then the door.
+          locked: () => !GameState.seen['bunker-radio'] || !GameState.seen['bunker-ate'],
           lockedLabel: 'GO WHERE, THOUGH?',
           onLocked() {
             if (this.time.now < (this._doorNagAt || 0)) return;
             this._doorNagAt = this.time.now + 2600;
             Sfx.ensure(); Sfx.deny();
-            this._say([['ETERWOLF', 'Go where, though?']]);
-            this._showTip("THERE'S A RADIO ON THE BENCH  —  E");
+            if (!GameState.seen['bunker-radio']) {
+              this._say([['ETERWOLF', 'Go where, though?']]);
+              this._showTip("THERE'S A RADIO ON THE BENCH  —  E");
+            } else {
+              this._say([['WOLFFEL', 'Not on an empty stomach.']]);
+              this._showTip('THE BOX BY THE DOOR  —  E TO OPEN');
+            }
           } }
       ],
       drawFallback(WW) {
@@ -7000,6 +6969,7 @@ class BunkerScene extends WalkScene {
     this._nudged = false;
     this._chatter = null;
     this._calmIdle = false;
+    this._doorOpen = false;
     this._buildRadio();
     this._buildCrate();
     this.input.keyboard.on('keydown-E', () => {
@@ -7274,14 +7244,42 @@ class BunkerScene extends WalkScene {
       const want = (this._radioUsed ? 0.05 : 0.03) * near;
       if (Math.abs(this._static.volume - want) > 0.004) this._static.setVolume(want, 250);
     }
-    // Heading for the door with the radio heard and the arepas uneaten.
-    if (this._radioUsed && !this._ate && !this._nudged && this.crate &&
-        this.player.x > this.crateX + 150 && !this._inConversation) {
-      this._nudged = true;
-      this._say([['ETERWOLF', 'Should eat something first.']]);
-    }
+    const door = this.exits && this.exits.find(e => e.target === 'ExitScene');
+    if (door) door.lockedLabel = this._radioUsed ? 'NOT ON AN EMPTY STOMACH' : 'GO WHERE, THOUGH?';
   }
 }
+
+// The blast door opens: open door.png (the frame, the stairs up behind it,
+// the door swung out into the room) laid exactly over the painted door, then
+// out. Its frame (x 220-885, y 108-1000 of the upload) is fitted to the
+// painted frame (x 1701-1966, y 201-577); the file is baked at twice the
+// painting's scale, anchored at that frame corner.
+BunkerScene.prototype.goExit = function (ex) {
+  if (ex.target !== 'ExitScene' || this._doorOpen) return WalkScene.prototype.goExit.call(this, ex);
+  this._doorOpen = true;
+  this._transitioning = true;
+  const p = this.player;
+  p.setVelocityX(0);
+  if (p._real) { playAction(p, p._hero, 'idle', p._facing); p._curAnim = heroAnim(p._hero, 'idle', p._facing); }
+  const bg = this.bgGeom, D = BUNKER_ART.door;
+  if (this.textures.exists('scene_bunkerdooropen')) {
+    const at = this._paintToWorld(D.frame[0], D.frame[1]);
+    const tex = this.textures.get('scene_bunkerdooropen').getSourceImage();
+    const im = this.add.image(at.x, at.y, 'scene_bunkerdooropen')
+      .setOrigin(D.anchor[0] / tex.width, D.anchor[1] / tex.height)
+      .setScale(bg.w / BUNKER_ART.w / 2, bg.h / BUNKER_ART.h / 2).setDepth(5.5).setAlpha(0);
+    this.tweens.add({ targets: im, alpha: 1, duration: 160 });
+  }
+  // the red light over it goes out of the picture: the door is the light now
+  (this.exitMarkers || []).forEach(m => { if (m.ex && m.ex.target === 'ExitScene' && m.glow) m.glow.setVisible(false); });
+  // the bolts, the seal, and the weight of it swinging
+  Sfx.ensure();
+  Sfx.blip(900, 0.05, 'square', 0.08, 500);
+  this.time.delayedCall(120, () => Sfx.blip(700, 0.05, 'square', 0.08, 400));
+  this.time.delayedCall(220, () => { Sfx.burst(0.35, 0.45, 220, 0.8); Sfx.blip(90, 0.4, 'sawtooth', 0.06, 60); });
+  this.cameras.main.shake(260, 0.003);
+  this.time.delayedCall(900, () => { if (this.scene.isActive()) WalkScene.prototype.goExit.call(this, ex); });
+};
 
 // Where things are on the bunker painting (bunker_wide.png, 2048x768), read
 // off 6x grid crops of it.
@@ -7294,7 +7292,9 @@ const BUNKER_ART = {
   // the food box: where the painted open one was cut from (bunker_box_open.png
   // is that cut, 197x97), and the closed one stood on the same floor, the
   // width of the open box's body
-  box: { open: { x: 1400, y: 512 }, cx: 1492, foot: 597, w: 150 }
+  box: { open: { x: 1400, y: 512 }, cx: 1492, foot: 597, w: 150 },
+  // the blast door's frame corner, and the same corner on bunker_door_open.png
+  door: { frame: [1701, 201], anchor: [175.3, 91.0] }
 };
 
 // The broadcast: a voice they don't know, cut to pieces by static.
@@ -9180,11 +9180,43 @@ class StoreScene extends WalkScene {
       playTrack('fightMusic');
       Sfx.ensure(); Sfx.roar();
       this.cameras.main.shake(300, 0.004);
+      this._hordeView(1300);
       this.startCombat();
       this._say([['PLAYER', 'The front. Something is coming in the front.']]);
       this._showTip('THEY ARE COMING IN FROM THE STREET');
     });
     [1900, 4700, 7500].forEach((t, i) => this.time.delayedCall(t, () => this._hordeAlien(i)));
+  }
+
+  // The whole shop in the picture and the camera still: a horde fight you
+  // can see all of — the front door they come in by, the window, him.
+  _hordeView(ms) {
+    const cam = this.cameras.main;
+    const wh = (this.cfg && this.cfg.worldH) || 720;
+    const z = Math.min(cam.width / this.worldW, cam.height / wh);
+    this._hudCamOn();
+    this._overview = true;
+    cam.stopFollow();
+    // the shop is wider than it is tall, so the picture has room above and
+    // below it: let the camera sit centred rather than clamped to the top
+    cam.useBounds = false;
+    cam.pan(this.worldW / 2, wh / 2, ms, 'Sine.easeInOut', true);
+    cam.zoomTo(z, ms, 'Sine.easeInOut', true);
+  }
+
+  // The fight over: back in on him, and the camera follows again.
+  _followAgain(ms) {
+    const cam = this.cameras.main, p = this.player;
+    this._overview = false;
+    cam.pan(p.x, p.y, ms, 'Sine.easeInOut', true);
+    cam.zoomTo(1, ms, 'Sine.easeInOut', true, (c, t) => {
+      if (t < 1 || !p.active) return;
+      cam.useBounds = true;
+      cam.startFollow(p, false, 0.1, 0.1);
+      this._look = 0;
+      if (this._camBias) this._camBias.v = 0;
+      this._hudCamOff();
+    });
   }
 
   _hordeAlien(i) {
@@ -9220,7 +9252,8 @@ class StoreScene extends WalkScene {
     this.tweens.add({ targets: bars[1], y: 720 - 66, duration: 420, ease: 'Sine.easeOut' });
     // the window and the floor under it, both in the picture
     const tx = gb.x0 + gb.w / 2, ty = (gb.y0 + this.groundY) / 2;
-    cam.pan(tx, ty, 700, 'Sine.easeInOut');
+    cam.pan(tx, ty, 700, 'Sine.easeInOut', true);
+    if (this._overview) cam.zoomTo(1, 700, 'Sine.easeInOut', true);
     const at = (ms, fn) => this.time.delayedCall(ms, () => { if (!this._dead && this.scene.isActive()) fn(); });
     // two knocks on the glass from outside
     [900, 1350].forEach((ms, i) => at(ms, () => {
@@ -9231,7 +9264,8 @@ class StoreScene extends WalkScene {
     at(1900, () => this._windowCrash(true));
     at(2900, () => { Sfx.ensure(); Sfx.roar(); cam.shake(260, 0.004); });
     at(3700, () => {
-      cam.pan(p.x, p.y, 650, 'Sine.easeInOut', false, (c, t) => {
+      if (this._overview) this._hordeView(650);
+      else cam.pan(p.x, p.y, 650, 'Sine.easeInOut', false, (c, t) => {
         if (t < 1) return;
         cam.startFollow(p, false, 0.1, 0.1);
         this._look = 0;
@@ -9277,6 +9311,7 @@ class StoreScene extends WalkScene {
     once('tienda-cleared');
     this.cfg.keep = null;
     stopTrack(3000);
+    if (this._overview) this.time.delayedCall(900, () => { if (!this._dead) this._followAgain(1300); });
     this.time.delayedCall(1400, () => {
       this._say([['ETERWOLF', "That's all of them."],
                  ['WOLFFEL',  'For now. Out the front — go.']]);
@@ -10241,9 +10276,14 @@ class StorageOneScene extends WalkScene {
     // On the way back from the fight the cords are already down, and the
     // left edge — the door in from the tienda — is the way out again.
     const back = !!GameState.seen['fight1-won'];
-    this.cameras.main.fadeIn(260, 0, 0, 0);
+    // Back from the fight the switch next door is on, and so are the lights
+    // in here: the lit room, no torch needed. Scenes are reused, so the dark's
+    // pieces from the last visit are let go of first.
+    this.lit = null; this.lightRT = null; this.beamRT = null; this.darkScrim = null;
+    this.flickers = null; this.roomLit = back;
+    this.cameras.main.fadeIn(back ? 420 : 260, 0, 0, 0);
     this.buildWalk({
-      bgKey: 'scene_storage1dark',
+      bgKey: back && this.textures.exists('scene_storage1lit') ? 'scene_storage1lit' : 'scene_storage1dark',
       worldW: 'auto', bgZoom: 1.0, startXFrac: 0.03,
       groundFrac: STORAGE_FLOOR, startOnFloor: true,
       pxPerM: STORAGE_PXM,
@@ -10270,11 +10310,13 @@ class StorageOneScene extends WalkScene {
     });
 
     Object.assign(this, Darkness, Cutting);
-    this.buildDark('scene_storage1lit');
-    this.buildFlicker([
-      { x0: 0.020, x1: 0.040, y0: 0.302, y1: 0.337 },   // the wall lamp by the door
-      { x0: 0.894, x1: 0.923, y0: 0.311, y1: 0.320 }    // the tube at the far end
-    ]);
+    if (!back) {
+      this.buildDark('scene_storage1lit');
+      this.buildFlicker([
+        { x0: 0.020, x1: 0.040, y0: 0.302, y1: 0.337 },   // the wall lamp by the door
+        { x0: 0.894, x1: 0.923, y0: 0.311, y1: 0.320 }    // the tube at the far end
+      ]);
+    }
     this.buildCutting();
 
     // Four growths wall off the way out, every one floor to ceiling, and
@@ -10524,6 +10566,7 @@ class StorageTwoScene extends WalkScene {
     this.time.delayedCall(1300, () => {
       this.dropPistol(kx - dir * 0.62 * this.alienH());
       this._showTip('IT DROPPED SOMETHING');
+      this._scarfInspect();
     });
     this.onPistol = () => {
       once('fight1-won');
@@ -10555,16 +10598,51 @@ class StorageTwoScene extends WalkScene {
     im.setScale((1.1 * this.pxPerM) / pw);           // his scarf, dropped, about 1.1m across
     if (!lit) im.setTint(0x141414);
     this.clothes = im;
-    if (this._mode === 'after') {
-      this.addInspect({
-        x, y: y - im.displayHeight * 0.5, floorY: this.groundY, label: 'E  —  LOOK',
-        onUse(it) {
-          this._retireInspect(it);
-          this._say([['ETERWOLF', 'His scarf. Same one as in the picture.'],
-                     ['WOLFFEL', 'That thing was the shop owner.']]);
-        }
+    this._scarfIt = null;
+    if (this._mode === 'after') this._scarfInspect();
+  }
+
+  // Once the thing is dead: E at the scarf.
+  _scarfInspect() {
+    const im = this.clothes;
+    if (!im || this._scarfIt) return;
+    this._scarfIt = this.addInspect({
+      x: im.x, y: im.y - im.displayHeight * 0.5, floorY: this.groundY, label: 'E  —  LOOK',
+      onUse(it) { this._retireInspect(it); this._lookAtScarf(); }
+    });
+  }
+
+  // He stops over it and the picture closes in on the scarf and him: the one
+  // from the portrait by the chest. Then back out, and on.
+  _lookAtScarf() {
+    const cam = this.cameras.main, p = this.player, im = this.clothes;
+    this._holdInput = true;
+    this._calmIdle = true;
+    p.setVelocityX(0);
+    p._facing = im.x >= p.x ? 1 : -1;
+    // the tip makes way for what he says
+    if (this._tip) { this.tweens.killTweensOf(this._tip); this.tweens.add({ targets: this._tip, alpha: 0, duration: 250 }); }
+    this._hudCamOn();
+    cam.stopFollow();
+    cam.pan((im.x + p.x) / 2, this.groundY - this.charH * 0.5, 800, 'Sine.easeInOut', true);
+    cam.zoomTo(1.45, 800, 'Sine.easeInOut', true);
+    Sfx.ensure(); Sfx.blip(196, 0.9, 'sine', 0.05, 147);
+    this.time.delayedCall(600, () => this._say([
+      ['PLAYER', "The owner's scarf. The one from the portrait."],
+      ['PLAYER', 'So that thing was him... Poor bastard.']]));
+    this.time.delayedCall(5600, () => {
+      if (!p.active) return;
+      cam.pan(p.x, p.y, 800, 'Sine.easeInOut', true);
+      cam.zoomTo(1, 800, 'Sine.easeInOut', true, (c, t) => {
+        if (t < 1 || !p.active) return;
+        cam.startFollow(p, false, 0.1, 0.1);
+        this._look = 0;
+        this._hudCamOff();
+        this._holdInput = false;
+        this._calmIdle = false;
+        if (this._gunDrop && this._gunDrop.gun && this._gunDrop.gun.active) this._showTip('IT DROPPED SOMETHING');
       });
-    }
+    });
   }
 
   // The thing in the corner: sit and stand up enemy.gif, PLAYED BACKWARDS.

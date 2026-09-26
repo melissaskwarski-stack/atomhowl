@@ -139,6 +139,7 @@ const SCENE_SRC = {
   // and open (cut from bunker new.png, where the painting has it).
   bunkerboxclosed: ['public/assets/bunker_box_closed.png'],
   bunkerboxopen:   ['public/assets/bunker_box_open.png'],
+  bunkerdooropen:  ['public/assets/bunker_door_open.png'],
   // The burnt street's Twingo, in its three states: burning, blowing up, and
   // the wreck left behind. Each drawn at its own scale and position, so the
   // game locks them together on the wheels (TWINGO_ART in ah_game.js).
