@@ -4654,12 +4654,10 @@ class IntroDialogueScene extends Phaser.Scene {
     this._buildPanel(W, H);
 
     this.portraits = {
-      // Over a live stage the brothers stand smaller, right out in the bottom
-      // corners, so the middle of the room — where the thing is — stays clear.
-      // Full size they cover a third of the screen each side, and the thing
-      // stood up behind Eterwolf's shoulder where nobody could see it.
-      WOLFFEL:  this._portrait('WOLFFEL', this.overlay ? 150 : 238),
-      ETERWOLF: this._portrait('ETERWOLF', this.overlay ? 1180 : 1042)
+      // Every conversation looks like the first one: the same two figures at
+      // the same size and place, the same bar under them, over any screen.
+      WOLFFEL:  this._portrait('WOLFFEL', 238),
+      ETERWOLF: this._portrait('ETERWOLF', 1042)
     };
     Object.keys(this.portraits).forEach(k => this._scheduleBlink(k));
 
@@ -4710,10 +4708,10 @@ class IntroDialogueScene extends Phaser.Scene {
     // A narrow bar sits between the two figures rather than spanning the
     // screen, so the scene and both characters stay visible around it.
     const w = 620, h = Math.round(w * 724 / 2172);       // frame art is 3:1
-    const x = Math.round((W - w) / 2), y = this.barTop ? 26 : H - h - 26;
+    // Always along the bottom, as in the opening: every panel is the same.
+    const x = Math.round((W - w) / 2), y = H - h - 26;
     this._panel = { x, y, w, h };
-    // the hint and SKIP sit just under the bar, wherever the bar is
-    const underY = this.barTop ? y + h + 22 : H - 6;
+    const underY = H - 6;
 
     const first = this.textures.exists('ui_panel_l') ? 'ui_panel_l' : 'ui_panel_r';
     if (this.textures.exists(first)) {
@@ -4819,10 +4817,10 @@ class IntroDialogueScene extends Phaser.Scene {
     let img = null;
 
     // standing y for the speaker; listeners drop 12 below it, a sleeper 40
-    this._figY = this.overlay ? 415 : 232;
+    this._figY = 232;
     if (this.textures.exists(openKey)) {
       img = this.add.image(x, this._figY, openKey).setOrigin(0.5, 0).setDepth(25);
-      img.setScale((this.overlay ? 350 : 560) / img.height);
+      img.setScale(560 / img.height);
       this._ui.push(img);
     } else {
       const g = this.add.graphics().setDepth(25);          // stand-in figure
