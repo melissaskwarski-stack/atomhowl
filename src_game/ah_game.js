@@ -6981,6 +6981,21 @@ class BunkerScene extends WalkScene {
     this._doorOpen = false;
     this._buildRadio();
     this._buildCrate();
+    // The wolf painted on the banner by the bunks. Not theirs — nothing here
+    // is — and Feli would know.
+    if (!GameState.seen['bunker-banner']) {
+      const w = this._paintToWorld(BUNKER_ART.banner[0], BUNKER_ART.banner[1]);
+      this.addInspect({
+        x: w.x, y: w.y, floorY: this.groundY, labelY: w.y - 70, label: 'E  —  LOOK',
+        reach: 0.8 * this.charH,
+        onUse(it) {
+          this._retireInspect(it);
+          once('bunker-banner');
+          this._say([['ETERWOLF', 'Feli... did you paint that?'],
+                     ['WOLFFEL', "Me? No. I'd remember making something that good."]]);
+        }
+      });
+    }
     this.input.keyboard.on('keydown-E', () => {
       if (this._inConversation || this._holdInput || this._transitioning) return;
       if (this._atRadio()) this._useRadio();
@@ -7303,7 +7318,9 @@ const BUNKER_ART = {
   // width of the open box's body
   box: { open: { x: 1400, y: 512 }, cx: 1492, foot: 597, w: 150 },
   // the blast door's frame corner, and the same corner on bunker_door_open.png
-  door: { frame: [1701, 201], anchor: [175.3, 91.0] }
+  door: { frame: [1701, 201], anchor: [175.3, 91.0] },
+  // the middle of the wolf emblem on the banner
+  banner: [145, 262]
 };
 
 // The broadcast: a voice they don't know, cut to pieces by static.
@@ -7378,10 +7395,10 @@ class ExitScene extends WalkScene {
         // (nothing here yet — the dead plant that used to sit at 0.10 was
         //  hanging off the ground and in the way of the door, so it is gone)
       ],
+      // The first time out, the stage opens on the cinematic (_exitIntro) and
+      // its panel says what the old opening line did; the walk tip follows it.
       beats: [
-        // 'PLAYER' so the line belongs to whichever brother was chosen.
-        { at: 0,    say: [['PLAYER', '¡Hijole! What happened out here?']],
-                    tip: 'HOLD  A  OR  D  TO WALK' },
+        ...(GameState.seen['exit-intro'] ? [{ at: 0, tip: 'HOLD  A  OR  D  TO WALK' }] : []),
         { at: 0.30, tip: 'HOLD  SHIFT  WHILE WALKING TO RUN — it is much faster' },
         { at: 0.70, say: [['PLAYER', 'Road keeps going. Come on.']],
                     tip: 'KEEP GOING RIGHT' }
@@ -7418,12 +7435,108 @@ class ExitScene extends WalkScene {
           cx: 350, cy: 360, maxW: 500, maxH: 560, fontSize: 31,
           side: { x: 660, y: 190, w: 500 },
           sound: () => { Sfx.burst(0.09, 0.26, 2600, 0.9); Sfx.burst(0.06, 0.16, 1500, 1.2); },
-          onClose() { this._say([['ETERWOLF', 'Hell. Yeah. Sounds about right.']]); }
+          onClose() { this._say([['ETERWOLF', 'I wonder if there are more survivors.']]); }
         });
       }
     });
+
+    // The fires on the hills move: fire.gif on each one painted there.
+    EXIT_FIRES.forEach(([ax, ay, h]) => {
+      const bg = this.bgGeom;
+      fireSprite(this, bg.x + ax / 2048 * bg.w, bg.y + ay / 768 * bg.h, h, -19);
+    });
+
+    this._crackle = null;
+    this._introTimers = [];
+    this._exitTalking = false;
+    this.events.once('shutdown', () => {
+      if (this._crackle) { this._crackle.stop(150); this._crackle = null; }
+      const dlg = this.scene.get('IntroDialogueScene');
+      if (dlg && dlg.sys.settings.active && dlg.overlay) this.scene.stop('IntroDialogueScene');
+    });
+    if (!GameState.seen['exit-intro']) this._exitIntro();
+  }
+
+  // The first look outside. Bars close in, and the camera leaves the brothers
+  // at the door and drifts slowly out over the village to the fires and the
+  // church, the crackle of it coming up; then back to them, and they say what
+  // they are looking at. Enter or Space skips the drift.
+  _exitIntro() {
+    once('exit-intro');
+    const cam = this.cameras.main, p = this.player;
+    this._holdInput = true;
+    this._calmIdle = true;
+    this._inConversation = true;
+    cam.stopFollow();
+    const bars = [0, 1].map(i => this.add.rectangle(640, i ? 720 : 0, 1280, 132, 0x000000, 1)
+      .setOrigin(0.5, i ? 0 : 1).setScrollFactor(0).setDepth(92));
+    this.tweens.add({ targets: bars[0], y: 66, duration: 600, ease: 'Sine.easeOut' });
+    this.tweens.add({ targets: bars[1], y: 720 - 66, duration: 600, ease: 'Sine.easeOut' });
+    Sfx.ensure();
+    this._crackle = Sfx.loop({ hp: 60, lp: 900, waver: 0.9, crackle: 60, crackleFreq: 1800, vol: 0 });
+    this._crackle.setVolume(0.07, 2500);
+    const at = (ms, fn) => this._introTimers.push(this.time.delayedCall(ms, fn));
+    at(500, () => cam.pan(this.worldW - cam.width / 2, cam.height / 2, 4600, 'Sine.easeInOut', true));
+    at(3000, () => Sfx.burst(0.9, 0.22, 110, 0.7));               // something coming down, far off
+    at(6100, () => cam.pan(p.x, cam.height / 2, 2300, 'Sine.easeInOut', true));
+    at(8500, () => this._exitTalk(bars));
+    const skip = () => {
+      if (this._exitTalking) return;
+      this._introTimers.forEach(t => t.remove(false));
+      this._introTimers = [];
+      cam.panEffect.reset();
+      cam.centerOn(p.x, cam.height / 2);
+      this._exitTalk(bars);
+    };
+    this.input.keyboard.once('keydown-ENTER', skip);
+    this.input.keyboard.once('keydown-SPACE', skip);
+  }
+
+  _exitTalk(bars) {
+    if (this._exitTalking) return;
+    this._exitTalking = true;
+    const cam = this.cameras.main, p = this.player;
+    cam.startFollow(p, false, 0.1, 0.1);
+    this._look = 0;
+    // the bars make way for the panel along the top
+    this.tweens.add({ targets: bars[0], y: 0, duration: 400, ease: 'Sine.easeIn' });
+    this.tweens.add({ targets: bars[1], y: 720, duration: 400, ease: 'Sine.easeIn',
+                      onComplete: () => bars.forEach(b => b.destroy()) });
+    if (this._crackle) this._crackle.setVolume(0.035, 800);
+    this.time.delayedCall(350, () => {
+      if (!this.scene.isActive()) return;
+      this.scene.launch('IntroDialogueScene', {
+        lines: EXIT_LINES, sleeper: null, keepMusic: true, hold: 300, fadeMs: 380,
+        overlay: true, barTop: true,
+        onDone: () => {
+          this._holdInput = false;
+          this._calmIdle = false;
+          this._inConversation = false;
+          this._showTip('HOLD  A  OR  D  TO WALK');
+        }
+      });
+      this.scene.bringToTop('IntroDialogueScene');
+    });
   }
 }
+
+// The fires painted on the hills of the village road: [x, y of the flame's
+// foot on the 2048x768 painting, height in metres], read off the brightest
+// blobs along the horizon.
+const EXIT_FIRES = [
+  [942, 410, 0.6], [1064, 398, 0.18], [1178, 388, 0.34], [1222, 388, 0.3],
+  [1438, 406, 0.5], [1528, 420, 0.32]
+];
+
+// Out of the bunker, the first thing they see. Short: it is the pause before
+// the walk, not a scene of its own.
+const EXIT_LINES = [
+  { who: 'WOLFFEL',  text: 'Eter... the whole town is burning.' },
+  { who: 'ETERWOLF', text: 'How long were we down there?' },
+  { who: 'WOLFFEL',  text: 'Long enough to miss the end of the world, looks like.' },
+  { who: 'ETERWOLF', text: 'No sirens. No people. Nothing.' },
+  { who: 'ETERWOLF', text: 'The Plaza, then. Stay close, Feli.' }
+];
 
 // Where it lies (a fraction of the road) and what it says. Short, like a page
 // torn out of a diary — the man is somebody she heard, not somebody we meet.
@@ -7434,6 +7547,7 @@ const LETTER_TEXT =
   "The sky has burned for three nights. I don't care anymore what happens " +
   "to me. I only pray my son made it out alive.";
 const LETTER_SIGN = "Rosa";
+// (EXIT_FIRES and EXIT_LINES are with ExitScene, above.)
 
 // ================================================================== //
 //  TUTORIAL 2 — THE BURNT STREET (learn to jump)                     //
