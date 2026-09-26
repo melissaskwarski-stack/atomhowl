@@ -1007,7 +1007,8 @@ function waveConfig(n) {
 // conversation, a cutscene, a creature waking up. Stages restart constantly
 // (a fall, R, walking back through a door), and without this every one of
 // them replays its set piece each time you step into the room.
-const GameState = { hasWeapon: false, hasSwords: false, hasPistol: false, castId: null, seen: {} };
+const GameState = { hasWeapon: false, hasSwords: false, hasPistol: false, castId: null, seen: {},
+                    coop: false };   // a second player is in, as Wolffel
 function once(id) {
   if (GameState.seen[id]) return false;
   GameState.seen[id] = true;
@@ -3798,6 +3799,77 @@ function padWake() {
 // Every button and both sticks, live, with the key each one is typing. The
 // point is that "is my controller working" answers itself: press something and
 // watch it light up, instead of deducing a mis-binding from how the game plays.
+// ---- player 2 ---------------------------------------------------------------
+// The second controller plugged in. Unlike the first (Pad, above) it does not
+// type — two players cannot share one keyboard's worth of keys. It fills a set
+// of key-shaped objects of its own instead: isDown, and the _justDown flag that
+// Phaser's JustDown() reads and clears. driveWalker takes a keys object, so it
+// drives Wolffel from these exactly as it drives Eterwolf from the keyboard.
+const P2_MAP = {
+  0: 'SPACE',                            // A      jump — and press it to join
+  1: 'F',                                // B      sword
+  2: 'K',                                // X      pistol
+  3: 'E',                                // Y      pick your brother up
+  4: 'SHIFT', 5: 'SHIFT', 10: 'SHIFT',   // LB/RB/L3  tap to dash, hold to run
+  8: 'BACK',                             // Back   drop out
+  12: 'UP', 13: 'DOWN', 14: 'LEFT', 15: 'RIGHT'
+};
+const P2_KEYS = ['W', 'A', 'S', 'D', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'SPACE', 'SHIFT', 'E', 'K', 'F', 'BACK'];
+const P2Pad = {
+  connected: false, keys: {}, joinReq: false, leaveReq: false, _lostAt: 0,
+  key(n) {
+    return this.keys[n] || (this.keys[n] = { isDown: false, isUp: true, _justDown: false, _justUp: false, keyCode: -1 });
+  },
+  // The second connected pad. The first is player 1's (Pad reads that one).
+  read() {
+    if (!navigator.getGamepads) return null;
+    const list = navigator.getGamepads();
+    let n = 0;
+    for (let i = 0; i < list.length; i++) {
+      const g = list[i];
+      if (!g || !g.connected) continue;
+      if (n++ === 1) return g;
+    }
+    return null;
+  },
+  clearPresses() { P2_KEYS.forEach(n => { const k = this.key(n); k._justDown = false; k._justUp = false; }); },
+  update(now) {
+    P2_KEYS.forEach(n => this.key(n));
+    const gp = this.read();
+    if (!gp) {
+      if (this.connected) {
+        this.connected = false;
+        this._lostAt = now;
+        P2_KEYS.forEach(n => { const k = this.keys[n]; k.isDown = false; k.isUp = true; });
+      }
+      return;
+    }
+    this.connected = true;
+    const want = {};
+    for (const i in P2_MAP) {
+      const b = gp.buttons[i];
+      if (b && (b.pressed || b.value > 0.5)) want[P2_MAP[i]] = true;
+    }
+    const ax = i => gp.axes[i] || 0;
+    const lat = (v, n) => (this.keys[n].isDown ? v > PAD_RELEASE : v > PAD_LATCH);
+    if (lat(-ax(0), 'LEFT'))  want.LEFT = true;
+    if (lat( ax(0), 'RIGHT')) want.RIGHT = true;
+    if (lat(-ax(1), 'UP'))    want.UP = true;
+    if (lat( ax(1), 'DOWN'))  want.DOWN = true;
+    P2_KEYS.forEach(n => {
+      const k = this.keys[n], on = !!want[n];
+      if (on && !k.isDown) {
+        k._justDown = true;
+        if (n === 'SPACE' && !GameState.coop) this.joinReq = true;
+        if (n === 'BACK' && GameState.coop) this.leaveReq = true;
+      }
+      if (!on && k.isDown) k._justUp = true;
+      k.isDown = on; k.isUp = !on;
+    });
+  }
+};
+window.P2Pad = P2Pad;
+
 const PadHUD = {
   on: false, scene: null, box: null, txt: null, _hideAt: 0,
 
@@ -5319,7 +5391,8 @@ class WalkScene extends Phaser.Scene {
     // the size the painting says a person is.
     const charH = this.pxPerM ? Math.round(HUMAN_M * this.pxPerM)
                               : (cfg.charH || 190) * zoom;
-    this.castId = data.cast || GameState.castId || DEFAULT_CAST;
+    // In co-op player 1 is always Eterwolf; Wolffel is player 2.
+    this.castId = GameState.coop ? 'eterwolf' : (data.cast || GameState.castId || DEFAULT_CAST);
     GameState.castId = this.castId;
 
     // Stand him on whatever is actually solid under where he starts, not on
@@ -5349,10 +5422,13 @@ class WalkScene extends Phaser.Scene {
     // If nothing at or above the floor line is under him, stand on what is.
     if (standY === groundY && lowest !== null && !this._floorUnder(startX)) standY = lowest;
     this.player = makeWalker(this, startX, standY, charH, this.castId);
+    this._standY = standY;        // where his feet are, before the body has been stepped
     this.charH = charH;
     this._buildBeats(cfg);
     this._initCombat();
     this._inspects = null;         // reused scene: last visit's things are gone
+    this._coopInit();
+    this._builtAt = this.time.now;
     this.solidsW.forEach(f => this.physics.add.collider(this.player, f));
     // The sword, in every walking stage — not only the ones with something to
     // cut. It lived in the storage rooms alone, so opening the chest gave you
@@ -5402,7 +5478,8 @@ class WalkScene extends Phaser.Scene {
       this._transitioning = true;
       this.resetStage();
     });
-    if (cfg.castSwitch) this._buildCastSwitch();
+    if (cfg.castSwitch && !GameState.coop) this._buildCastSwitch();
+    if (GameState.coop && P2Pad.connected) this._spawnP2();
     const wake = () => Sfx.ensure();
     this.input.on('pointerdown', wake);
     this.input.keyboard.on('keydown', wake);
@@ -5569,8 +5646,8 @@ class WalkScene extends Phaser.Scene {
   // While he reads a letter, listens to the radio or opens the box, he just
   // stands side-on: no guitar, no burger, no turning three-quarters. The rest
   // clock starts again from here, so none of it kicks in the moment he is let go.
-  _standStill(now) {
-    const p = this.player, hero = p && p._hero;
+  _standStill(now, who) {
+    const p = who || this.player, hero = p && p._hero;
     if (!p) return;
     p._restSince = now; p._longIdleDone = false; p._idleLooped = false;
     if (!p._real || !hero) return;
@@ -5620,6 +5697,24 @@ class WalkScene extends Phaser.Scene {
   // and on the tall stages it rides out a jump instead of bobbing with it.
   _updateCamera(onGround) {
     const cam = this.cameras.main;
+    // Two brothers: the camera follows the point between them (anything that
+    // hands it back to Eterwolf is taken over again here), with no look-ahead
+    // — they may be facing two ways — and neither can walk off the picture.
+    const p2 = this.player2;
+    if (p2 && p2.active && this.player) {
+      this._camMid.x = (this.player.x + p2.x) / 2;
+      this._camMid.y = (this.player.y + p2.y) / 2;
+      if (cam._follow === this.player) cam._follow = this._camMid;
+      if (cam._follow === this._camMid) {
+        const dt = (this.game.loop.delta || 16.7);
+        cam.followOffset.x = (this._camBias && this._camBias.v) || 0;
+        const l = 1 - Math.pow(0.9, dt / 16.67);
+        cam.setLerp(l, l);
+        this._leash();
+      }
+      return;
+    }
+    if (cam._follow === this._camMid) cam._follow = this.player;
     if (!this.player || cam._follow !== this.player) return;
     const dt = (this.game.loop.delta || 16.7);
     const want = -CAM_LOOKAHEAD * cam.width * (this.player._facing || 1);
@@ -5915,9 +6010,11 @@ class WalkScene extends Phaser.Scene {
     // either end of the room does not run off the side of the screen.
     if (this._sayText.alpha > 0 || this._sayName.alpha > 0) {
       const cam = this.cameras.main;
-      const head = this.player.y - this.player.displayHeight * 0.52;
+      const who = (this.player2 && this.player2.active && this._sayName.text === 'WOLFFEL')
+        ? this.player2 : this.player;
+      const head = who.y - who.displayHeight * 0.52;
       const half = Math.max(this._sayText.width, this._sayName.width) / 2 + 12;
-      const x = Phaser.Math.Clamp(this.player.x,
+      const x = Phaser.Math.Clamp(who.x,
                                   cam.scrollX + half, cam.scrollX + cam.width - half);
       this._sayText.setPosition(x, head);
       this._sayName.setPosition(x, head - this._sayText.height - 4);
@@ -5954,7 +6051,9 @@ class WalkScene extends Phaser.Scene {
     // A hit throws him. driveWalker sets his speed every frame, which would
     // cancel the knock on the very next one — so for its length, nothing does.
     else if (now < (this.player._knockUntil || 0)) { /* the hit carries him */ }
+    else if (this.player._down) this.player.setVelocityX(0);     // down, waiting for his brother
     else if (!this._transitioning) driveWalker(this, this.player, this.keys, onGround);
+    this._updateCoop(now, delta);
     this._runBeats();
     this._updateGun(now);
     this._updateCombat(now, delta);
@@ -6054,7 +6153,7 @@ class WalkScene extends Phaser.Scene {
         // cannot bounce you, so gating those too would just mean standing in
         // a doorway you arrived at and not being able to go back through it.
         // Never while a conversation or a set piece has the controls.
-        const busy = this._transitioning || this._holdInput || this._inConversation;
+        const busy = this._transitioning || this._holdInput || this._inConversation || this.player._down;
         if (!locked && (ex.auto ? ex._armed : enterPressed) && !busy)
           this.goExit(ex);
         else if (locked && enterPressed && !busy && ex.onLocked) ex.onLocked.call(this);
@@ -6093,30 +6192,31 @@ class WalkScene extends Phaser.Scene {
   // Swings that follow each other inside the combo window run down his chain
   // (sword, sword2, sword3), so a flurry reads as a flurry and not the same
   // cut three times.
-  swingBlade() {
+  swingBlade(who) {
     const now = this.time.now;
     if (!armedWithBlade()) return;
-    if (!this.player || this._dead || now < (this._nextSwingAt || 0) ||
+    const p = who || this.player;
+    if (!p || !p.active || p._down || this._dead || now < (p._nextSwingAt || 0) ||
         this._holdInput || this._transitioning) return;
-    this._nextSwingAt = now + 380;
-    const p = this.player, hero = p._hero;
+    p._nextSwingAt = now + 380;
+    const hero = p._hero;
     const chain = ['sword', 'sword2', 'sword3'].filter(a => heroHas(hero, a));
-    this._comboStep = (chain.length && now < (this._comboUntil || 0))
-      ? ((this._comboStep || 0) + 1) % chain.length : 0;
-    this._comboUntil = now + COMBO_WINDOW_MS;
-    const act = chain[this._comboStep] || 'sword';
+    p._comboStep = (chain.length && now < (p._comboUntil || 0))
+      ? ((p._comboStep || 0) + 1) % chain.length : 0;
+    p._comboUntil = now + COMBO_WINDOW_MS;
+    const act = chain[p._comboStep] || 'sword';
     Sfx.ensure(); Sfx.sword();
     if (hero && p._real) {
       const key = playAction(p, hero, act, p._facing);
       p._curAnim = key;
       const a = this.anims.get(key);
       p._swingUntil = now + ((a && a.duration) || 340) + 40;
-      this._swingUntil = p._swingUntil;
+      if (p === this.player) this._swingUntil = p._swingUntil;
     }
     const dir = p._facing || 1;
     // An enemy in reach takes it: the nearest one in front, within an arm and
     // a blade of him, and at his height.
-    const foe = this._foeInReach(dir);
+    const foe = this._foeInReach(dir, p);
     if (foe) {
       this.hitEnemy(foe, SWORD_DMG_WALK, dir, true);
       this.cameras.main.shake(70, 0.004);
@@ -6135,7 +6235,7 @@ class WalkScene extends Phaser.Scene {
       if (!c.full && Math.abs(p.y - c.im.y) > 1.4 * HUMAN_M * this.pxPerM) return;
       if (Math.abs(dx) < bestD) { bestD = Math.abs(dx); best = c; }
     });
-    if (best) this.cutOnce(best);
+    if (best) this.cutOnce(best, p);
   }
 
   goExit(ex) {
@@ -6281,7 +6381,20 @@ const WalkCombat = {
     for (let i = 0; i < this.maxHp; i++) {
       this.hearts.push(this.add.image(30 + i * 30, 30, 'heart').setScrollFactor(0).setDepth(60));
     }
+    if (this.player2) { this.player2.hp = WALK_HP; this._buildHearts2(); }
     this._paintHearts();
+  },
+
+  // Wolffel's hearts, in the other corner.
+  _buildHearts2() {
+    (this.hearts2 || []).forEach(h => h.destroy());
+    this.hearts2 = [];
+    for (let i = 0; i < WALK_HP; i++) {
+      this.hearts2.push(this.add.image(1250 - i * 30, 30, 'heart').setScrollFactor(0).setDepth(60));
+    }
+    this.hearts2.push(this.add.text(1250 - WALK_HP * 30 + 4, 30, 'P2', {
+      fontFamily: F_UI, fontSize: '11px', fontStyle: '700', color: '#a08d72'
+    }).setOrigin(1, 0.5).setScrollFactor(0).setDepth(60));
   },
 
   // Full, burned (green — it comes back if you keep moving) or gone.
@@ -6291,6 +6404,11 @@ const WalkCombat = {
       if (i < this.hp) h.setAlpha(1).clearTint();
       else if (i < this.hp + this._burn) h.setAlpha(0.75).setTint(0xa8d63c);
       else h.setAlpha(0.18).clearTint();
+    });
+    const p2 = this.player2;
+    if (p2 && this.hearts2) this.hearts2.forEach((h, i) => {
+      if (i >= WALK_HP) return;                      // the P2 label
+      h.setAlpha(i < (p2.hp || 0) ? 1 : 0.18);
     });
   },
 
@@ -6344,9 +6462,10 @@ const WalkCombat = {
   },
 
   _updateEnemies(now) {
-    const p = this.player;
     const alive = this.enemies.filter(z => z.active && z._alive);
     alive.forEach(z => {
+      // it goes for whichever brother is nearest and still on his feet
+      const p = this._nearestFighter(z.x) || this.player;
       const grounded = z.body.blocked.down || z.body.touching.down;
       const dx = p.x - z.x, dir = dx >= 0 ? 1 : -1;
       const H = z._H;
@@ -6415,27 +6534,43 @@ const WalkCombat = {
   // Touching it hurts. Not while he is dashing through, and not twice in the
   // same breath.
   _enemyContact(now) {
-    if (this._dead || this._holdInput || now < this._invulnUntil ||
-        now < (this.player._dashUntil || 0)) return;
-    const pb = this.player.body;
-    for (const z of this.enemies) {
-      if (!z.active || !z._alive) continue;
-      const b = z.body;
-      if (pb.right < b.left + 4 || pb.left > b.right - 4 ||
-          pb.bottom < b.top + 8 || pb.top > b.bottom) continue;
-      this.hurtPlayer(1, z.x);
-      return;
+    if (this._dead || this._holdInput) return;
+    for (const p of this._fighters()) {
+      const inv = p === this.player ? this._invulnUntil : (p._invulnUntil || 0);
+      if (now < inv || now < (p._dashUntil || 0)) continue;
+      const pb = p.body;
+      for (const z of this.enemies) {
+        if (!z.active || !z._alive) continue;
+        const b = z.body;
+        if (pb.right < b.left + 4 || pb.left > b.right - 4 ||
+            pb.bottom < b.top + 8 || pb.top > b.bottom) continue;
+        this.hurtPlayer(1, z.x, p);
+        break;
+      }
     }
   },
 
-  hurtPlayer(dmg, fromX) {
-    const now = this.time.now, p = this.player;
-    this.hp = Math.max(0, this.hp - dmg);
-    this._invulnUntil = now + WALK_INVULN_MS;
+  // The brothers still on their feet.
+  _fighters() {
+    return [this.player, this.player2].filter(p => p && p.active && p.body && !p._down);
+  },
+
+  _nearestFighter(x) {
+    let best = null, d = Infinity;
+    this._fighters().forEach(p => { const e = Math.abs(p.x - x); if (e < d) { d = e; best = p; } });
+    return best;
+  },
+
+  hurtPlayer(dmg, fromX, who) {
+    const now = this.time.now, p = who || this.player;
+    if (p._down) return;
+    const isP2 = p === this.player2;
+    if (isP2) { p.hp = Math.max(0, (p.hp || 0) - dmg); p._invulnUntil = now + WALK_INVULN_MS; }
+    else { this.hp = Math.max(0, this.hp - dmg); this._invulnUntil = now + WALK_INVULN_MS; }
     Sfx.ensure(); Sfx.hurt();
     this.cameras.main.shake(160, 0.008);
     p.setTintFill(0xff3b1f);
-    this.time.delayedCall(110, () => { if (!this._dead && p.active) p.clearTint(); });
+    this.time.delayedCall(110, () => { if (!this._dead && p.active && !p._down) p.clearTint(); });
     this.tweens.add({ targets: p, alpha: 0.35, duration: 90, yoyo: true, repeat: 4,
                       onComplete: () => p.setAlpha(1) });
     if (fromX != null) {
@@ -6445,7 +6580,14 @@ const WalkCombat = {
       p._swingUntil = 0;
     }
     this._paintHearts();
-    if (this.hp <= 0) this._playerDown();
+    const left = isP2 ? p.hp : this.hp;
+    if (left > 0) return;
+    // With a brother beside him he goes down and waits to be picked up; only
+    // when both are down does the fight start over.
+    if (this.player2 && this.player2.active) {
+      this._knockDown(p);
+      if (this.player._down && this.player2._down) this._playerDown();
+    } else this._playerDown();
   },
 
   // Down. The room comes back as it was when the fight began — the stage's
@@ -6472,7 +6614,7 @@ const WalkCombat = {
     this.enemies.forEach(z => { if (z.active && z._alive) z.setVelocityX(0); });
     const ov = this.add.rectangle(640, 360, 1280, 720, 0x000000, 0.55)
       .setScrollFactor(0).setDepth(80).setAlpha(0);
-    const t1 = this.add.text(640, 318, ((hero && hero.name) || 'ETERWOLF') + ' DOWN', {
+    const t1 = this.add.text(640, 318, this.player2 ? 'BOTH BROTHERS DOWN' : ((hero && hero.name) || 'ETERWOLF') + ' DOWN', {
       fontFamily: 'Courier New, monospace', fontSize: '54px', color: '#c93b2a',
       stroke: '#0d0a08', strokeThickness: 8
     }).setOrigin(0.5).setScrollFactor(0).setDepth(81).setAlpha(0);
@@ -6491,8 +6633,8 @@ const WalkCombat = {
   },
 
   // The nearest living enemy in front of him and in reach of a swing.
-  _foeInReach(dir) {
-    const p = this.player, reach = 0.62 * this.charH;
+  _foeInReach(dir, who) {
+    const p = who || this.player, reach = 0.62 * this.charH;
     let foe = null, best = Infinity;
     this.enemies.forEach(z => {
       if (!z.active || !z._alive) return;
@@ -6629,7 +6771,7 @@ const WalkCombat = {
   // LMB or K, once it is yours, in any walking stage — the same as the blades.
   _updateGun(now) {
     if (!GameState.hasPistol || this._dead || this._holdInput || this._transitioning ||
-        this._inConversation || this._editorMode) return;
+        this._inConversation || this._editorMode || this.player._down) return;
     const ptr = this.input.activePointer;
     const mouse = ptr.isDown && ptr.button === 0 && this._ptrFire;
     const firing = mouse || (this.keys.K && this.keys.K.isDown);
@@ -6646,8 +6788,8 @@ const WalkCombat = {
     this.fireBullet(now);
   },
 
-  fireBullet(now) {
-    const p = this.player, hero = p._hero, face = p._facing || 1;
+  fireBullet(now, who) {
+    const p = who || this.player, hero = p._hero, face = p._facing || 1;
     const sx = Math.abs(p.scaleX), sy = Math.abs(p.scaleY);
     let mx = p.x + face * 0.25 * this.charH, my = p.y - 0.15 * this.charH;
     const art = hero && hero.art;
@@ -6776,6 +6918,274 @@ const WalkCombat = {
   }
 };
 Object.assign(WalkScene.prototype, WalkCombat);
+
+// ================================================================== //
+//  CO-OP                                                              //
+//                                                                     //
+//  A second controller, A to join: Wolffel drops in beside Eterwolf.  //
+//  He is driven by the same driveWalker off the second pad's keys,    //
+//  the camera frames the pair, enemies go for whichever brother is    //
+//  nearer, and a brother who loses his hearts goes down until the     //
+//  other one stands over him holding E (or Y) to pick him up.         //
+// ================================================================== //
+const REVIVE_MS = 1800;
+const Coop = {
+  _coopInit() {
+    this.player2 = null;
+    this.hearts2 = null;
+    this._camMid = { x: this.player.x, y: this.player.y };
+    this._p2Hinted = false;
+    this.player._down = false;
+    // Every collider made for Eterwolf is made for Wolffel too — the ones the
+    // stage already has (copied when he joins) and any it adds later: the
+    // Twingo's wreck, a slab that slides out, a cord's wall.
+    const add = this.physics.add, scene = this;
+    if (!add._coopWrapped) {
+      add._coopWrapped = true;
+      const orig = add.collider;
+      add.collider = function (a, b, cb, pcb, ctx) {
+        const c = orig.call(this, a, b, cb, pcb, ctx);
+        const p2 = scene.player2;
+        if (p2 && p2.active) {
+          if (a === scene.player) orig.call(this, p2, b, cb, pcb, ctx);
+          else if (b === scene.player) orig.call(this, a, p2, cb, pcb, ctx);
+        }
+        return c;
+      };
+    }
+  },
+
+  // Beside Eterwolf, behind him if there is floor there, ahead if not, and
+  // on his own spot if neither.
+  _besideP1() {
+    const p1 = this.player, f = p1._facing || 1, off = 0.4 * this.charH;
+    const ok = x => x > 30 && x < this.worldW - 30 && this._standableAt(x, this._p1Feet());
+    for (const x of [p1.x - f * off, p1.x + f * off]) if (ok(x)) return x;
+    return p1.x;
+  },
+
+  // Something solid at about this height under x.
+  _standableAt(x, feet) {
+    return (this.solidsW || []).some(o => o && o.body && x >= o.body.x && x <= o.body.x + o.body.width &&
+                                           Math.abs(o.body.y - feet) < 0.3 * this.charH);
+  },
+
+  // Where Eterwolf's feet are. Straight after the stage is built his body
+  // has not been stepped yet and reads stale, so the stand height is used.
+  _p1Feet() {
+    const p1 = this.player;
+    return (this._standY != null && this.time.now < (this._builtAt || 0) + 200) ? this._standY : p1.body.bottom;
+  },
+
+  _spawnP2() {
+    if ((this.player2 && this.player2.active) || !this.player) return;
+    const p1 = this.player;
+    const x = this._besideP1();
+    const p2 = makeWalker(this, x, this._p1Feet(), this.charH, 'wolffel');
+    p2.setDepth(9.5);
+    p2._facing = p1._facing || 1;
+    p2._down = false;
+    p2.hp = WALK_HP;
+    p2._invulnUntil = 0;
+    this.player2 = p2;
+    // Colliders made this frame are still queued (the list only takes them in
+    // on its next update), so the queued ones are copied as well as the live.
+    const cq = this.physics.world.colliders;
+    const all = (cq._active || cq.getActive()).concat(cq._pending || []);
+    all.forEach(c => {
+      if (c.object1 === p1) this.physics.world.addCollider(p2, c.object2, c.collideCallback, c.processCallback, c.callbackContext);
+      else if (c.object2 === p1) this.physics.world.addCollider(c.object1, p2, c.collideCallback, c.processCallback, c.callbackContext);
+    });
+    P2Pad.clearPresses();
+    if (this._combat) this._buildHearts2();
+    this._paintHearts();
+    // a puff where he steps in
+    const puff = this.add.circle(p2.x, p1.body.bottom - 10, 0.25 * this.charH, 0xd9c7a8, 0.35).setDepth(9.6);
+    this.tweens.add({ targets: puff, scale: 1.8, alpha: 0, duration: 420, onComplete: () => puff.destroy() });
+  },
+
+  _despawnP2() {
+    const p2 = this.player2;
+    this.player2 = null;
+    (this.hearts2 || []).forEach(h => h.destroy());
+    this.hearts2 = null;
+    if (p2) { if (p2._downUI) p2._downUI.forEach(o => o.destroy()); if (p2._lie) p2._lie.destroy(); p2.destroy(); }
+    const cam = this.cameras.main;
+    if (cam._follow === this._camMid) cam._follow = this.player;
+    if (this.player._down) this._revive(this.player);
+  },
+
+  _hideCastSwitch() {
+    (this._castBtns || []).forEach(b => { b.t.setVisible(false); b.box.setVisible(false).disableInteractive(); });
+  },
+
+  // Put him back beside his brother: he fell, or the camera left him behind.
+  _warpP2() {
+    const p1 = this.player, p2 = this.player2;
+    const x = this._besideP1();
+    p2.setVelocity(0, 0);
+    // feet on the same line as his brother's (the two sprites stand differently
+    // about their middles, so matching centres put Wolffel's feet in the floor)
+    p2.setPosition(x, this._p1Feet() - (p2.body.bottom - p2.y) - 2);
+    p2._farSince = 0;
+    p2._knockUntil = 0;
+    const puff = this.add.circle(x, p1.body.bottom - 10, 0.25 * this.charH, 0xd9c7a8, 0.35).setDepth(9.6);
+    this.tweens.add({ targets: puff, scale: 1.8, alpha: 0, duration: 420, onComplete: () => puff.destroy() });
+  },
+
+  // Neither brother can walk out of the picture while the camera frames both.
+  _leash() {
+    const v = this.cameras.main.worldView, m = 24;
+    [this.player, this.player2].forEach(p => {
+      if (!p || !p.body) return;
+      if (p.x < v.x + m && p.body.velocity.x < 0) { p.x = v.x + m; p.setVelocityX(0); }
+      if (p.x > v.right - m && p.body.velocity.x > 0) { p.x = v.right - m; p.setVelocityX(0); }
+    });
+  },
+
+  _updateCoop(now, delta) {
+    // joining and leaving
+    if (P2Pad.leaveReq) {
+      P2Pad.leaveReq = false;
+      if (this.player2) { GameState.coop = false; this._despawnP2(); this._showTip('PLAYER 2 LEFT'); }
+    }
+    if (P2Pad.joinReq) {
+      P2Pad.joinReq = false;
+      if (!GameState.coop && P2Pad.connected && !this._transitioning && !this._dead) {
+        GameState.coop = true;
+        if (this.castId !== 'eterwolf') {
+          // player 1 is Eterwolf in co-op: the stage comes back with him
+          GameState.castId = 'eterwolf';
+          this._transitioning = true;
+          this.cameras.main.fadeOut(180, 0, 0, 0);
+          this.cameras.main.once('camerafadeoutcomplete',
+            () => this.scene.restart(this._keepData({ cast: 'eterwolf' })));
+          return;
+        }
+        this._spawnP2();
+        this._hideCastSwitch();
+        Sfx.ensure(); Sfx.select();
+        this._showTip('PLAYER 2 JOINED — WOLFFEL   ·   BACK TO LEAVE');
+      }
+    }
+    if (!GameState.coop && P2Pad.connected && !this._p2Hinted) {
+      this._p2Hinted = true;
+      this._showTip('PLAYER 2 — PRESS  A  ON THE SECOND CONTROLLER TO JOIN');
+    }
+    // the second controller went away
+    if (GameState.coop && !P2Pad.connected && now - P2Pad._lostAt > 2000) {
+      GameState.coop = false;
+      if (this.player2) this._despawnP2();
+      return;
+    }
+    const p2 = this.player2;
+    if (!p2 || !p2.active) return;
+    this._updateRevive(now, delta);
+    const b = p2.body, k = P2Pad.keys;
+    // fell out of the stage, or left behind off the edge of the picture
+    const wh = (this.cfg && this.cfg.worldH) || 720;
+    const v = this.cameras.main.worldView;
+    const fell = b.bottom >= wh - 3 || p2.y > wh + 90;
+    const off = p2.x < v.x - 80 || p2.x > v.right + 80 || p2.y > v.bottom + 60 || p2.y < v.y - 200;
+    p2._farSince = off ? (p2._farSince || now) : 0;
+    // (only while the camera is framing the pair: a cutscene panning away is not "left behind")
+    const framing = this.cameras.main._follow === this._camMid;
+    if (!p2._down && !this.player._down && (fell || (framing && p2._farSince && now - p2._farSince > 1200))) {
+      this._warpP2();
+      return;
+    }
+    if (p2._down || this._dead || this._transitioning) { p2.setVelocityX(0); P2Pad.clearPresses(); return; }
+    if (this._holdInput) {
+      if (now >= (p2._knockUntil || 0)) p2.setVelocityX(0);
+      this._standStill(now, p2);
+      P2Pad.clearPresses();
+      return;
+    }
+    if (now < (p2._knockUntil || 0)) return;
+    driveWalker(this, p2, k, b.blocked.down || b.touching.down);
+    if (Phaser.Input.Keyboard.JustDown(k.F)) this.swingBlade(p2);
+    if (GameState.hasPistol && k.K.isDown && !this._inConversation) {
+      p2._gunUntil = now + 520;
+      if (now >= (p2._nextFireAt || 0) && now >= (p2._swingUntil || 0)) {
+        p2._nextFireAt = now + PISTOL_CD;
+        this.fireBullet(now, p2);
+      }
+    }
+  },
+
+  // Down: on the floor, out of the fight, until his brother picks him up.
+  _knockDown(p) {
+    p._down = true;
+    p._revive = 0;
+    this.tweens.killTweensOf(p);
+    p.setAlpha(1); p.clearTint(); p.setVelocityX(0);
+    p._gunUntil = 0; p._swingUntil = 0;
+    const hero = p._hero;
+    // On the floor: his own fall if he has one (Eterwolf does). Wolffel has
+    // no fall drawn, so a still of him is laid flat on the floor in his place
+    // until he is picked up.
+    const act = ['falldown', 'death'].find(a => heroHas(hero, a));
+    if (act) { playAction(p, hero, act, p._facing); p._curAnim = heroAnim(hero, act, p._facing); }
+    else if (hero) {
+      playAction(p, hero, 'idle', p._facing);
+      const f = p._facing || 1;
+      const lie = this.add.image(p.x - f * 0.1 * this.charH, p.body.bottom - 0.13 * this.charH, p.texture.key, p.frame.name)
+        .setScale(p.scaleX, p.scaleY).setFlipX(p.flipX).setAngle(-f * 84).setDepth(p.depth);
+      p._lie = lie;
+      p.setVisible(false);
+    }
+    p.setTint(0xb04a3a);
+    if (p._lie) p._lie.setTint(0xb04a3a);
+    const other = p === this.player ? 'WOLFFEL' : 'ETERWOLF';
+    const lbl = this.add.text(p.x, p.y - 0.75 * this.charH, 'HOLD  ' + (p === this.player ? 'Y' : 'E / Y') + '  —  PICK HIM UP', {
+      fontFamily: 'Courier New, monospace', fontSize: '14px', color: '#f2b13c',
+      stroke: '#0d0a08', strokeThickness: 4
+    }).setOrigin(0.5, 1).setDepth(31);
+    const ring = this.add.graphics().setDepth(31);
+    p._downUI = [lbl, ring];
+    this._showTip(other + ' — STAND OVER HIM AND HOLD ' + (p === this.player ? 'Y' : 'E') + ' TO PICK HIM UP');
+  },
+
+  _revive(p) {
+    p._down = false;
+    p._revive = 0;
+    if (p._downUI) { p._downUI.forEach(o => o.destroy()); p._downUI = null; }
+    if (p._lie) { p._lie.destroy(); p._lie = null; p.setVisible(true); }
+    const now = this.time.now;
+    if (p === this.player) { this.hp = 2; this._invulnUntil = now + 1500; }
+    else { p.hp = 2; p._invulnUntil = now + 1500; }
+    p.clearTint();
+    if (p._hero) { playAction(p, p._hero, 'idle', p._facing); p._curAnim = heroAnim(p._hero, 'idle', p._facing); }
+    Sfx.ensure(); Sfx.mend();
+    this._paintHearts();
+    this.tweens.add({ targets: p, alpha: 0.4, duration: 110, yoyo: true, repeat: 5, onComplete: () => p.setAlpha(1) });
+  },
+
+  // The one standing holds E (Eterwolf) or Y (Wolffel's pad) over the one
+  // down; a ring fills round him, and lets go if he steps away.
+  _updateRevive(now, delta) {
+    const d = Math.min(100, delta || 16);
+    // [who is down, who is helping, the helper's button]
+    [[this.player, this.player2, P2Pad.keys.E], [this.player2, this.player, this.keys.E]].forEach(([down, helper, key]) => {
+      if (!down || !helper || !down._down || !down._downUI) return;
+      const [lbl, ring] = down._downUI;
+      lbl.setPosition(down.x, down.y - 0.55 * this.charH);
+      const near = !helper._down && Math.abs(helper.x - down.x) < 0.8 * this.charH &&
+                   Math.abs(helper.body.bottom - down.body.bottom) < 0.6 * this.charH;
+      down._revive = near && key && key.isDown ? down._revive + d : Math.max(0, down._revive - d * 2);
+      ring.clear();
+      const f = down._revive / REVIVE_MS;
+      if (f > 0) {
+        ring.lineStyle(5, 0xf2b13c, 0.9);
+        ring.beginPath();
+        ring.arc(down.x, down.y - 0.72 * this.charH, 16, -Math.PI / 2, -Math.PI / 2 + f * Math.PI * 2);
+        ring.strokePath();
+      }
+      if (down._revive >= REVIVE_MS) this._revive(down);
+    });
+  }
+};
+Object.assign(WalkScene.prototype, Coop);
 
 // The tienda's horde: three in the front, three through the window.
 const HORDE_TOTAL = 6;
@@ -9929,12 +10339,14 @@ class StoreScene extends WalkScene {
     // Standing ON one means his feet are at its top face and he is not
     // rising; whoever is gets carried the same step it takes, across or up
     // and down. Checked before it moves, against where its top was.
-    const b = this.player.body, now = this.time.now;
+    const now = this.time.now;
+    const brothers = [this.player, this.player2].filter(p => p && p.active && p.body);
     (this.movers || []).forEach(m => {
       m.dx = 0; m.dy = 0;
       const top0 = m.box.y - m.box.height / 2;
-      const riding = b.velocity.y >= -1 && Math.abs(b.bottom - top0) <= 7 &&
-                     b.right >= m.box.x - m.w / 2 && b.left <= m.box.x + m.w / 2;
+      const riders = brothers.filter(p => { const b = p.body;
+        return b.velocity.y >= -1 && Math.abs(b.bottom - top0) <= 12 &&
+               b.right >= m.box.x - m.w / 2 && b.left <= m.box.x + m.w / 2; });
       if (!m.live || now < m.waitUntil) return;
       m.t += (d / m.ms) * m.dir;
       if (m.t >= 1) { m.t = 1; m.dir = -1; m.waitUntil = now + m.pause; }
@@ -9949,11 +10361,12 @@ class StoreScene extends WalkScene {
       m.im.x = wantX; m.im.y = wantY;
       m.box.x = wantX; m.box.y = wantY + 30;
       m.box.body.updateFromGameObject();
-      if (riding) {
-        this.player.x += m.dx;
-        this.player.y += m.dy;
-        if (m.dy) this.player.setVelocityY(0);
-      }
+      riders.forEach(p => {
+        p.x += m.dx;
+        // up or down with it, and settled onto its top rather than sunk into it
+        p.y += m.dy + (m.dy ? (top0 - p.body.bottom) : 0);
+        if (m.dy) p.setVelocityY(0);
+      });
     });
 
     // ---- the chest, and the lever -----------------------------------
@@ -10365,11 +10778,15 @@ const Cutting = {
   // in a single pass, Eterwolf's katana through the thin one — and it is what
   // makes switching brothers on the cast buttons worth doing rather than a
   // cosmetic choice.
-  hitsFor(c) { return c.need || (this.castId === c.owner ? 1 : 3); },
+  // Which blade is swinging: the cord's own brother cuts it in one.
+  hitsFor(c, who) {
+    const id = (who && who._hero && who._hero.id) || this.castId;
+    return c.need || (id === c.owner ? 1 : 3);
+  },
 
-  cutOnce(c) {
+  cutOnce(c, who) {
     c.hits++;
-    const need = this.hitsFor(c);
+    const need = this.hitsFor(c, who);
     this.cameras.main.shake(60, 0.003);
     this._goo(c.im.x, c.im.y - c.im.displayHeight * 0.5, 8);
     if (c.hits < need) {
@@ -11499,6 +11916,7 @@ window.PadHUD = PadHUD;
 // point — a scene added later gets pad support without knowing it exists.
 window.__game.events.on('prestep', (time) => {
   try { Pad.update(time); } catch (e) {}
+  try { P2Pad.update(time); } catch (e) {}
 });
 
 // Letting go of the window while the pad holds a direction would otherwise

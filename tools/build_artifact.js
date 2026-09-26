@@ -195,6 +195,7 @@ h1 span{color:var(--faint); letter-spacing:.08em; font-weight:600; float:right}
   <span><b>SKIP DIALOGUE</b> <span class="k">ENTER</span> / click SKIP</span>
   <span><b>PROP EDITOR</b> <span class="k">M</span> toggle &middot; drag &middot; <span class="k">O</span> export</span>
   <span><b>CONTROLLER</b> <span class="k">F10</span> tester &middot; Xbox pad supported</span>
+  <span><b>PLAYER 2</b> second pad: <span class="k">A</span> join &middot; <span class="k">B</span> sword &middot; <span class="k">X</span> pistol &middot; <span class="k">Y</span> pick up &middot; <span class="k">LB/RB</span> dash &middot; <span class="k">BACK</span> leave</span>
 </div>
 ` + order.map(f => {
   // charset on every tag: these are separate files now, and a script without
