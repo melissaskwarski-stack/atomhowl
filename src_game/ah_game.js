@@ -7479,6 +7479,7 @@ class JumpScene extends WalkScene {
     this._twState = this._twBlown ? 'wreck' : 'intact';
     this._debris = [];
     this._twEmitters = [];
+    this._twFires = [];
     this._sizzleAt = 0;
     this._sizzleSaid = false;
     const art = TWINGO_ART;
@@ -7543,10 +7544,10 @@ class JumpScene extends WalkScene {
   // tongues rather than a few big ones: each is a soft teardrop, born
   // yellow-white at the base and going orange, red and out as it rises, so
   // together they flicker the way fire does instead of reading as glowing balls.
-  _flames(x, y, w, big) {
+  _flames(x, y, w, big, embersOnly) {
     const k = this.charH / 234;
     flameTexture(this);
-    const f = this._emit(x, y, 3.6, {
+    const f = embersOnly ? null : this._emit(x, y, 3.6, {
       tex: FLAME_KEY, blendMode: 'ADD', lifespan: { min: 420, max: 820 },
       speedY: { min: -150 * k, max: -70 * k }, speedX: { min: -14, max: 14 },
       scale: { start: (big ? 0.8 : 0.5) * k, end: 0.12 * k },
@@ -7564,7 +7565,16 @@ class JumpScene extends WalkScene {
       frequency: big ? 90 : 170, quantity: 1,
       emitZone: { type: 'random', source: new Phaser.Geom.Rectangle(-w / 2, -8, w, 16) }
     });
-    return [f, e];
+    return [f, e].filter(Boolean);
+  }
+
+  // fire.gif standing on a spot of the car, with its embers going up. Falls
+  // back to the particle tongues if the art is missing.
+  _fireAt(which, frac, h, heightM, w) {
+    const x = this._artX(which, frac), y = this._artY(h);
+    const sp = fireSprite(this, x, y, heightM, 3.6);
+    if (sp) this._twFires.push(sp);
+    return this._flames(x, y - 4, w, heightM >= 0.6, !!sp);
   }
 
   // Black smoke going up and spreading, with a lighter grey through it so it
@@ -7584,19 +7594,23 @@ class JumpScene extends WalkScene {
 
   _carFire() {
     // the bonnet (painted alight) and the cabin
-    this._carFlames = this._flames(this._artX('car', 0.26), this._artY(215), 70, true);
-    this._flames(this._artX('car', 0.52), this._artY(250), 40, false);
+    this._carFlames = this._fireAt('car', 0.26, 215, 0.85, 70);
+    this._fireAt('car', 0.52, 250, 0.45, 40);
     this._smoke(this._artX('car', 0.36), this._artY(300), 60, false);
   }
 
+  // On the rubble car (rubble car.png): the engine at the front and the foot
+  // of the raised hatch at the back burn hard, a little fire low in the cabin
+  // under the roof frame, and bits of it alight in the road. The roof line
+  // between the two big ones is the part you cross.
   _wreckFire() {
-    // the engine at the front and the hatch at the back burn hard; the roof
-    // between them only smoulders — it is the part you are meant to cross
-    this._flames(this._artX('wreck', 0.13), this._artY(120), 80, true);
-    this._flames(this._artX('wreck', 0.82), this._artY(150), 70, true);
-    this._flames(this._artX('wreck', 0.47), this._artY(262), 30, false);
-    this._smoke(this._artX('wreck', 0.40), this._artY(280), 120, true);
-    this._smoke(this._artX('wreck', 0.80), this._artY(260), 60, false);
+    this._fireAt('wreck', 0.13, 95, 1.0, 70);
+    this._fireAt('wreck', 0.83, 168, 0.9, 60);
+    this._fireAt('wreck', 0.56, 118, 0.3, 24);
+    this._fireAt('wreck', 0.06, 28, 0.35, 20);
+    this._fireAt('wreck', 0.50, 34, 0.25, 16);
+    this._smoke(this._artX('wreck', 0.40), this._artY(250), 120, true);
+    this._smoke(this._artX('wreck', 0.82), this._artY(260), 60, false);
   }
 
   // The crushed roof you can stand on: thin one-way slabs that follow the
@@ -7705,6 +7719,11 @@ class JumpScene extends WalkScene {
       Sfx.hissRise(1150);
       cam.shake(1150, 0.0025);
       if (this._carFlames) this._carFlames.forEach(e => e.setFrequency(12));
+      this._twFires.forEach(f => {
+        if (!f.active) return;
+        f.anims.timeScale *= 1.6;
+        this.tweens.add({ targets: f, scaleX: f._s * 1.4, scaleY: f._s * 1.5, duration: 1100, ease: 'Quad.easeIn' });
+      });
     });
     this.time.delayedCall(1050, () => Sfx.burst(0.05, 0.3, 4400, 3));      // a window goes
     this.time.delayedCall(1600, () => this._twingoBoom());
@@ -7719,6 +7738,8 @@ class JumpScene extends WalkScene {
     this.twCar.setVisible(false);
     this._twEmitters.forEach(e => e.destroy());
     this._twEmitters = [];
+    this._twFires.forEach(f => { this.tweens.killTweensOf(f); f.destroy(); });
+    this._twFires = [];
     this.twBoom.setVisible(true).setScale(this._twS * 1.07);
     this.tweens.add({ targets: this.twBoom, scale: this._twS, duration: 220, ease: 'Quad.easeOut' });
     if (this._carBlock) {
@@ -7855,20 +7876,48 @@ function flameTexture(scene) {
 const TWINGO_ART = {
   car:   { key: 'scene_twingocar',   hubs: [287.7, 787.3], ground: 460.5 },
   boom:  { key: 'scene_twingoboom',  hubs: [333.7, 858.3], ground: 460.5 },
-  wreck: { key: 'scene_twingowreck', hubs: [345.0, 835.0], ground: 460.5 }
+  // rubble car.png, downscaled so its wheelbase is the burning car's (hubs
+  // 751/1895, tyres on 676 in the upload)
+  wreck: { key: 'scene_twingowreck', hubs: [328.0, 827.6], ground: 295.2 }
 };
 const TWINGO_WHEELBASE_M = 2.35;      // a real Twingo's; sets the car's size
 const TWINGO_X = 0.55;                // the car's wheels, as a fraction of the street
-// The crushed roof: [x fraction across the wreck drawing, height above the
-// tyre line in its pixels], the median first painted row of each slice. The
-// hatch standing up at the back (0.73-0.82, up to 323) is left out: at 1.5m
-// it is nearly his whole jump, so it stays scenery he passes in front of.
+// The roof you cross: [x fraction across the wreck drawing, height above the
+// tyre line in its pixels], the median first painted row of each 3% slice of
+// rubble car.png — from the crumpled bonnet, over the windscreen frame and the
+// open roof, to the foot of the hatch. The hatch standing up at the back
+// (0.76-0.85, up to 281) is left out: it is scenery he passes in front of.
 const TWINGO_DECK = [
-  [0.19, 212], [0.22, 227], [0.25, 232], [0.28, 232], [0.31, 219], [0.34, 209],
-  [0.37, 226], [0.40, 251], [0.43, 261], [0.46, 266], [0.49, 265], [0.52, 257],
-  [0.55, 260], [0.58, 250], [0.61, 241], [0.64, 243], [0.67, 261], [0.70, 262],
-  [0.72, 262]
+  [0.19, 164], [0.22, 175], [0.25, 184], [0.28, 191], [0.31, 193], [0.34, 181],
+  [0.37, 170], [0.40, 188], [0.43, 204], [0.46, 211], [0.49, 222], [0.52, 229],
+  [0.55, 228], [0.58, 230], [0.61, 222], [0.64, 214], [0.67, 212], [0.70, 219],
+  [0.73, 226]
 ];
+
+// fire.gif: 9 frames on a 256 box, the flame's foot on row 242 at x 130 and
+// about 236px of flame above it.
+const FIRE_SHEET = { key: 'scene_fxfire', n: 9, cols: 9, cw: 256, ch: 256, footX: 130, footY: 242, flameH: 236 };
+// A flame standing on its foot at (x, baseY), heightM metres tall, looping.
+// Each starts on its own frame at its own pace and breathes a little, so a row
+// of them never burns in step. For any stage: this is what makes fire move.
+function fireSprite(scene, x, baseY, heightM, depth) {
+  const fr = sheetFrames(scene, FIRE_SHEET, 'ff');
+  if (!fr) return null;
+  if (!scene.anims.exists('fx-fire')) {
+    scene.anims.create({ key: 'fx-fire', frames: fr, frameRate: 14, repeat: -1 });
+  }
+  const s = heightM * (scene.pxPerM || 130) / FIRE_SHEET.flameH;
+  const sp = scene.add.sprite(x, baseY, FIRE_SHEET.key, 'ff0')
+    .setOrigin(FIRE_SHEET.footX / FIRE_SHEET.cw, FIRE_SHEET.footY / FIRE_SHEET.ch)
+    .setScale(s).setDepth(depth == null ? 3.6 : depth).setFlipX(Math.random() < 0.5);
+  sp.play({ key: 'fx-fire', startFrame: Math.floor(Math.random() * FIRE_SHEET.n) });
+  sp.anims.timeScale = 0.85 + Math.random() * 0.3;
+  sp._s = s;
+  scene.tweens.add({ targets: sp, scaleY: s * 1.07, scaleX: s * 0.97, duration: 450 + Math.random() * 400,
+                     yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+  return sp;
+}
+
 // A glow the shape of the hole it lights.
 //
 // The generic door glow is a soft slab, which is right for a rectangular blast

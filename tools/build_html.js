@@ -145,6 +145,8 @@ const SCENE_SRC = {
   twingocar:    ['public/assets/twingo_car.png'],
   twingoboom:   ['public/assets/twingo_boom.png'],
   twingowreck:  ['public/assets/twingo_wreck.png'],
+  // fire.gif, 9 frames in a strip (FIRE_SHEET): the moving fire
+  fxfire:       ['public/assets/fx_fire.png'],
   // Things to look at: the diary page in the village road, the shop owner's
   // portrait by the chest, and his clothes by the goo in storage two.
   letter:       ['public/assets/letter.png'],
