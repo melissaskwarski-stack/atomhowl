@@ -151,7 +151,12 @@ body{
 :root{ --gw: min(100%, calc((100vh - 150px) * 16 / 9)); }
 #game{width:var(--gw); aspect-ratio:16/9; background:#000;
   border:1px solid var(--edge); box-shadow:0 18px 60px rgba(0,0,0,.65);}
-#game canvas{display:block; width:100%!important; height:100%!important;}
+/* Windowed, the canvas simply fills the 16:9 box. In fullscreen the box is
+   the whole screen and Phaser sizes and centres the canvas in it itself -
+   forcing 100% on top of Phaser's centring offsets is what pushed the
+   picture up-left and left black down the right and along the bottom. */
+#game:not(:fullscreen) > canvas{display:block; width:100%!important; height:100%!important; margin:0!important;}
+#game:fullscreen{border:0; background:#000;}
 .legend{width:var(--gw); display:flex; flex-wrap:wrap; gap:6px 22px;
   font-size:11px; font-weight:600; letter-spacing:.06em; color:var(--faint);}
 .legend b{color:var(--dim); font-weight:700}

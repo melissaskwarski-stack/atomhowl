@@ -11431,6 +11431,18 @@ function toggleFullscreen() {
   if (!g || !g.scale) return;
   try { g.scale.isFullscreen ? g.scale.stopFullscreen() : g.scale.startFullscreen(); } catch (e) {}
 }
+// Going in or out of fullscreen changes the space the canvas has; measure it
+// again once the browser has settled, or the picture keeps the old size and
+// offset and leaves black at the edges.
+if (typeof document !== 'undefined') {
+  const refit = () => {
+    const g = window.__game;
+    if (!g || !g.scale) return;
+    [30, 200].forEach(ms => setTimeout(() => { try { g.scale.refresh(); } catch (e) {} }, ms));
+  };
+  document.addEventListener('fullscreenchange', refit);
+  document.addEventListener('webkitfullscreenchange', refit);
+}
 window.addEventListener('keydown', e => {
   if (e.altKey && (e.key === 'Enter' || e.code === 'Enter')) { e.preventDefault(); toggleFullscreen(); }
 });
@@ -11454,7 +11466,11 @@ window.__game = new Phaser.Game({
   roundPixels: false,
   render: { mipmapFilter: 'LINEAR_MIPMAP_LINEAR' },
   backgroundColor: '#0a0807',
-  scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+  // Fullscreen takes the game's own box (#game in the hosted page) rather than
+  // a wrapper Phaser makes inside it: Phaser measures its parent to fit the
+  // picture, and with the wrapper it kept measuring the small windowed box.
+  scale: Object.assign({ mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+    (typeof document !== 'undefined' && document.getElementById('game')) ? { fullscreenTarget: 'game' } : {}),
   physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
   scene: [BootScene, StartScene, MenuScene, CharSelectScene, IntroDialogueScene,
           BunkerScene, ExitScene, JumpScene, BridgeScene, DashScene,
