@@ -5482,6 +5482,18 @@ class WalkScene extends Phaser.Scene {
     saveCheckpoint(this.scene.key, this.sys.settings.data);
   }
 
+  // While he reads a letter, listens to the radio or opens the box, he just
+  // stands side-on: no guitar, no burger, no turning three-quarters. The rest
+  // clock starts again from here, so none of it kicks in the moment he is let go.
+  _standStill(now) {
+    const p = this.player, hero = p && p._hero;
+    if (!p) return;
+    p._restSince = now; p._longIdleDone = false; p._idleLooped = false;
+    if (!p._real || !hero) return;
+    const key = heroAnim(hero, 'idle', p._facing);
+    if (p._curAnim !== key) { playAction(p, hero, 'idle', p._facing); p._curAnim = key; }
+  }
+
   // The camera leads him a little the way he is facing, so he sees more of
   // where he is going than where he has been, and eases rather than snapping
   // when he turns. Its smoothing is the same at 60 and 144 frames a second,
@@ -5815,7 +5827,10 @@ class WalkScene extends Phaser.Scene {
     }
     // A set piece can throw him while it holds the controls (the Twingo does);
     // the throw plays out rather than being stopped dead on the next frame.
-    if (this._holdInput) { if (now >= (this.player._knockUntil || 0)) this.player.setVelocityX(0); }
+    if (this._holdInput) {
+      if (now >= (this.player._knockUntil || 0)) this.player.setVelocityX(0);
+      if (this._calmIdle) this._standStill(now);
+    }
     // A hit throws him. driveWalker sets his speed every frame, which would
     // cancel the knock on the very next one — so for its length, nothing does.
     else if (now < (this.player._knockUntil || 0)) { /* the hit carries him */ }
@@ -6667,6 +6682,7 @@ const Inspect = {
   showDocument(o) {
     this._inConversation = true;
     this._holdInput = true;
+    this._calmIdle = true;
     const p = this.player;
     if (p) {
       p.setVelocity(0, 0);
@@ -6743,6 +6759,7 @@ const Inspect = {
         grp.forEach(g => g.destroy());
         this._inConversation = false;
         this._holdInput = false;
+        this._calmIdle = false;
         if (o.onClose) o.onClose.call(this);
       } });
     };
@@ -6840,19 +6857,19 @@ class BunkerScene extends WalkScene {
     });
 
     // ---- the radio and the food ---------------------------------------
-    // Both stand on the back floor of the painting (the furniture plane, 0.78
-    // or so), behind the brothers, who walk along the front at 0.872.
-    //   radio bench — under the painted wall map (0.42-0.49), which is where
-    //                 you would pin a map if a voice on the radio named a place
-    //   food crate  — in the clear stretch between the pilaster and the door
-    //                 frame (0.667-0.829), its E zone well short of the door's
+    // The bench and the set on it are painted into the room now (bunker
+    // new.png), under the wall map. The food box is a prop: the painting had
+    // it standing open, so that spot was cleared back to bare floor and the
+    // closed box (closed box.png) stands there until it is opened, when the
+    // painted open box — cut out of the same painting, same place — shows.
     this._radioUsed = !!GameState.seen['bunker-radio'];
     this._ate = !!GameState.seen['bunker-ate'];
     this._inConversation = false;
     this._nudged = false;
     this._chatter = null;
-    this._buildRadio(0.44, 0.787);
-    this._buildCrate(0.725, 0.78);
+    this._calmIdle = false;
+    this._buildRadio();
+    this._buildCrate();
     this.input.keyboard.on('keydown-E', () => {
       if (this._inConversation || this._holdInput || this._transitioning) return;
       if (this._atRadio()) this._useRadio();
@@ -6866,53 +6883,34 @@ class BunkerScene extends WalkScene {
     });
   }
 
-  // Where a point on a prop's art lands in the world.
-  _artToWorld(im, ax, ay) {
-    return { x: im.x + (ax - im.originX * im.width) * im.scaleX,
-             y: im.y + (ay - im.originY * im.height) * im.scaleY };
-  }
-
-  // A prop stood on its painted feet, sized by its painted width.
-  _floorProp(key, xf, footF, wantW, depth) {
-    if (!this.textures.exists(key)) return null;
+  // Where a pixel of the painting (bunker_wide.png, 2048x768) lands in the world.
+  _paintToWorld(ax, ay) {
     const bg = this.bgGeom;
-    const im = this.add.image(bg.x + xf * bg.w, bg.y + footF * bg.h, key).setDepth(depth || 5);
-    const art = paintedBox(this, key);
-    if (art) {
-      im.setOrigin((art.x0 + art.pw / 2) / art.w, (art.y1 + 1) / art.h);
-      im.setScale(wantW / art.pw);
-    } else {
-      im.setOrigin(0.5, 1).setScale(wantW / im.width);
-    }
-    return im;
+    return { x: bg.x + ax / BUNKER_ART.w * bg.w, y: bg.y + ay / BUNKER_ART.h * bg.h };
   }
 
-  // The workbench and the set on it. The art has the dial and the meter lit;
-  // until it is switched on they sit under dark covers, and a red standby
-  // light blinks. Coordinates are on radio_bench.png (960x480).
-  _buildRadio(xf, footF) {
-    const im = this._floorProp('scene_radiobench', xf, footF, 461, 5);
-    if (!im) return;
-    this.bench = im;
-    const W = (ax, ay) => this._artToWorld(im, ax, ay);
-    const s = im.scaleX;
-    const box = (x0, y0, x1, y1) => {
-      const a = W(x0, y0), b = W(x1, y1);
+  // The painted set has the dial and the meter lit; until it is switched on
+  // they sit under dark covers, and a red standby light blinks.
+  _buildRadio() {
+    const A = BUNKER_ART.radio;
+    const W = (ax, ay) => this._paintToWorld(ax, ay);
+    const box = r => {
+      const a = W(r[0], r[1]), b = W(r[2], r[3]);
       return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, w: b.x - a.x, h: b.y - a.y };
     };
-    const dial = box(525, 127, 622, 158), meter = box(428, 129, 461, 160);
-    this.radioX = W(540, 160).x;               // the middle of the set itself
-    this.radioY = W(540, 160).y;
+    const dial = box(A.dial), meter = box(A.meter);
+    const c = W(A.cx, A.cy);
+    this.radioX = c.x;
+    this.radioY = c.y;
     this.radioCovers = [dial, meter].map(b =>
       this.add.rectangle(b.x, b.y, b.w + 1, b.h + 1, 0x050403, 0.82).setDepth(5.1));
     torchTexture(this);
     this.radioGlow = this.add.image(dial.x, dial.y, TORCH_KEY).setDepth(5.2)
       .setBlendMode(Phaser.BlendModes.ADD).setTint(0xffa040)
       .setDisplaySize(dial.w * 2.6, dial.h * 4.2).setAlpha(0);
-    const led = W(472, 178);
-    this.radioLed = this.add.circle(led.x, led.y, Math.max(2, 5 * s), 0xff2a1a, 1).setDepth(5.3);
-    const top = W(0, paintedBox(this, 'scene_radiobench').y0).y;
-    this.radioLabel = this.add.text(this.radioX, top - 14, 'E  —  RADIO', {
+    const led = W(A.led[0], A.led[1]);
+    this.radioLed = this.add.circle(led.x, led.y, Math.max(2, 1.8 * this.bgGeom.w / BUNKER_ART.w), 0xff2a1a, 1).setDepth(5.3);
+    this.radioLabel = this.add.text(this.radioX, W(0, A.top).y - 14, 'E  —  RADIO', {
       fontFamily: 'Courier New, monospace', fontSize: '15px', color: '#d9c7a8',
       stroke: '#0d0a08', strokeThickness: 4
     }).setOrigin(0.5, 1).setDepth(30).setAlpha(0);
@@ -6934,20 +6932,93 @@ class BunkerScene extends WalkScene {
     }
   }
 
-  _buildCrate(xf, footF) {
-    const im = this._floorProp('scene_cratefood', xf, footF, 234, 5);
-    if (!im) return;
-    this.crate = im;
-    this.crateX = im.x;
-    // over his head, not behind him: he stands in front of the crate
-    this.crateLabel = this.add.text(im.x, this.groundY - this.charH - 30, 'E  —  EAT', {
+  // The closed box on the cleared floor, and the painted open box waiting
+  // under it. Both stand behind the brothers, on the back floor.
+  _buildCrate() {
+    const B = BUNKER_ART.box, k = this.bgGeom.w / BUNKER_ART.w;
+    const o = this._paintToWorld(B.open.x, B.open.y);
+    if (this.textures.exists('scene_bunkerboxopen')) {
+      this.boxOpen = this.add.image(o.x, o.y, 'scene_bunkerboxopen').setOrigin(0, 0)
+        .setScale(k).setDepth(4.9).setAlpha(this._ate ? 1 : 0);
+    }
+    const foot = this._paintToWorld(B.cx, B.foot);
+    this.crateX = foot.x;
+    this.crateFoot = foot.y;
+    if (!this._ate && this.textures.exists('scene_bunkerboxclosed')) {
+      const im = this.add.image(foot.x, foot.y, 'scene_bunkerboxclosed').setDepth(5);
+      const art = paintedBox(this, 'scene_bunkerboxclosed');
+      if (art) im.setOrigin((art.x0 + art.pw / 2) / art.w, (art.y1 + 1) / art.h).setScale(B.w * k / art.pw);
+      else im.setOrigin(0.5, 1).setScale(B.w * k / im.width);
+      this.crate = im;
+    }
+    this.crate = this.crate || this.boxOpen || null;
+    // over his head, not behind him: he stands in front of the box
+    this.crateLabel = this.add.text(foot.x, this.groundY - this.charH - 30, 'E  —  OPEN', {
       fontFamily: 'Courier New, monospace', fontSize: '15px', color: '#d9c7a8',
       stroke: '#0d0a08', strokeThickness: 4
     }).setOrigin(0.5, 1).setDepth(30).setAlpha(0);
   }
 
+  // The latches go, the lid comes up, dust off the floor and a warm light off
+  // what is inside. The closed box gives way to the painted open one under
+  // cover of the pop.
+  _openBox(done) {
+    const im = this.crate, open = this.boxOpen;
+    if (!im || im === open) { if (open) open.setAlpha(1); done(); return; }
+    Sfx.ensure();
+    const x0 = im.x, sx = im.scaleX, sy = im.scaleY;
+    // two latches
+    Sfx.blip(1400, 0.04, 'square', 0.1, 900);
+    this.tweens.add({ targets: im, x: x0 + 2, duration: 40, yoyo: true, repeat: 1 });
+    this.time.delayedCall(170, () => {
+      Sfx.blip(1250, 0.04, 'square', 0.1, 820);
+      this.tweens.add({ targets: im, x: x0 - 2, duration: 40, yoyo: true, repeat: 1 });
+    });
+    this.time.delayedCall(380, () => {
+      if (!this.scene.isActive()) return;
+      // the lid: a heave, then it is open
+      Sfx.burst(0.16, 0.34, 420, 0.8);
+      Sfx.blip(180, 0.18, 'triangle', 0.14, 90);
+      this.tweens.add({ targets: im, scaleY: sy * 1.12, scaleX: sx * 0.97, duration: 90, yoyo: true,
+                        onComplete: () => this.tweens.add({ targets: im, alpha: 0, duration: 140,
+                                                            onComplete: () => im.destroy() }) });
+      if (open) { open.setAlpha(0); this.tweens.add({ targets: open, alpha: 1, delay: 90, duration: 200 }); }
+      this.crate = open || null;
+      const k = this.bgGeom.w / BUNKER_ART.w, bw = BUNKER_ART.box.w * k;
+      const fx = this.crateX, fy = this.crateFoot;
+      // dust kicked off the floor either side
+      for (let i = 0; i < 12; i++) {
+        const side = i % 2 ? 1 : -1;
+        const d = this.add.circle(fx + side * bw * (0.2 + Math.random() * 0.3), fy - 4 - Math.random() * 6,
+                                  4 + Math.random() * 6, 0x8a7a66, 0.5).setDepth(5.4);
+        this.tweens.add({ targets: d, x: d.x + side * (30 + Math.random() * 50), y: d.y - 8 - Math.random() * 18,
+                          scale: 2.4, alpha: 0, duration: 520 + Math.random() * 380, ease: 'Quad.easeOut',
+                          onComplete: () => d.destroy() });
+      }
+      // warm light off the food, swelling and settling
+      torchTexture(this);
+      const glow = this.add.image(fx, fy - bw * 0.22, TORCH_KEY).setDepth(5.3)
+        .setBlendMode(Phaser.BlendModes.ADD).setTint(0xffc070)
+        .setDisplaySize(bw * 1.9, bw * 1.1).setAlpha(0);
+      this.tweens.add({ targets: glow, alpha: 0.7, duration: 160, ease: 'Quad.easeOut',
+                        onComplete: () => this.tweens.add({ targets: glow, alpha: 0, duration: 1100, ease: 'Sine.easeIn',
+                                                            onComplete: () => glow.destroy() }) });
+      // a few motes rising out of it
+      for (let i = 0; i < 7; i++) {
+        const m = this.add.star(fx + (Math.random() - 0.5) * bw * 0.6, fy - bw * 0.18, 4, 1.5, 4.5, 0xfff0c0, 1)
+          .setDepth(5.5).setBlendMode(Phaser.BlendModes.ADD).setAlpha(0);
+        this.tweens.add({ targets: m, alpha: { from: 1, to: 0 }, y: m.y - 30 - Math.random() * 40, angle: 90,
+                          delay: 60 + i * 55, duration: 700 + Math.random() * 300, ease: 'Sine.easeOut',
+                          onComplete: () => m.destroy() });
+      }
+      this.cameras.main.shake(90, 0.0025);
+      Sfx.blip(660, 0.3, 'sine', 0.06, 990);
+    });
+    this.time.delayedCall(1150, () => { if (this.scene.isActive()) done(); });
+  }
+
   _atRadio() {
-    return !!this.bench && !this._radioUsed && !!this.player &&
+    return this.radioX != null && !this._radioUsed && !!this.player &&
            Math.abs(this.player.x - this.radioX) < 130;
   }
 
@@ -6960,6 +7031,7 @@ class BunkerScene extends WalkScene {
   _hold(faceX) {
     this._inConversation = true;
     this._holdInput = true;
+    this._calmIdle = true;
     const p = this.player, hero = p._hero;
     p.setVelocity(0, 0);
     p._facing = faceX >= p.x ? 1 : -1;
@@ -6973,6 +7045,7 @@ class BunkerScene extends WalkScene {
   _release() {
     this._holdInput = false;
     this._inConversation = false;
+    this._calmIdle = false;
   }
 
   _panel(lines, onLine, onDone) {
@@ -7038,8 +7111,7 @@ class BunkerScene extends WalkScene {
     once('bunker-ate');
     this.crateLabel.setAlpha(0);
     this._hold(this.crateX);
-    Sfx.ensure(); Sfx.select();
-    this.time.delayedCall(250, () => {
+    this._openBox(() => {
       if (!this.scene.isActive()) return;
       this._panel(CRATE_LINES, (i, line) => {
         if (line.cue === 'munch') this.time.delayedCall(260, () => Sfx.munch());
@@ -7049,7 +7121,7 @@ class BunkerScene extends WalkScene {
 
   update(time, delta) {
     super.update(time, delta);
-    if (!this.player || !this.bench) return;
+    if (!this.player || this.radioX == null) return;
     const now = this.time.now;
     // standby light blinks until it is on
     if (!this._radioUsed) this.radioLed.setAlpha(Math.floor(now / 520) % 2 ? 1 : 0.15);
@@ -7078,6 +7150,20 @@ class BunkerScene extends WalkScene {
     }
   }
 }
+
+// Where things are on the bunker painting (bunker_wide.png, 2048x768), read
+// off 6x grid crops of it.
+const BUNKER_ART = {
+  w: 2048, h: 768,
+  // the set on the bench: its dial and meter (lit in the art), the standby
+  // light's spot, the middle of the set and the tip of its aerial
+  radio: { dial: [915, 479, 946, 488], meter: [886, 479, 896, 487], led: [896, 497],
+           cx: 921, cy: 486, top: 441 },
+  // the food box: where the painted open one was cut from (bunker_box_open.png
+  // is that cut, 197x97), and the closed one stood on the same floor, the
+  // width of the open box's body
+  box: { open: { x: 1400, y: 512 }, cx: 1492, foot: 597, w: 150 }
+};
 
 // The broadcast: a voice they don't know, cut to pieces by static.
 const RADIO_LINES = [
@@ -7204,10 +7290,10 @@ class ExitScene extends WalkScene {
 const LETTER_X = 0.36;
 const LETTER_TEXT =
   "The man on the radio stopped reading the news tonight. He just kept " +
-  "saying it — this is hell now. We are in hell.\n\n" +
+  "saying it. This is hell now. We are in hell.\n\n" +
   "The sky has burned for three nights. I don't care anymore what happens " +
   "to me. I only pray my son made it out alive.";
-const LETTER_SIGN = "— Rosa";
+const LETTER_SIGN = "Rosa";
 
 // ================================================================== //
 //  TUTORIAL 2 — THE BURNT STREET (learn to jump)                     //

@@ -127,10 +127,10 @@ const SCENE_SRC = {
   // grids and have to match them.
   aliendeath:   ['public/assets/alien_death_sheet.png'],
   alienface:    ['public/assets/alien_encounter_sheet.png'],
-  // The bunker: the workbench with the radio on it, and the food crate by
-  // the door. Downscaled once from the uploads (radio.png, crate food.png).
-  radiobench:   ['public/assets/radio_bench.png'],
-  cratefood:    ['public/assets/crate_food.png'],
+  // The bunker's food box: closed (closed box.png, trimmed and downscaled),
+  // and open (cut from bunker new.png, where the painting has it).
+  bunkerboxclosed: ['public/assets/bunker_box_closed.png'],
+  bunkerboxopen:   ['public/assets/bunker_box_open.png'],
   // The burnt street's Twingo, in its three states: burning, blowing up, and
   // the wreck left behind. Each drawn at its own scale and position, so the
   // game locks them together on the wheels (TWINGO_ART in ah_game.js).
