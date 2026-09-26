@@ -3496,6 +3496,17 @@ const CROUCH_SPEED = 0;
 // length, which is what makes it a traversal move rather than a faster walk:
 // the jump gets you up, the dash gets you across. The numbers are the combat
 // burst's, so the move feels the same wherever you meet it.
+// ---- movement feel ----------------------------------------------------------
+const WALK_ACCEL_S = 0.09;     // standstill to a walk
+const RUN_ACCEL_S  = 0.15;     // standstill to a run
+const WALK_STOP_S  = 0.06;     // a walk to a stop (turning uses this too)
+const FALL_GRAVITY = 1.45;     // falling pulls this much harder than rising
+const MAX_FALL     = 1100;     // px/s at playScale 1
+const JUMP_BUFFER_MS = 120;    // a press this early before landing still jumps
+const COYOTE_MS    = 100;      // grace after walking off an edge
+const JUMP_CUT_V   = 300;      // releasing jump caps the rise at this (px/s)
+
+const CAM_LOOKAHEAD = 0.11;    // of the view's width, ahead of the way he faces
 const WDASH_SPEED = 760;
 const WDASH_MS    = 260;
 const WDASH_COOL  = 620;      // after it ends, before another is allowed
@@ -3845,6 +3856,27 @@ function surfaceProfile(scene, texKey, segments) {
   return out;
 }
 
+// The dash's kick-off: dash effect.png, five frames of green energy erupting
+// from where his heels leave the ground, played once behind him. The strip is
+// five 240x250 cells, each burst centred on its base at row 245.
+const DASH_FX = { key: 'scene_fxdash', n: 5, cw: 240, ch: 250, base: 245, peak: 228 };
+function dashBurst(scene, p) {
+  const F = DASH_FX;
+  if (!scene.textures.exists(F.key)) return;
+  const tex = scene.textures.get(F.key);
+  for (let i = 0; i < F.n; i++) if (!tex.has('db' + i)) tex.add('db' + i, 0, i * F.cw, 0, F.cw, F.ch);
+  if (!scene.anims.exists('fx-dash')) {
+    scene.anims.create({ key: 'fx-dash', frameRate: 22, repeat: 0,
+      frames: Array.from({ length: F.n }, (_, i) => ({ key: F.key, frame: 'db' + i })) });
+  }
+  const charH = scene.charH || 200, dir = p._dashDir || p._facing || 1;
+  const fx = scene.add.sprite(p.x - dir * 0.18 * charH, p.body.bottom + 2, F.key, 'db0')
+    .setOrigin(0.5, (F.base + 1) / F.ch).setDepth(p.depth - 1)
+    .setScale((0.55 * charH) / F.peak).setFlipX(dir < 0);
+  fx.play('fx-dash');
+  fx.once('animationcomplete', () => fx.destroy());
+}
+
 function driveWalker(scene, p, keys, onGround) {
   let move = 0;
   if (keys.A.isDown || keys.LEFT.isDown)  move -= 1;
@@ -3855,14 +3887,17 @@ function driveWalker(scene, p, keys, onGround) {
   // so with the sprint available there is no gap width that a double jump can
   // cross and a single cannot — the stage would teach nothing.
   const canDash = !!(scene.cfg && scene.cfg.dash);
-  // A stage has one or the other on Shift, never both: holding it to sprint
-  // would fire a dash on every first frame of the hold.
-  const sprint = !canDash && !!(keys.SHIFT && keys.SHIFT.isDown) &&
-                 !(scene.cfg && scene.cfg.noSprint);
   // Everything here is in the stage's own scale: a bigger man takes bigger
   // strides and a bigger leap, so the motion reads the same at any size.
   const k = scene.playScale || 1;
   const now = scene.time.now;
+  // Shift does both where there is a dash: a tap dashes, and keeping it held
+  // runs once the dash is over. From the Drop onward it used to be dash only,
+  // so you could never run again — and running is how you get clear.
+  const sprint = !!(keys.SHIFT && keys.SHIFT.isDown) &&
+                 !(scene.cfg && scene.cfg.noSprint) &&
+                 (!canDash || now >= (p._dashUntil || 0));
+  const dt = Math.min(0.05, ((scene.game && scene.game.loop.delta) || 16.7) / 1000);
 
   // ---- dash ----------------------------------------------------------
   // One in the air per trip off the ground, so a crossing is jump, jump,
@@ -3875,8 +3910,8 @@ function driveWalker(scene, p, keys, onGround) {
     p._dashReadyAt = now + WDASH_MS + WDASH_COOL;
     p._dashGhostAt = 0;
     if (!onGround) p._airDashUsed = true;
+    dashBurst(scene, p);
     Sfx.ensure(); Sfx.dash();
-    scene.cameras.main.shake(90, 0.003);
   }
   const dashing = now < (p._dashUntil || 0);
   if (dashing) {
@@ -3895,16 +3930,36 @@ function driveWalker(scene, p, keys, onGround) {
     }
   } else {
     if (!p.body.allowGravity) p.body.setAllowGravity(true);
-    p.setVelocityX(move * (sprint ? RUN_SPEED : WALK_SPEED) * k);
+    // He gets up to speed and stops rather than switching on and off: about a
+    // tenth of a second to reach a walk, a little more for a run, and a
+    // shorter stop. Less grip in the air. Coming out of a dash this is also
+    // what eases him down from the burst instead of cutting it dead.
+    const target = move * (sprint ? RUN_SPEED : WALK_SPEED) * k;
+    const vx = p.body.velocity.x;
+    const grip = onGround ? 1 : 0.6;
+    const slowing = target === 0 || Math.sign(target) !== Math.sign(vx) || Math.abs(target) < Math.abs(vx);
+    const rate = (slowing ? WALK_SPEED / WALK_STOP_S : (sprint ? RUN_SPEED / RUN_ACCEL_S : WALK_SPEED / WALK_ACCEL_S)) * k * grip;
+    const step = rate * dt;
+    p.setVelocityX(Math.abs(target - vx) <= step ? target : vx + Math.sign(target - vx) * step);
+    // A heavier fall than rise, and a top speed to it: the old jump came down
+    // exactly as slowly as it went up, which is what made it float. Heights
+    // are untouched, so every measured gap in the game still holds.
+    const g = scene.physics.world.gravity.y;
+    const fallG = (scene.cfg && scene.cfg.fallGravity) || FALL_GRAVITY;
+    p.body.setGravityY(p.body.velocity.y > 0 ? g * (fallG - 1) : 0);
+    if (p.body.velocity.y > MAX_FALL * k) p.setVelocityY(MAX_FALL * k);
   }
 
-  const wantJump = !dashing &&
-                  (Phaser.Input.Keyboard.JustDown(keys.W)
-                || Phaser.Input.Keyboard.JustDown(keys.SPACE)
-                || Phaser.Input.Keyboard.JustDown(keys.UP));
+  // A press is remembered briefly, so one made just before landing (or in the
+  // last moment of a dash) still jumps instead of being lost.
+  if (Phaser.Input.Keyboard.JustDown(keys.W) || Phaser.Input.Keyboard.JustDown(keys.SPACE) ||
+      Phaser.Input.Keyboard.JustDown(keys.UP)) p._jumpPressedAt = now;
+  const wantJump = !dashing && now - (p._jumpPressedAt || -1e9) < JUMP_BUFFER_MS;
   // Touching down clears the count, so the second jump is only ever available
-  // once he has left the floor.
-  if (onGround) p._jumpsUsed = 0;
+  // once he has left the floor. Walking off an edge gives a moment's grace
+  // (coyote time) and then the ground jump is spent — it used to last forever.
+  if (onGround) { p._jumpsUsed = 0; p._groundedAt = now; }
+  else if (!(p._jumpsUsed) && now - (p._groundedAt || 0) > COYOTE_MS) p._jumpsUsed = 1;
   // Jumping is taught, not given: none at all until the broken wall on the
   // burnt street (stages set noJump before it), one jump from there, and the
   // second from the bridge (doubleJump).
@@ -3915,13 +3970,22 @@ function driveWalker(scene, p, keys, onGround) {
     // whatever he had left, or a jump tapped at the top of the arc barely
     // registers while one tapped while falling throws him miles.
     p.setVelocityY(-((p._jumpsUsed || 0) === 0 ? JUMP_V : JUMP_V2) * k);
-    // Forward momentum during jump: natural platformer feel
-    p.setVelocityX((move || p._facing) * 140 * k);
     p._jumpsUsed = (p._jumpsUsed || 0) + 1;
+    p._jumpPressedAt = -1e9;
+    p._rising = true;
     Sfx.ensure(); Sfx.jump();
     // Restart the jump art on the second one so it reads as a fresh push
     // rather than continuing the fall.
     if (p._jumpsUsed > 1 && p._real) { p._airPhase = undefined; p._curAnim = ''; }
+  }
+
+  // Let go on the way up and the jump is cut short: a tap is a hop, a hold is
+  // the full jump. Only his own jumps — a blast or a hit that throws him is
+  // not his to cut.
+  if (p._rising) {
+    const held = keys.SPACE.isDown || keys.W.isDown || keys.UP.isDown;
+    if (p.body.velocity.y >= 0) p._rising = false;
+    else if (!held && p.body.velocity.y < -JUMP_CUT_V * k) { p.setVelocityY(-JUMP_CUT_V * k); p._rising = false; }
   }
 
   const hero = p._hero;
@@ -4987,6 +5051,11 @@ class WalkScene extends Phaser.Scene {
     this.cfg.worldW = WW;
 
     this.physics.world.setBounds(0, 0, WW, WH);
+    // No ceiling at the top of the world. The bridge's road sits half way up
+    // the picture, so a double jump reached the top edge and stopped dead
+    // against it — the jump cut short against nothing you could see. He may
+    // now rise past the top of the frame for a moment and come back down.
+    this.physics.world.setBoundsCollision(true, true, false, true);
     this.cameras.main.setBounds(0, 0, WW, WH);
 
     this.groundY = groundY;
@@ -5233,7 +5302,9 @@ class WalkScene extends Phaser.Scene {
     });
 
     this.cameras.main.startFollow(this.player, false, 0.1, 0.1);
-    this.cameras.main.setDeadzone(160, 100);
+    this.cameras.main.setDeadzone(100, 80);
+    this._look = 0;
+    this._camBias = { v: 0 };
 
     // input
     this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,SHIFT,M,E,ENTER,R,K');
@@ -5411,13 +5482,31 @@ class WalkScene extends Phaser.Scene {
     saveCheckpoint(this.scene.key, this.sys.settings.data);
   }
 
+  // The camera leads him a little the way he is facing, so he sees more of
+  // where he is going than where he has been, and eases rather than snapping
+  // when he turns. Its smoothing is the same at 60 and 144 frames a second,
+  // and on the tall stages it rides out a jump instead of bobbing with it.
+  _updateCamera(onGround) {
+    const cam = this.cameras.main;
+    if (!this.player || cam._follow !== this.player) return;
+    const dt = (this.game.loop.delta || 16.7);
+    const want = -CAM_LOOKAHEAD * cam.width * (this.player._facing || 1);
+    this._look += (want - this._look) * (1 - Math.exp(-dt / 380));
+    cam.followOffset.x = this._look + ((this._camBias && this._camBias.v) || 0);
+    const lx = 1 - Math.pow(0.9, dt / 16.67);
+    const tall = ((this.cfg && this.cfg.worldH) || 720) > 720;
+    const ly = tall && !onGround ? 1 - Math.pow(0.975, dt / 16.67) : lx;
+    cam.setLerp(lx, ly);
+  }
+
   // The controls the stage actually has right now. Rebuilt when one is
   // unlocked mid-stage (the burnt street gives you the jump after the blast).
   _hintText() {
     const cfg = this.cfg || {};
     const arms = (armedWithBlade() ? '   ·   F SWORD' : '') +
                  (GameState.hasPistol ? '   ·   LMB / K SHOOT' : '');
-    return 'A/D WALK   ·   SHIFT RUN' + (cfg.noJump ? '' : '   ·   W JUMP') +
+    const shift = cfg.dash ? '   ·   SHIFT TAP DASH / HOLD RUN' : (cfg.noSprint ? '' : '   ·   SHIFT RUN');
+    return 'A/D WALK' + shift + (cfg.noJump ? '' : '   ·   W JUMP') +
            '   ·   E ENTER' + arms + '   ·   N MUTE   ·   M EDIT';
   }
 
@@ -5735,6 +5824,7 @@ class WalkScene extends Phaser.Scene {
     this._updateGun(now);
     this._updateCombat(now, delta);
     this._updateInspects();
+    this._updateCamera(onGround);
 
     if (this.grain && this.game.loop.frame % 3 === 0) {
       this._gf = (this._gf + 1) % 3;
@@ -7004,7 +7094,7 @@ const RADIO_LINES = [
 const CRATE_LINES = [
   { who: 'WOLFFEL',  text: 'Arepas! Somebody stocked this place.', cue: 'munch' },
   { who: 'ETERWOLF', text: "Eat fast. The Plaza's a long way." },
-  { who: 'WOLFFEL',  text: "...I'm taking three.", cue: 'munch' }
+  { who: 'WOLFFEL',  text: "I'm going to take ten.", cue: 'munch' }
 ];
 
 // ================================================================== //
@@ -8265,8 +8355,8 @@ class BridgeScene extends WalkScene {
     if (this._triggerX < 30) this._triggerX = 30;
   }
 
-  update() {
-    super.update();
+  update(time, delta) {
+    super.update(time, delta);
     if (!this.span || this.bridgeState !== 'intact' || this._transitioning) return;
     if (this.player.x >= this._triggerX) this._collapse();
   }
@@ -8672,6 +8762,9 @@ class StoreScene extends WalkScene {
       title: 'THE TIENDA — INSIDE',
       castSwitch: true, canReset: true,
       doubleJump: true, dash: true,
+      // No running until the blades are got: a running double jump and an air
+      // dash from the low ledge would reach the chest without the lever.
+      noSprint: !GameState.hasSwords,
       // Going down in the horde puts you back at the back door with it coming.
       keep: this._horde ? { spawnXFrac: 0.925 } : null,
       ledges: [
@@ -9072,6 +9165,8 @@ class StoreScene extends WalkScene {
     if (this._swordsTaken || !this.chest) return;
     this._swordsTaken = true;
     GameState.hasSwords = true;
+    this.cfg.noSprint = false;
+    this._refreshHint();
     Sfx.ensure(); Sfx.land();
     if (this.chestLabel) this.chestLabel.setAlpha(0);
     // The clip takes over from the still drawing and holds where it ends.
@@ -9656,7 +9751,9 @@ const STORAGE_FLOOR = 0.855;     // both paintings share their geometry
 // stands when the lights come back on; and where he is standing when they do.
 const STORAGE_GOO_X = 0.845;
 const OWNER_CLOTHES_X = 0.79;     // his clothes, on the floor just left of the goo
-const STORAGE_FIGHT_X = 0.40;
+// Close enough that he is in the same shot the room had before the cinematic
+// (the camera centred on the thing), so the cut back in does not pull away.
+const STORAGE_FIGHT_X = 0.60;
 // The bunker's scale, so the brothers are the same size here as where the game
 // starts. Everything else in these rooms — the cords, the switch, the creature
 // — is given in metres and grows with it.
@@ -9902,10 +9999,11 @@ class StorageTwoScene extends WalkScene {
     const p = this.player;
     p._facing = 1;
     heroFlip(p, p._hero, 1);
-    // Both of them in the frame: him on the left, it on the right.
+    // The same shot as before the cinematic — centred on the thing — so coming
+    // back in from the stills is a continuation, not a camera pulling back.
     const cam = this.cameras.main;
     cam.stopFollow();
-    cam.scrollX = Phaser.Math.Clamp((p.x + x) / 2 - 640, 0, this.worldW - 1280);
+    cam.scrollX = Phaser.Math.Clamp(x - 640, 0, this.worldW - 1280);
     const lines = d.retry ? [] : [
       ['ETERWOLF', "It's not sitting down any more."],
       ['WOLFFEL',  'Looks like we have to fight.']
@@ -9924,12 +10022,19 @@ class StorageTwoScene extends WalkScene {
     this._fightPending = false;
     this._holdInput = false;
     this._inConversation = false;
-    this.cameras.main.startFollow(this.player, false, 0.1, 0.1);
+    // Follow him again without the shot jumping: start from exactly where the
+    // camera is, then ease the offset away over a second and a half.
+    const cam = this.cameras.main, p = this.player;
+    const centre = cam.scrollX + cam.width / 2;
+    cam.startFollow(p, false, 0.1, 0.1);
+    this._look = 0;
+    this._camBias = { v: p.x - centre };
+    this.tweens.add({ targets: this._camBias, v: 0, duration: 1500, ease: 'Sine.easeInOut' });
     const x = this.stander ? this.stander.x : this.fx(STORAGE_GOO_X);
     if (this.stander) { this.stander.destroy(); this.stander = null; }
-    // "crawling slowly towards" — a quarter of its height a second until it is
-    // hurt. It does not lunge until then either: the first blow is his.
-    this.spawnAlien({ x, speed: 0.25, rage: 0.62, calmLunge: false, lungeDelay: 1500 });
+    // No slow crawl: the moment they have said it, it comes — walking at him,
+    // and ready to lunge within a second and a half. The fight is on at once.
+    this.spawnAlien({ x, speed: 0.45, rage: 0.66, calmLunge: true, lungeDelay: 1500 });
     Sfx.ensure(); Sfx.roar();
     this.cameras.main.shake(260, 0.004);
     this._showTip('F  OR  RIGHT-CLICK  —  CUT IT DOWN');

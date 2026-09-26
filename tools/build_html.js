@@ -143,6 +143,8 @@ const SCENE_SRC = {
   shopowner:    ['public/assets/shop_owner.png'],
   shopownerblur: ['public/assets/shop_owner_blur.png'],
   ownerclothes: ['public/assets/owner_clothes.png'],
+  // Character effects. dash effect.png, re-cut into five even cells.
+  fxdash:       ['public/assets/fx_dash_burst.png'],
   cine1:        ['public/assets/enemy_cine_1.jpg'],
   cine2:        ['public/assets/enemy_cine_2.jpg'],
   deadplant: ['public/assets/dead_plant.png'],
