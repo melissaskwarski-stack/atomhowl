@@ -6070,6 +6070,14 @@ const ALIEN_DEATH_SHEET = { key: 'scene_aliendeath', n: 25, cols: 5, cw: 246, ch
                             foot: 243, cx: 118.5, standH: 244 };
 const ALIEN_FACE_SHEET  = { key: 'scene_alienface', n: 20, cols: 5, cw: 214, ch: 247,
                             foot: 243, cx: 109.5, standH: 244 };
+// jump through window.gif: 17 frames, front on. 1-6 it sinks from standing
+// into a squat, 7-12 the legs come up under it, 13-17 it hangs tucked. Cut on
+// the walk's own 247 box with the feet on the walk's floor row, so the body
+// and the scale carry straight over. The leap is driven by its flight, not by
+// the clip's clock: legs up on the way up, down again as it drops, and the
+// squat run backwards (6 to 1) is the landing.
+const ALIEN_JUMP_SHEET  = { key: 'scene_alienjump', n: 17, cols: 17, cw: 247, ch: 247 };
+const AJ_TUCK0 = 6, AJ_TUCK1 = 11;       // frames 7..12, zero-based
 
 // Name the frames of a grid sheet on its texture, once.
 function sheetFrames(scene, S, prefix) {
@@ -6092,6 +6100,11 @@ function alienClips(scene) {
     // down into the pool quickly; the drying-up is slow and comes later
     scene.anims.create({ key: 'alien-die', frames: die.slice(0, 16), frameRate: 9, repeat: 0 });
     scene.anims.create({ key: 'alien-dry', frames: die.slice(16), frameRate: 5, repeat: 0 });
+  }
+  const jump = sheetFrames(scene, ALIEN_JUMP_SHEET, 'aj');
+  if (jump && !scene.anims.exists('alien-jumpland')) {
+    scene.anims.create({ key: 'alien-jumpland', frames: jump.slice(0, 6).reverse(),
+                         frameRate: 20, repeat: 0 });
   }
   const face = sheetFrames(scene, ALIEN_FACE_SHEET, 'ae');
   if (face && !scene.anims.exists('alien-face')) {
@@ -6195,6 +6208,14 @@ const WalkCombat = {
       z.setVelocity(o.vx || 0, o.vy || 0);
       z._leaping = true;
       z._leapAt = this.time.now;
+      z._fallAt = 0;
+      z._landUntil = 0;
+      // the leap clip, where there is one: legs up as it comes through
+      if (o.jumpClip && this.textures.exists(ALIEN_JUMP_SHEET.key) && this.anims.exists('alien-jumpland')) {
+        z._jumpClip = true;
+        z.anims.stop();
+        z.setTexture(ALIEN_JUMP_SHEET.key, 'aj' + AJ_TUCK0);
+      }
     }
     this.enemies.push(z);
     this.startCombat();
@@ -6210,12 +6231,32 @@ const WalkCombat = {
       const H = z._H;
       // Through the window and down: nothing steers it until it lands.
       if (z._leaping) {
-        if (!grounded || now < z._leapAt + 150) return;
+        if (!grounded || now < z._leapAt + 150) {
+          if (z._jumpClip) {
+            // Legs drawn up through the rise, a frame every 45ms; once it
+            // is falling they come back down, ready for the floor.
+            let f;
+            if (z.body.velocity.y < 0) f = Math.min(AJ_TUCK1, AJ_TUCK0 + Math.floor((now - z._leapAt) / 45));
+            else {
+              if (!z._fallAt) { z._fallAt = now; z._fallFrom = z._ajFrame || AJ_TUCK1; }
+              f = Math.max(AJ_TUCK0, z._fallFrom - Math.floor((now - z._fallAt) / 60));
+            }
+            if (f !== z._ajFrame) { z._ajFrame = f; z.setFrame('aj' + f); }
+          }
+          return;
+        }
         z._leaping = false;
         z.setVelocityX(0);
         this.cameras.main.shake(140, 0.005);
         Sfx.ensure(); Sfx.land();
+        if (z._jumpClip) {
+          // it takes the drop in a squat and comes up out of it
+          z._jumpClip = false;
+          z.play('alien-jumpland');
+          z._landUntil = now + 320;
+        }
       }
+      if (now < (z._landUntil || 0)) { z.setVelocityX(0); return; }
       if (now < z._knockUntil || now < z._lungeUntil) return;
       if (this._dead || this._holdInput) {
         z.setVelocityX(0);
@@ -6614,6 +6655,9 @@ const WalkCombat = {
   }
 };
 Object.assign(WalkScene.prototype, WalkCombat);
+
+// The tienda's horde: three in the front, three through the window.
+const HORDE_TOTAL = 6;
 
 // ================================================================== //
 //  THINGS TO LOOK AT                                                  //
@@ -8821,8 +8865,10 @@ class StoreScene extends WalkScene {
   create() {
     this.cameras.main.fadeIn(260, 0, 0, 0);
     // Back from the storage rooms with the thing in them dead: the shop is
-    // not empty any more. Three come in the front, and a fourth through the
-    // window. Until they are all down there is no way out.
+    // not empty any more. Three come in the front; when they are down the
+    // picture cuts to the window as one comes through it, and two more follow
+    // it in once the fight is back on. Until all six are down there is no way
+    // out.
     this._horde = !!GameState.seen['fight1-won'] && !GameState.seen['tienda-cleared'];
     this._cleared = !!GameState.seen['tienda-cleared'];
 
@@ -8986,28 +9032,80 @@ class StoreScene extends WalkScene {
 
   _hordeKill() {
     this._hordeKills++;
-    if (this._hordeKills === 3) this.time.delayedCall(1500, () => this._windowCrash());
-    if (this._hordeKills >= 4) this._hordeCleared();
+    if (this._hordeKills === 3) this.time.delayedCall(900, () => this._windowCutscene());
+    if (this._hordeKills >= HORDE_TOTAL) this._hordeCleared();
   }
 
-  // The fourth comes through the glass: the pane goes, it drops from the
-  // window to the floor, and comes on. (jump enemy.gif is the clip for this
-  // leap once it is uploaded; until then it is its ordinary walk.)
-  _windowCrash() {
+  // The front three down, and a breath — then the picture is taken off him:
+  // bars close in, the camera goes to the window, something hits the glass
+  // twice from outside and the third time it comes through. It lands, stands,
+  // and the camera goes back to him with the fight on again and two more
+  // coming through the same hole behind it.
+  _windowCutscene() {
     if (this._dead || this._transitioning || !this.glassBox) return;
+    const cam = this.cameras.main, p = this.player, gb = this.glassBox;
+    this._holdInput = true;
+    this._calmIdle = true;
+    this._invulnUntil = Infinity;
+    cam.stopFollow();
+    const bars = [0, 1].map(i => this.add.rectangle(640, i ? 720 : 0, 1280, 132, 0x000000, 1)
+      .setOrigin(0.5, i ? 0 : 1).setScrollFactor(0).setDepth(92));
+    this.tweens.add({ targets: bars[0], y: 66, duration: 420, ease: 'Sine.easeOut' });
+    this.tweens.add({ targets: bars[1], y: 720 - 66, duration: 420, ease: 'Sine.easeOut' });
+    // the window and the floor under it, both in the picture
+    const tx = gb.x0 + gb.w / 2, ty = (gb.y0 + this.groundY) / 2;
+    cam.pan(tx, ty, 700, 'Sine.easeInOut');
+    const at = (ms, fn) => this.time.delayedCall(ms, () => { if (!this._dead && this.scene.isActive()) fn(); });
+    // two knocks on the glass from outside
+    [900, 1350].forEach((ms, i) => at(ms, () => {
+      Sfx.ensure(); Sfx.burst(0.09, 0.45 + i * 0.1, 260, 1.1); Sfx.burst(0.05, 0.2, 2600, 3);
+      cam.shake(90, 0.002 + i * 0.001);
+      if (this.glass) this.tweens.add({ targets: this.glass, alpha: 0.35, duration: 60, yoyo: true });
+    }));
+    at(1900, () => this._windowCrash(true));
+    at(2900, () => { Sfx.ensure(); Sfx.roar(); cam.shake(260, 0.004); });
+    at(3700, () => {
+      cam.pan(p.x, p.y, 650, 'Sine.easeInOut', false, (c, t) => {
+        if (t < 1) return;
+        cam.startFollow(p, false, 0.1, 0.1);
+        this._look = 0;
+        if (this._camBias) this._camBias.v = 0;
+      });
+      this.tweens.add({ targets: bars[0], y: 0, duration: 420, ease: 'Sine.easeIn' });
+      this.tweens.add({ targets: bars[1], y: 720, duration: 420, ease: 'Sine.easeIn',
+                        onComplete: () => bars.forEach(b => b.destroy()) });
+    });
+    at(4400, () => {
+      this._holdInput = false;
+      this._calmIdle = false;
+      this._invulnUntil = this.time.now + 400;
+      this._say([['PLAYER', 'The window! More of them!']]);
+      this._showTip('MORE COMING THROUGH THE WINDOW');
+    });
+    // and the two behind it, once he has it back
+    at(6000, () => this._windowCrash(true));
+    at(9200, () => this._windowCrash(true));
+  }
+
+  // One through the glass: the pane goes the first time, it leaps from the
+  // window to the floor on its jump clip, and comes on.
+  _windowCrash(jumpClip) {
+    if (this._dead || this._transitioning || !this.glassBox) return;
+    const broke = !!this.glass;
     this.breakWindow();
     const gb = this.glassBox;
     const x = gb.x0 + gb.w / 2, y = gb.y0 + gb.h * 0.55;
     const dir = this.player.x >= x ? 1 : -1, H = this.alienH();
     const z = this.spawnAlien({ x, y, speed: 0.6, rage: 0.9, calmLunge: true, lungeDelay: 1300,
-                                vx: dir * 0.9 * H, vy: -0.9 * H });
-    Sfx.ensure(); Sfx.roar();
-    this._say([['PLAYER', 'The window!']]);
+                                vx: dir * 0.9 * H, vy: -0.9 * H, jumpClip });
+    Sfx.ensure();
+    if (!broke) { Sfx.burst(0.08, 0.3, 3000, 1.4); Sfx.swoop(); }
     return z;
   }
 
   _hordeCleared() {
     if (this._cleared) return;
+    this._invulnUntil = 0;
     this._cleared = true;
     this._horde = false;
     once('tienda-cleared');

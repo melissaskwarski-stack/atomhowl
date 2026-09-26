@@ -127,6 +127,8 @@ const SCENE_SRC = {
   // grids and have to match them.
   aliendeath:   ['public/assets/alien_death_sheet.png'],
   alienface:    ['public/assets/alien_encounter_sheet.png'],
+  // jump through window.gif, 17 frames on the walk's 247 box (ALIEN_JUMP_SHEET)
+  alienjump:    ['public/assets/alien_window_jump.png'],
   // The bunker's food box: closed (closed box.png, trimmed and downscaled),
   // and open (cut from bunker new.png, where the painting has it).
   bunkerboxclosed: ['public/assets/bunker_box_closed.png'],
