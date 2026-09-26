@@ -1,0 +1,357 @@
+#!/usr/bin/env node
+// Build build/wf_assets.js — Wolffel, the second playable brother.
+//
+// He has far less art than Eterwolf: an idle, a walk, a sprint, the burger he
+// digs out of his side pocket when he is left standing, and one arm-extend that
+// stands in for firing. The game fills the gaps by falling back along a chain
+// (no dash art -> run, no jump art -> run, and so on), which is what lets a
+// character be dropped into the sandbox before its set is finished.
+//
+// All of it is drawn facing east or south-east, so every west animation is a
+// mirrored copy baked here — the directional player expects a real 'W' key to
+// exist rather than flipping the sprite at runtime.
+//
+// Two of the clips are one-shot actions rather than cycles, and each is emitted
+// twice: '<name>in' plays the whole thing once and chains into '<name>', which
+// loops the settled tail. The burger's tail is the chew, and it ping-pongs
+// (4,5,6,5) because three frames of a hand at a mouth do not wrap — retracing
+// them has no seam at all, which scoring the wrap discontinuity could not beat
+// (best straight loop scored 1.55; Eterwolf's guitar, for reference, is 1.12).
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const L = require('./lib/clipcut');
+
+const ROOT = path.resolve(__dirname, '..');
+const A = rel => path.join(ROOT, 'public/assets', rel);
+const OUT = path.join(ROOT, 'build/wf_assets.js');
+
+const SRC = {
+  // Two standing poses, played in order — see the idle chain below.
+  // Side-on, squared up the way the walk leaves him.
+  idle0:  A('wf_idle_side.gif'),
+  idle:   A('wf_idle_se.gif'),      // 3/4 view, breathing on the spot
+  walk:   A('wf_walk_east.gif'),
+  run:    A('wf_sprint_east.gif'),
+  burger: A('wf_burger_se.gif'),    // reaches into his side and eats
+  aim:    A('wf_aim_east.gif'),     // extends the arm; stands in for shooting
+  // A slab of a greatsword he hauls off his back, swings through a full arc
+  // and drags back down: 21 frames that open and close on the same standing
+  // pose (f20 -> f0 differs by 8, against 149 inside), so the two halves cut
+  // cleanly into two swings.
+  sword:  A('wf_greatsword_east.gif'),
+  crouch: A('wf_crouch_east.gif'),
+  akwalk: A('wf_akwalk_east.gif'),        // walking and firing the rifle
+  pwalk:  A('wf_pistolwalk_east.gif'),    // walking with the pistol up
+  // 21 frames of him leaning into a hard run. Only the front of it is a dash:
+  // four standing frames, then the lean at 4, the push-off widening 116 -> 205
+  // through 5-8, and 9 coming back down. Frames 4-9 are the whole move; the
+  // rest is a sprint cycle he already has.
+  dash:   A('wf_dash_east.gif'),
+  // A real vertical hop at last — 21 frames, and the feet actually leave the
+  // floor: planted through 5, off the ground at 6, rising to an apex at 10-11
+  // (boots 82px up from where they started) and back down by 16. Before this
+  // he had no jump art at all and fell back to the run cycle, which pumped his
+  // legs in mid-air.
+  jump:   A('wf_jump_east.gif'),
+  // Running with the pistol held up at roughly 45 degrees, and walking while
+  // firing it flat. Both are east-only, mirrored here like the rest of him.
+  p45:    A('wf_pistol45_east.gif'),
+  pfire:  A('wf_pistolfire_east.gif')
+};
+
+// Where each one-shot settles into something repeatable.
+const LOOP_FROM = { aim: 7 };
+// The burger, cut by what the frames actually show: he reaches into his side
+// pocket (0-2), brings it up (3), eats (4-6), and lowers it again (7-8).
+//
+// So the whole business is one performance rather than a loop — out, three
+// bites, and away — which is what it looks like when someone eats something
+// standing up. Retracing 5 between the bites keeps each one from seaming, and
+// putting it back is the reach played in reverse, because there is no frame of
+// him pocketing it and running 2-1-0 backwards is exactly that motion.
+const TAKE = [0, 1, 2, 3];
+const CHEW = [4, 5, 6, 5];
+const PUT  = [7, 8, 2, 1, 0];
+// The arm swings wide in the aim and the burger comes up across the body, so
+// both would shimmy if each frame were centred on its own silhouette.
+const SHARE_X = ['idle0', 'aim', 'burger', 'sword', 'crouch', 'jump', 'p45', 'pfire'];
+
+const clips = L.loadClips(SRC);
+if (!clips.idle) { console.error('need the idle clip'); process.exit(1); }
+L.shareX(clips, SHARE_X);
+
+const { CW, CH } = L.canvasFor(clips);
+const cut = L.makeCutter(CW, CH);
+
+// ---------- unique frame pool ----------
+// Pool keys double as texture names ('wf_' + key), and every animation is a
+// list of those keys, so a frame used by both an intro and its loop is stored
+// once.
+const frames = {};
+const pool = (poolName, clip, mirror) => {
+  if (!clips[clip]) return null;
+  return clips[clip].frames.map((_, i) => {
+    const k = `${poolName}_${i}`;
+    frames[k] = cut(clips[clip], i, mirror);
+    return k;
+  });
+};
+
+const K = {
+  idle0:    pool('idle0',    'idle0',  false),
+  idle0W:   pool('idle0W',   'idle0',  true),
+  idle:     pool('idle',     'idle',   false),
+  idleW:    pool('idleW',    'idle',   true),
+  walk:     pool('walk',     'walk',   false),
+  walkW:    pool('walkW',    'walk',   true),
+  run:      pool('run',      'run',    false),
+  runW:     pool('runW',     'run',    true),
+  burgerin: pool('burgerin', 'burger', false),
+  burgerinW: pool('burgerinW', 'burger', true),
+  shootin:  pool('shootin',  'aim',    false),
+  shootinW: pool('shootinW', 'aim',    true),
+  gs:       pool('gs',       'sword',  false),
+  gsW:      pool('gsW',      'sword',  true),
+  crouch:   pool('crouch',   'crouch', false),
+  crouchW:  pool('crouchW',  'crouch', true),
+  ak:       pool('ak',       'akwalk', false),
+  akW:      pool('akW',      'akwalk', true),
+  pw:       pool('pw',       'pwalk',  false),
+  pwW:      pool('pwW',      'pwalk',  true),
+  dash:     pool('dash',     'dash',   false),
+  dashW:    pool('dashW',    'dash',   true),
+  jump:     pool('jump',     'jump',   false),
+  jumpW:    pool('jumpW',    'jump',   true),
+  p45:      pool('p45',      'p45',    false),
+  p45W:     pool('p45W',     'p45',    true),
+  pfire:    pool('pfire',    'pfire',  false),
+  pfireW:   pool('pfireW',   'pfire',  true)
+};
+// The looping tails reuse frames the intros already emitted.
+if (K.burgerin) {
+  const seq = TAKE.concat(CHEW, CHEW, CHEW, PUT);
+  const pick = (pool, list) => list.map(i => pool[Math.min(i, pool.length - 1)]);
+  K.burger  = pick(K.burgerin,  seq);
+  K.burgerW = pick(K.burgerinW, seq);
+}
+if (K.shootin) {
+  K.shoot  = K.shootin.slice(LOOP_FROM.aim);
+  K.shootW = K.shootinW.slice(LOOP_FROM.aim);
+}
+
+// ---------- body box + muzzle ----------
+const ib = clips.idle.boxes[0];
+const iw = ib.maxX - ib.minX + 1, ih = ib.maxY - ib.minY + 1;
+const bw = Math.max(8, Math.round(iw * 0.46));
+const body = { w: bw, h: ih - 6, x: Math.round((CW - bw) / 2), y: CH - ih + 2 };
+// Measured off the aim clip when there is one: the arm ends up level with the
+// chest and a little in front of the torso. Expressed relative to the sprite's
+// centre, which is what the game adds to player.y.
+const FEET_Y = CH - 2;
+const armed = clips.aim && clips.aim.boxes[clips.aim.boxes.length - 1];
+const muzzle = {
+  dx: Math.round((armed ? (armed.maxX - armed.minX + 1) : iw) * 0.5 + 4),
+  dy: Math.round((FEET_Y - ih * 0.72) - CH / 2)
+};
+// Per-weapon muzzles in canvas pixels — see the note in lib/clipcut.js.
+const muzzles = {};
+// `mirror` when the clip is drawn facing west and the east pose is its mirror.
+// Every muzzle is stored as the EAST-facing canvas position; the game negates
+// the x offset for west, so measuring one side is enough.
+// `names` may be several keys for one measurement — the game looks the muzzle
+// up by the action it is playing, and falls back to the weapon.
+const mz = (names, clip, frame, mirror) => {
+  if (!clips[clip]) return;
+  const m = L.muzzleTip(clips[clip], frame, CW, CH, mirror);
+  if (!m) return;
+  [].concat(names).forEach(n => { muzzles[n] = m; });
+  console.log(`muzzle ${[].concat(names).join('/')}: canvas ${m.x},${m.y}`);
+};
+// Keyed by the ACTION as well as the weapon — see the note in the Eterwolf
+// tool. Each running pose holds the gun somewhere the standing draw does not.
+mz(['pistol', 'shoot', 'shootin'], 'aim', 7);
+mz(['ak', 'akshoot', 'akshootin', 'akrunshoot'], 'akwalk', 11);
+// Measured on a frame that is actually firing, so the tip is the barrel with
+// the flash on it rather than a hand mid-swing.
+mz(['runshoot', 'runshootin'], 'pfire', 7);
+mz(['shoot45', 'shoot45in'], 'p45', 20);
+
+const A_ = (keys, fps, repeat) => ({ fps, repeat: repeat === undefined ? -1 : repeat, keys });
+const anims = {};
+const add = (name, keys, fps, repeat) => { if (keys) anims[name] = A_(keys, fps, repeat); };
+
+add('idle0',     K.idle0,     5);
+add('idle0W',    K.idle0W,    5);
+add('idle',      K.idle,      5);
+add('idleW',     K.idleW,     5);
+add('walk',      K.walk,      11);
+add('walkW',     K.walkW,     11);
+add('run',       K.run,       14);
+add('runW',      K.runW,      14);
+// the raw clip, kept for anything that wants it whole
+add('burgerin',  K.burgerin,  10, 0);
+add('burgerinW', K.burgerinW, 10, 0);
+// He takes two bites and is done, rather than chewing on forever: the chew
+// out, three bites, away — once through (repeat 0), and the game puts him back
+// on his feet after. 7fps runs the 21 frames in about three seconds, which is
+// an unhurried snack rather than a man wolfing something down.
+// (the note below is the old two-bite loop, kept for the reasoning)
+// when it finishes — see longIdleOnce.
+add('burger',    K.burger,    7, 0);
+add('burgerW',   K.burgerW,   7, 0);
+// the arm-extend, standing in for a draw-and-fire
+// The draw must finish inside the weapon cooldown (150ms for the pistol), or
+// bullets leave while the arm is still coming up and appear to fire from his
+// hip. Seven frames at 44fps is 159ms.
+add('shootin',   K.shootin.slice(0, 3),   44, 0);
+add('shootinW',  K.shootinW.slice(0, 3),  44, 0);
+add('shoot',     K.shoot,     10);
+add('shootW',    K.shootW,    10);
+
+// ---- the greatsword -------------------------------------------------------
+// It is too heavy for a fast three-hit chain, so the combo is the two halves
+// of the clip: he hauls it up and sweeps (2-14), then drags it back down
+// (14-20), and the third beat is the whole thing swung both ways.
+if (K.gs) {
+  add('sword',   K.gs.slice(2, 15),   26, 0);
+  add('swordW',  K.gsW.slice(2, 15),  26, 0);
+  add('sword2',  K.gs.slice(14),      26, 0);
+  add('sword2W', K.gsW.slice(14),     26, 0);
+  add('sword3',  K.gs.slice(2),       28, 0);
+  add('sword3W', K.gsW.slice(2),      28, 0);
+  // the quiet band mid-swing, where he holds it out
+  add('swordguard',  K.gs.slice(11, 15),  4);
+  add('swordguardW', K.gsW.slice(11, 15), 4);
+  // no front-facing art, so the finisher is the full two-way swing
+  add('deathblow',  K.gs.slice(2),  15, 0);
+}
+
+// ---- the dash -------------------------------------------------------------
+// Six frames over the 286ms the dash lasts, same as Eterwolf's, so the clip
+// ends as control comes back.
+// Held, not cycled: frames 4-9 played straight are a running stride and the
+// legs pump through it. One frame of the lean (5), the airborne stretch (7)
+// held, and one coming down (9). The blur trail carries the speed.
+if (K.dash) {
+  add('dash',  [K.dash[5], K.dash[7], K.dash[7], K.dash[7], K.dash[7], K.dash[9]],  21, 0);
+  add('dashW', [K.dashW[5], K.dashW[7], K.dashW[7], K.dashW[7], K.dashW[7], K.dashW[9]], 21, 0);
+}
+
+// ---- low stance -----------------------------------------------------------
+if (K.crouch) {
+  add('crouchin',  K.crouch,          18, 0);
+  add('crouchinW', K.crouchW,         18, 0);
+  add('crouch',    K.crouch.slice(2),  5);
+  add('crouchW',   K.crouchW.slice(2), 5);
+}
+
+// ---- the AK ---------------------------------------------------------------
+// He raises it over the first three frames and his legs repeat on a 10-frame
+// stride after that (measured), so the loop is frames 11-20.
+if (K.ak) {
+  add('akshootin',   K.ak.slice(0, 11),   42, 0);
+  add('akshootinW',  K.akW.slice(0, 11),  42, 0);
+  add('akrunshoot',  K.ak.slice(11),      14);
+  add('akrunshootW', K.akW.slice(11),     14);
+  add('akshoot',     K.ak.slice(11, 13),  10);
+  add('akshootW',    K.akW.slice(11, 13), 10);
+}
+
+// ---- walking with the pistol up ------------------------------------------
+// The draw is two frames at 30fps — the arm has to be out before the first
+// bullet leaves, or the shot appears to come from his hip. Everything after
+// is the stride, which loops.
+if (K.pfire) {
+  // Real walk-and-fire art: the muzzle flashes on frames 7, 15 and 22, so the
+  // barrel is genuinely extended for the whole loop rather than swinging.
+  add('runshootin',  K.pfire.slice(0, 3),   30, 0);
+  add('runshootinW', K.pfireW.slice(0, 3),  30, 0);
+  add('runshoot',    K.pfire.slice(2, 16),  12);
+  add('runshootW',   K.pfireW.slice(2, 16), 12);
+} else if (K.pw) {
+  add('runshootin',  K.pw.slice(0, 3),  30, 0);
+  add('runshootinW', K.pwW.slice(0, 3), 30, 0);
+  add('runshoot',    K.pw.slice(2),  11);
+  add('runshootW',   K.pwW.slice(2), 11);
+}
+
+// ---- the 45-degree shot ---------------------------------------------------
+// Running with the pistol held up and forward. Held on UP, so it needs to
+// reach the raised pose immediately: two frames of draw, then the settled
+// stride on a loop.
+if (K.p45) {
+  add('shoot45in',  K.p45.slice(0, 3),   30, 0);
+  add('shoot45inW', K.p45W.slice(0, 3),  30, 0);
+  add('shoot45',    K.p45.slice(14, 27),  13);
+  add('shoot45W',   K.p45W.slice(14, 27), 13);
+}
+
+// ---- the jump -------------------------------------------------------------
+// Cut by where the boots actually are: planted through 5, off the ground at 6,
+// rising to 7-9, hanging at 10-11, falling 12-16, down and recovering after.
+// The crouch frames are not played — physics leaves the floor the instant the
+// key goes down, so a squat drawn in mid-air reads as a glitch.
+if (K.jump) {
+  add('jump',      [K.jump[6], K.jump[7], K.jump[8], K.jump[9]],      18, 0);
+  add('jumpW',     [K.jumpW[6], K.jumpW[7], K.jumpW[8], K.jumpW[9]],  18, 0);
+  add('jumpapex',  [K.jump[10], K.jump[11]],    10, 0);
+  add('jumpapexW', [K.jumpW[10], K.jumpW[11]],  10, 0);
+  add('jumpfall',  [K.jump[12], K.jump[13], K.jump[14]],     14, 0);
+  add('jumpfallW', [K.jumpW[12], K.jumpW[13], K.jumpW[14]],  14, 0);
+  add('land',      [K.jump[16], K.jump[17], K.jump[18]],     18, 0);
+  add('landW',     [K.jumpW[16], K.jumpW[17], K.jumpW[18]],  18, 0);
+}
+
+const mod = {
+  charH: ih,
+  hiRes: true,             // 3D render, not pixel art — scale fractionally
+  directional: true,       // every side has a real key; never flipX
+  // Standing still he works down this list, one step every idleStepMs:
+  // side-on off the end of the walk, then he turns three-quarters on, then
+  // he digs the burger out. The last step is the one-shot flourish, which is
+  // what longIdle names for the scenes that suppress it.
+  idleChain: ['idle0', 'idle', 'burger'].filter(a => anims[a]),
+  idleStepMs: 8000,
+  // Having eaten, he does not just stop doing it forever. He goes back to
+  // standing — the three-quarter pose, not the side-on one he arrived in —
+  // and sixteen seconds later he gets the burger out again.
+  idleLoopFrom: 1,
+  idleLoopMs: 16000,
+  longIdle: 'burger',      // what he does when left alone
+  longIdleMs: 8000,
+  longIdleOnce: true,      // two bites, then back to standing
+  body, muzzle, muzzles,
+  canvasW: CW, canvasH: CH,
+  pending: ['west art (all mirrored east)',
+            'a front-facing finisher', 'a real standing firing clip'],
+  frames,
+  anims
+};
+
+// Every clip pools all of its frames, but the animations only ever slice parts
+// out — the dash keeps 6 of 21, the crouch 10 of 29, and the replaced sword
+// beats leave whole clips behind. Anything no animation names is dead weight in
+// a page that ships every frame as base64, so it is dropped here instead of
+// each cut having to be hand-trimmed back at the source.
+(function pruneFrames() {
+  const used = new Set();
+  Object.values(mod.anims).forEach(a => (a.keys || []).forEach(k => used.add(k)));
+  let dropped = 0, bytes = 0;
+  for (const k of Object.keys(mod.frames)) {
+    if (used.has(k)) continue;
+    bytes += mod.frames[k].length;
+    delete mod.frames[k];
+    dropped++;
+  }
+  if (dropped) console.log(`pruned ${dropped} unreferenced frames (${Math.round(bytes / 1024)}KB)`);
+})();
+
+fs.mkdirSync(path.dirname(OUT), { recursive: true });
+fs.writeFileSync(OUT, 'window.WF = ' + JSON.stringify(mod) + ';\n');
+console.log(`canvas ${CW}x${CH}  charH ${ih}`);
+console.log('body', JSON.stringify(body), 'muzzle', JSON.stringify(muzzle));
+console.log(`${Object.keys(frames).length} unique frames, ${Object.keys(anims).length} anims:`,
+  Object.keys(anims).join(' '));
+console.log('pending art:', mod.pending.join(', '));
+console.log('wrote', OUT, Math.round(fs.statSync(OUT).size / 1024) + 'KB');
