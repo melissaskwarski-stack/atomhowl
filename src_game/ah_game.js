@@ -7564,6 +7564,7 @@ class JumpScene extends WalkScene {
     this._twFires = [];
     this._sizzleAt = 0;
     this._sizzleSaid = false;
+    this._downWait = false;
     const art = TWINGO_ART;
     if (!this.textures.exists(art.car.key)) return;
     // one scale for all three: the car's wheelbase is a real Twingo's
@@ -7743,6 +7744,11 @@ class JumpScene extends WalkScene {
     super.update(time, delta);
     if (!this.player || !this.twCar) return;
     const p = this.player, now = this.time.now;
+    if (this._downWait && this.keys) {
+      const k = this.keys;
+      if (k.A.isDown || k.D.isDown || k.LEFT.isDown || k.RIGHT.isDown ||
+          k.W.isDown || k.UP.isDown || k.SPACE.isDown) this._getUp();
+    }
     // the fire gets louder the closer he is
     if (this._fire) {
       const dm = Math.abs(p.x - this._twX) / this.pxPerM;
@@ -7879,16 +7885,39 @@ class JumpScene extends WalkScene {
                         onComplete: () => this.twBoom.setVisible(false) });
     });
     this.time.delayedCall(560, () => { this._twingoDeck(); this._wreckFire(); this._twState = 'wreck'; });
-    // up again, and the way on is over it
-    this.time.delayedCall(2100, () => {
+    // He stays down where the blast put him, and the picture stays on the
+    // blast, until the player moves him.
+    this.time.delayedCall(1500, () => {
       if (!this.player || !this.player.active) return;
+      this._downWait = true;
+      this._say([['ETERWOLF', '¡Ave María...!']]);
+      this._showTip('A  /  D  —  GET UP');
+    });
+  }
+
+  // Up off the road: the fall run backwards, then the controls are his, and
+  // the view eases back onto him from the blast rather than cutting.
+  _getUp() {
+    this._downWait = false;
+    const p = this.player, hero = p._hero, cam = this.cameras.main;
+    let ms = 300;
+    if (hero && heroHas(hero, 'falldown')) {
+      const key = heroAnim(hero, 'falldown', 1), a = this.anims.get(key);
+      if (a) { p.playReverse(key); ms = Math.min(650, a.duration); }
+    }
+    this.time.delayedCall(ms, () => {
+      if (!p.active) return;
       this._holdInput = false;
       this._inConversation = false;
       this.cfg.noJump = false;
       this._refreshHint();
       if (hero) { playAction(p, hero, 'idle', 1); p._curAnim = heroAnim(hero, 'idle', 1); }
-      this.cameras.main.startFollow(p, false, 0.1, 0.1);
-      this._say([['ETERWOLF', '¡Ave María...!'], ['ETERWOLF', "Over it. Don't touch the fire."]]);
+      const centre = cam.scrollX + cam.width / 2;
+      cam.startFollow(p, false, 0.1, 0.1, p.x - centre, 0);
+      this._look = 0;
+      this._camBias = { v: p.x - centre };
+      this.tweens.add({ targets: this._camBias, v: 0, duration: 1800, ease: 'Sine.easeInOut' });
+      this._say([['ETERWOLF', "Over it. Don't touch the fire."]]);
       this._showTip('W  OR  SPACE  —  JUMP ONTO THE WRECK, THEN DOWN THE OTHER SIDE');
     });
   }
@@ -9048,8 +9077,8 @@ class StoreScene extends WalkScene {
       ],
       beats: (this._horde || this._cleared) ? [] : [
         { at: 0,    say: [['PLAYER', 'Somebody left in a hurry.']],
-                    tip: 'DOUBLE JUMP ONTO THE MOVING LEDGE' },
-        { at: 0.18, tip: 'ONE JUMP FROM THE LEDGE ONTO THE BALCONY — THE LEVER IS UP THERE' },
+                    tip: 'JUMP ONTO THE LIFT WHEN IT IS DOWN' },
+        { at: 0.18, tip: 'RIDE THE LIFT UP TO THE BALCONY — THE LEVER IS UP THERE' },
         { at: 0.55, tip: 'RIDE THE HIGH LEDGE ACROSS — THE CHEST IS ON THE FAR BALCONY' }
       ],
       exits: [
@@ -9079,30 +9108,30 @@ class StoreScene extends WalkScene {
     // ---- the two travelling ledges -----------------------------------
     // Each is drawn at one end of its dotted line and travels to the other.
     // The low one runs the whole time; the high one is dead until the lever.
+    // Measured with the movement as it is now: a single jump rises 146, a
+    // double 195. The lever balcony is 393 above the floor — no one platform
+    // splits that into two jumps anyone would enjoy — so the low one is a LIFT.
     this.movers = [
-      // The low one runs the whole time, beside the left balcony's end.
-      // Floor to it is 261 up — a double jump — and from its left end to the
-      // balcony is 131: ONE jump, as asked, with 20px to spare. At the far end
-      // of its run it is still short of the window, so it never covers it.
-      // Smaller, and a shorter run. There is no sprint in here (Shift is the
-      // dash), so the furthest anyone can go from its end is a walking double
-      // jump plus one air dash: about 500px. At 0.140 wide running out to
-      // 0.580 its end was 341px from the chest balcony — you could skip the
-      // lever entirely. Now 0.050 wide, running to 0.430: 700px short.
-      this._mover({ x0: 0.345, x1: 0.395, y: 0.545, to: 0.380, ms: 3600, live: true }),
-      // The high one is dead until the lever, at the balcony's own height. It
-      // crosses the WHOLE gap: its left edge starts at the balcony's end and
-      // its right edge travels right up against the chest balcony (0.720, a
-      // hair short of 0.722), so at the far end you step off it and one jump
-      // (86 up) puts you on the chest ledge. No gap left to judge.
-      this._mover({ x0: 0.345, x1: 0.485, y: 0.399, to: 0.580, ms: 5200, live: false })
+      // It stands 105 up off the floor (an easy single jump), rides up to the
+      // lever balcony's own height and stops there beside it, so you step off
+      // onto the balcony. 1.7m wide; it waits a moment at each end.
+      this._mover({ x0: 0.341, x1: 0.408, y: 0.719, yTo: 0.399, ms: 2200, pause: 900, live: true }),
+      // The high one is dead until the lever, at the balcony's own height,
+      // waiting just past the top of the lift. Its far end travels right up
+      // against the chest balcony (0.722), so you step off it and one jump (86
+      // up) puts you on the chest ledge. 2.2m wide: resting, its right end is
+      // 549px short of the chest balcony, past a walking double jump and an
+      // air dash, so the chest still needs the lever.
+      this._mover({ x0: 0.410, x1: 0.4933, y: 0.399, to: 0.636, ms: 5200, live: false })
     ];
 
     // On the far balcony, against the green locker (x 0.8955-0.9195).
     this._buildChest(0.866, 0.303);
     // On the green panel of the machine on the left balcony — measured at
     // x 0.2085-0.2265, y 0.248-0.335 — covering it exactly.
-    this._buildLever({ x0: 0.2085, x1: 0.2265, y0: 0.248, y1: 0.335 });
+    // The cabinet on the left balcony, measured on a 5x grid crop: x 429-470,
+    // y 190-300 of the 2048x768 painting. The switch plate sits in its middle.
+    this._buildLever({ x0: 0.2095, x1: 0.2295, y0: 0.2474, y1: 0.3906 });
     // The window, glazed. The horde will break it; nothing does yet.
     this._buildGlass({ x0: 0.408, x1: 0.453, y0: 0.195, y1: 0.372 });
     // The shop owner's portrait, small, on the lamp-lit wall just left of the
@@ -9288,7 +9317,9 @@ class StoreScene extends WalkScene {
     c.down = false; c.left = false; c.right = false;
     this.solidsW.push(box);
     this.physics.add.collider(this.player, box);
-    return { im, box, w, y, from: m.x0, to: m.to, ms: m.ms, live: m.live, t: 0, dir: 1, dx: 0 };
+    const vertical = m.yTo != null;
+    return { im, box, w, y, from: m.x0, to: vertical ? m.x0 : m.to, ms: m.ms, live: m.live, t: 0, dir: 1, dx: 0,
+             dy: 0, vertical, yFrom: y, yTo: vertical ? this.fy(m.yTo) : y, pause: m.pause || 0, waitUntil: 0 };
   }
 
   // The chest: the still drawing while it is shut, and the supplied clip when
@@ -9353,15 +9384,18 @@ class StoreScene extends WalkScene {
     if (!this.textures.exists('scene_leveroff')) return;
     const cx = this.fx((box.x0 + box.x1) / 2);
     const cy = this.fy((box.y0 + box.y1) / 2);
-    const wantH = (box.y1 - box.y0) * this.bgGeom.h * 1.12;   // just covers it
+    const wantW = (box.x1 - box.x0) * this.bgGeom.w * 0.86;   // inside the cabinet's sides
+    let wantH = 0;
     const mk = key => {
       const art = paintedBox(this, key);
       const o = this.add.image(cx, cy, key).setDepth(6);
       if (art) {
         o.setOrigin((art.x0 + art.pw / 2) / art.w, (art.y0 + art.ph / 2) / art.h);
-        o.setScale(wantH / art.ph);
+        o.setScale(wantW / art.pw);
+        wantH = art.ph * o.scaleY;
       } else {
-        o.setScale(wantH / o.height);
+        o.setScale(wantW / o.width);
+        wantH = o.displayHeight;
       }
       return o;
     };
@@ -9647,28 +9681,34 @@ class StoreScene extends WalkScene {
 
     // ---- carry the ledges, and whoever is standing on them ----------
     const d = Math.min(48, delta || 16);
+    // Standing ON one means his feet are at its top face and he is not
+    // rising; whoever is gets carried the same step it takes, across or up
+    // and down. Checked before it moves, against where its top was.
+    const b = this.player.body, now = this.time.now;
     (this.movers || []).forEach(m => {
-      m.dx = 0;
-      if (!m.live) return;
+      m.dx = 0; m.dy = 0;
+      const top0 = m.box.y - m.box.height / 2;
+      const riding = b.velocity.y >= -1 && Math.abs(b.bottom - top0) <= 7 &&
+                     b.right >= m.box.x - m.w / 2 && b.left <= m.box.x + m.w / 2;
+      if (!m.live || now < m.waitUntil) return;
       m.t += (d / m.ms) * m.dir;
-      if (m.t >= 1) { m.t = 1; m.dir = -1; }
-      if (m.t <= 0) { m.t = 0; m.dir = 1; }
+      if (m.t >= 1) { m.t = 1; m.dir = -1; m.waitUntil = now + m.pause; }
+      if (m.t <= 0) { m.t = 0; m.dir = 1; m.waitUntil = now + m.pause; }
       // ease in and out, so it arrives rather than stops dead
       const e = 0.5 - Math.cos(Math.PI * m.t) / 2;
-      const want = this.fx(m.from + (m.to - m.from) * e) + m.w / 2;
-      m.dx = want - m.im.x;
-      m.im.x = want;
-      m.box.x = want;
+      const wantX = this.fx(m.from + (m.to - m.from) * e) + m.w / 2;
+      const wantY = m.yFrom + (m.yTo - m.yFrom) * e;
+      m.dx = wantX - m.im.x;
+      m.dy = wantY - m.y;
+      m.y = wantY;
+      m.im.x = wantX; m.im.y = wantY;
+      m.box.x = wantX; m.box.y = wantY + 30;
       m.box.body.updateFromGameObject();
-    });
-    // Standing ON one means his feet are at its top face and he is not rising.
-    const b = this.player.body;
-    (this.movers || []).forEach(m => {
-      if (!m.dx || !b.blocked.down) return;
-      const top = m.box.y - m.box.height / 2;
-      if (Math.abs(b.bottom - top) > 6) return;
-      if (b.right < m.box.x - m.w / 2 || b.left > m.box.x + m.w / 2) return;
-      this.player.x += m.dx;
+      if (riding) {
+        this.player.x += m.dx;
+        this.player.y += m.dy;
+        if (m.dy) this.player.setVelocityY(0);
+      }
     });
 
     // ---- the chest, and the lever -----------------------------------
