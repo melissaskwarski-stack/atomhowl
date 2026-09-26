@@ -7330,16 +7330,15 @@ class ExitScene extends WalkScene {
     this.cameras.main.fadeIn(260, 0, 0, 0);
     this.buildWalk({
       bgKey: 'scene_exit',
-      // The painting's bottom 15.8% is dead black, so the scale is taken from
-      // the picture instead of the file and zoom drops to 1 — the content then
-      // fills the frame exactly and the brothers walk low in it, the way a road
-      // is usually framed.
-      // 167 px/m is this painting's true scale, measured off the blast doorway
-      // they walk out of: 345px from road to lintel, a 2.07m door. Drawn any
-      // smaller they are children standing in their own street, so 167, and
-      // the third of magnification that comes with it.
-      worldW: 'auto', groundFrac: 0.755, bgContentFrac: 0.8411,
-      startXFrac: 0.135, bgZoom: 1.0, pxPerM: 167,
+      // The new painting (new bunker exit.png, 2048x768) is pulled back on
+      // purpose: the first look outside should show how bad it is — the
+      // village, the church, the fires on the hills — so the brothers stand
+      // smaller here than on the stages after it. Measured on grid crops: the
+      // doorway they come out of is 176px tall (a 2.07m door, 85 px/m in the
+      // file, 80 once the picture fills the screen's height); they walk on
+      // the lit road at 0.70; the doorway's middle is at 0.05.
+      worldW: 'auto', groundFrac: 0.70,
+      startXFrac: 0.05, bgZoom: 1.0, pxPerM: 80,
       noJump: true,           // no jumping until the broken wall
       title: 'OUTSIDE — the village road',
       castSwitch: true, canReset: true,
