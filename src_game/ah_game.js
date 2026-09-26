@@ -5309,6 +5309,15 @@ class WalkScene extends Phaser.Scene {
     // input
     this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,SHIFT,M,E,ENTER,R,K');
     this.input.keyboard.on('keydown-N', () => Sfx.toggleMute());
+    // Walked in off the last stage: that stage is still on screen, and this
+    // one pushes it off. Whatever he was holding he is still holding.
+    if (XFER.img) {
+      ['A', 'D', 'LEFT', 'RIGHT', 'SHIFT'].forEach(n => {
+        const k = this.keys[n];
+        if (k && HELD_KEYS.has(k.keyCode)) { k.isDown = true; k.isUp = false; k.timeDown = this.time.now; }
+      });
+      this._xferIn();
+    }
     // Not during a scripted beat or a conversation laid over the stage: the
     // restart would happen under it and leave it talking over a reset room.
     // Nor while he is down or the stage is already leaving: the death restart
@@ -6017,6 +6026,36 @@ class WalkScene extends Phaser.Scene {
     if (best) this.cutOnce(best);
   }
 
+  // The last stage, pushed off by this one: the camera's viewport comes in
+  // from the side he walked out of while the picture of the last stage slides
+  // out the other way, the two edge to edge, so it is one move to the right
+  // (or left, or down) and never a cut through black. A doorway dissolves.
+  _xferIn() {
+    const img = XFER.img, dir = XFER.dir;
+    XFER.img = null;
+    const cam = this.cameras.main;
+    const v = { right: [1, 0], left: [-1, 0], down: [0, 1], up: [0, -1] }[dir] || [0, 0];
+    const t = { k: 0 };
+    const apply = () => {
+      const e = t.k;
+      if (v[0] || v[1]) {
+        cam.setPosition(v[0] * cam.width * (1 - e), v[1] * cam.height * (1 - e));
+        img.style.transform = `translate(${-v[0] * 100 * e}%, ${-v[1] * 100 * e}%)`;
+      } else {
+        img.style.opacity = String(1 - e);
+      }
+    };
+    const done = () => { cam.setPosition(0, 0); if (img.parentNode) img.parentNode.removeChild(img); };
+    // Once create has run: undo its fade in from black, and go.
+    this.events.once('update', () => {
+      cam.resetFX();
+      apply();
+      this.tweens.add({ targets: t, k: 1, duration: v[0] || v[1] ? XFER_MS : XFER_DOOR_MS,
+                        ease: 'Sine.easeInOut', onUpdate: apply, onComplete: done });
+    });
+    this.events.once('shutdown', done);
+  }
+
   goExit(ex) {
     this._transitioning = true;
     this.player.setVelocityX(0);
@@ -6026,16 +6065,59 @@ class WalkScene extends Phaser.Scene {
       this.player._curAnim = heroAnim(this.player._hero, 'idle', this.player._facing);
     }
     Sfx.ensure(); Sfx.dash();
+    const target = ex.kind === 'combat' ? 'GameScene' : ex.target;
+    const data = Object.assign({}, ex.data || {}, ex.spawnXFrac != null ? { spawnXFrac: ex.spawnXFrac } : {});
+    // Walking stage to walking stage: no black at all. Off an edge the next
+    // one pushes this one aside; through a doorway it dissolves in. Only an
+    // exit that asks for it (out of the bunker) still fades.
+    const next = this.scene.get(target);
+    if (next instanceof WalkScene && !ex.fade) {
+      const dir = ex.dir || (ex.auto ? (ex.xFrac > 0.5 ? 'right' : 'left') : 'door');
+      xferOut(this, dir, () => this.scene.start(target, data));
+      return;
+    }
     // Short. One stage running into the next is a step, not a scene change,
     // and 450 out plus 600 in is a second of black every time you walk off
     // the edge of a screen — which is what made the walk feel broken up.
     this.cameras.main.fadeOut(ex.fadeMs || 260, 0, 0, 0);
-    this.cameras.main.once('camerafadeoutcomplete', () => {
-      const target = ex.kind === 'combat' ? 'GameScene' : ex.target;
-      this.scene.start(target, Object.assign({}, ex.data || {},
-        ex.spawnXFrac != null ? { spawnXFrac: ex.spawnXFrac } : {}));
-    });
+    this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start(target, data));
   }
+}
+
+// ---- stage to stage ---------------------------------------------------------
+// The picture of the stage being left, laid over the canvas as a plain image
+// so it outlives the scene; the next stage's _xferIn moves it off.
+const XFER = { img: null, dir: null };
+const XFER_MS = 480;
+const XFER_DOOR_MS = 380;
+function xferOut(scene, dir, go) {
+  const canvas = scene.game.canvas, host = canvas.parentNode;
+  let fired = false;
+  const fire = img => {
+    if (fired) return;
+    fired = true;
+    if (img && host) {
+      if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+      const cr = canvas.getBoundingClientRect(), hr = host.getBoundingClientRect();
+      img.style.cssText = `position:absolute;left:${cr.left - hr.left + host.scrollLeft - host.clientLeft}px;` +
+        `top:${cr.top - hr.top + host.scrollTop - host.clientTop}px;width:${cr.width}px;height:${cr.height}px;` +
+        'pointer-events:none;z-index:5;will-change:transform,opacity;';
+      host.appendChild(img);
+      XFER.img = img; XFER.dir = dir;
+    }
+    go();
+  };
+  try { scene.game.renderer.snapshot(fire); } catch (e) { fire(null); }
+  // no picture in time (a lost context, a blocked read): just go
+  scene.time.delayedCall(250, () => fire(null));
+}
+// Keys held down right now, whichever scene is listening, so walking off one
+// stage keeps him walking in the next.
+const HELD_KEYS = new Set();
+if (typeof window !== 'undefined') {
+  window.addEventListener('keydown', e => HELD_KEYS.add(e.keyCode), true);
+  window.addEventListener('keyup', e => HELD_KEYS.delete(e.keyCode), true);
+  window.addEventListener('blur', () => HELD_KEYS.clear());
 }
 
 // ================================================================== //
@@ -6874,7 +6956,7 @@ class BunkerScene extends WalkScene {
         // for a hole knocked in a wall — it lights whatever is DARK inside the
         // box, and a blast door is the brightest thing in this room, so it lit
         // the shadows around the frame instead of the door.
-        { xFrac: 0.90, w: 180, label: 'EXIT THE BUNKER', target: 'ExitScene',
+        { xFrac: 0.90, w: 180, label: 'EXIT THE BUNKER', target: 'ExitScene', fade: true,
           glow: true, noArrow: true, glowShape: false,
           glowFrac: { x0: 0.838, x1: 0.952, y0: 0.264, y1: 0.775 },
           // Out to where, though? Not until the radio has said.
