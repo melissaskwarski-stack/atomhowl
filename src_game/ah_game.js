@@ -21,11 +21,17 @@ const Sfx = {
       this.master = this.ctx.createGain();
       this.master.gain.value = 0.13;
       this.master.connect(this.ctx.destination);
+      // recorded sounds (playSample) have their own level: the synth ones are
+      // built loud and sit under 0.13, a recording is mixed already
+      this.samples = this.ctx.createGain();
+      this.samples.gain.value = this.muted ? 0 : 1;
+      this.samples.connect(this.ctx.destination);
     } catch (e) { /* audio unavailable — game still runs */ }
   },
   toggleMute() {
     this.muted = !this.muted;
     if (this.master) this.master.gain.value = this.muted ? 0 : 0.13;
+    if (this.samples) this.samples.gain.value = this.muted ? 0 : 1;
   },
   blip(freq, dur, type, vol, slideTo) {
     if (!this.ctx || this.muted) return;
@@ -359,6 +365,75 @@ function audioType(url) {
   if (url.slice(0, 5) === 'data:') return url.slice(5, url.indexOf(';'));
   return AUDIO_MIME[(url.split('.').pop() || '').toLowerCase()];
 }
+
+// ---- recorded sounds -------------------------------------------------------
+// Decoded once into the audio context, so a loop has no gap at its seam and
+// the sound can be filtered. `far` is for a thing heard from a long way off:
+// muffled (the highs go first over distance) with a slow echo coming back
+// off the hills. The handle is the same shape as Sfx.loop's — setVolume,
+// volume, stop — so either can stand in for the other.
+const _samples = {};
+function loadSample(key) {
+  if (_samples[key]) return _samples[key];
+  Sfx.ensure();
+  const list = mediaList(key);
+  if (!list.length || !Sfx.ctx) return (_samples[key] = Promise.resolve(null));
+  return (_samples[key] = fetch(pickAudio(list)).then(r => r.arrayBuffer())
+    .then(b => new Promise((ok, no) => Sfx.ctx.decodeAudioData(b, ok, no)))
+    .catch(() => null));
+}
+function playSample(key, o) {
+  o = o || {};
+  Sfx.ensure();
+  const c = Sfx.ctx;
+  if (!c || !Sfx.samples) return null;
+  const out = c.createGain();
+  out.gain.value = 0.0001;
+  let into = out;
+  if (o.far) {
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = o.lp || 650;
+    const dl = c.createDelay(2); dl.delayTime.value = o.echo || 0.34;
+    const fb = c.createGain(); fb.gain.value = 0.4;
+    const wet = c.createGain(); wet.gain.value = 0.55;
+    lp.connect(out); lp.connect(dl); dl.connect(fb); fb.connect(dl); dl.connect(wet); wet.connect(out);
+    into = lp;
+  }
+  out.connect(Sfx.samples);
+  const scale = o.scale || 1;
+  let src = null, vol = 0, dead = false;
+  const ramp = (v, ms) => {
+    const t = c.currentTime;
+    out.gain.cancelScheduledValues(t);
+    out.gain.setValueAtTime(Math.max(0.0001, out.gain.value), t);
+    out.gain.linearRampToValueAtTime(Math.max(0.0001, v * scale), t + Math.max(0.02, (ms || 0) / 1000));
+  };
+  const h = {
+    setVolume(v, ms) { if (dead) return; vol = v; ramp(v, ms); },
+    get volume() { return vol; },
+    stop(ms) {
+      if (dead) return;
+      ramp(0, ms || 200);
+      dead = true;
+      setTimeout(() => {
+        try { if (src) src.stop(); } catch (e) { /* already stopped */ }
+        try { out.disconnect(); } catch (e) { /* gone */ }
+      }, (ms || 200) + 80);
+    }
+  };
+  h.setVolume(o.vol != null ? o.vol : 0.5, o.fadeIn || 0);
+  loadSample(key).then(buf => {
+    if (!buf || dead) return;
+    src = c.createBufferSource();
+    src.buffer = buf;
+    src.loop = !!o.loop;
+    src.connect(into);
+    src.start();
+    if (!o.loop) src.onended = () => setTimeout(() => h.stop(o.far ? 1500 : 50), o.far ? 1200 : 0);
+  });
+  return h;
+}
+
+if (typeof window !== 'undefined') window.__samples = { loadSample, playSample };   // for tests
 
 function pickAudio(list) {
   const probe = document.createElement('audio');
@@ -7444,7 +7519,10 @@ class ExitScene extends WalkScene {
       fireSprite(this, bg.x + ax / 2048 * bg.w, bg.y + ay / 768 * bg.h, h, -19);
     });
 
-    this._crackle = null;
+    // The fires across the valley are heard the whole time out here, low and
+    // far off; the cinematic brings them up while the camera is out there.
+    this._crackle = playSample('sfxFireFar', { loop: true, far: true, vol: 0, scale: 0.6 });
+    if (this._crackle) this._crackle.setVolume(GameState.seen['exit-intro'] ? 0.28 : 0.12, 1500);
     this._introTimers = [];
     this._exitTalking = false;
     this.events.once('shutdown', () => {
@@ -7471,8 +7549,8 @@ class ExitScene extends WalkScene {
     this.tweens.add({ targets: bars[0], y: 66, duration: 600, ease: 'Sine.easeOut' });
     this.tweens.add({ targets: bars[1], y: 720 - 66, duration: 600, ease: 'Sine.easeOut' });
     Sfx.ensure();
-    this._crackle = Sfx.loop({ hp: 60, lp: 900, waver: 0.9, crackle: 60, crackleFreq: 1800, vol: 0 });
-    this._crackle.setVolume(0.07, 2500);
+    // fire in the distance.mp3, muffled and echoing: it is across the valley
+    if (this._crackle) this._crackle.setVolume(0.6, 3000);
     const at = (ms, fn) => this._introTimers.push(this.time.delayedCall(ms, fn));
     at(500, () => cam.pan(this.worldW - cam.width / 2, cam.height / 2, 4600, 'Sine.easeInOut', true));
     at(3000, () => Sfx.burst(0.9, 0.22, 110, 0.7));               // something coming down, far off
@@ -7500,7 +7578,7 @@ class ExitScene extends WalkScene {
     this.tweens.add({ targets: bars[0], y: 0, duration: 400, ease: 'Sine.easeIn' });
     this.tweens.add({ targets: bars[1], y: 720, duration: 400, ease: 'Sine.easeIn',
                       onComplete: () => bars.forEach(b => b.destroy()) });
-    if (this._crackle) this._crackle.setVolume(0.035, 800);
+    if (this._crackle) this._crackle.setVolume(0.28, 1500);
     this.time.delayedCall(350, () => {
       if (!this.scene.isActive()) return;
       this.scene.launch('IntroDialogueScene', {
@@ -7706,7 +7784,11 @@ class JumpScene extends WalkScene {
     this._twGlow = this.add.image(this._twX, this._twY - 20, TORCH_KEY).setDepth(2.5)
       .setBlendMode(Phaser.BlendModes.ADD).setTint(0xff7a1a)
       .setDisplaySize(620, 260).setAlpha(0.28);
-    this._fire = Sfx.loop({ hp: 60, lp: 1100, waver: 0.9, crackle: 70, crackleFreq: 2100, vol: 0 });
+    // fire.mp3 for the car burning (the level set by distance in update), and
+    // car explosion.mp3 made ready so the blast is on time
+    this._fire = playSample('sfxFire', { loop: true, vol: 0, scale: 6 }) ||
+                 Sfx.loop({ hp: 60, lp: 1100, waver: 0.9, crackle: 70, crackleFreq: 2100, vol: 0 });
+    loadSample('sfxBoom');
     this.events.once('shutdown', () => {
       if (this._fire) { this._fire.stop(150); this._fire = null; }
     });
@@ -7957,7 +8039,7 @@ class JumpScene extends WalkScene {
     }
     cam.flash(200, 255, 214, 150);
     cam.shake(480, 0.014);
-    Sfx.explosion();
+    if (!playSample('sfxBoom', { vol: 1 })) Sfx.explosion();
     // a beat where everything stops, then it all comes down
     this.physics.world.pause();
     this.time.delayedCall(70, () => this.physics.world.resume());

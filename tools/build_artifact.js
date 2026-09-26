@@ -44,7 +44,11 @@ const SCRIPTS = [
 const MEDIA = {
   menuVideo: [['public/assets/main_menu_video.webm', 'main_menu_video.webm']],
   menuMusic: [['public/assets/Atom_howl_intro_lite.mp3', 'intro.mp3']],
-  fightMusic: [['public/assets/four_enemies_lite.mp3', 'four_enemies.mp3']]
+  fightMusic: [['public/assets/four_enemies_lite.mp3', 'four_enemies.mp3']],
+  // recorded effects: the car going up, the car burning, fires far off
+  sfxBoom: [['public/assets/car_explosion.mp3', 'car_explosion.mp3']],
+  sfxFire: [['public/assets/fire.mp3', 'fire.mp3']],
+  sfxFireFar: [['public/assets/fire_distance.mp3', 'fire_distance.mp3']]
 };
 
 const files = [];

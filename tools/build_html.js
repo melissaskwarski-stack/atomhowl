@@ -243,6 +243,10 @@ const MEDIA_SRC = {
   // "four enemies", under the first fight and the horde after it. 96k mono,
   // cover art stripped, for the same reason as the menu bed.
   fightMusic: [['public/assets/four_enemies_lite.mp3', 'audio/mpeg']],
+  // recorded effects: the car going up, the car burning, fires far off
+  sfxBoom: [['public/assets/car_explosion.mp3', 'audio/mpeg']],
+  sfxFire: [['public/assets/fire.mp3', 'audio/mpeg']],
+  sfxFireFar: [['public/assets/fire_distance.mp3', 'audio/mpeg']],
 };
 
 // ---------- dialogue voice ----------
