@@ -10587,7 +10587,9 @@ class StorageTwoScene extends WalkScene {
     this.onPistol = () => {
       once('fight1-won');
       this.cfg.keep = null;
-      stopTrack(3500);
+      // The fight music does not stop here: it carries on through the walk
+      // back and under the horde in the tienda, and only fades once the
+      // tienda is clear (_hordeCleared).
       this.time.delayedCall(1800, () => {
         this._say([['ETERWOLF', "Let's get out of here."],
                    ['WOLFFEL',  'Back the way we came.']]);
