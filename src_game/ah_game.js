@@ -1350,7 +1350,13 @@ const ACTION_FALLBACK = {
   death:       ['death', 'falldown', 'idle'],
   shoot45in:   ['shoot45in', 'shoot45', 'runshootin', 'shootin', 'shoot', 'idle'],
   runshootin:  ['runshootin', 'runshoot', 'shootin', 'shoot', 'idle'],
-  akrunshootin: ['akrunshootin', 'akshootin', 'runshootin', 'akrunshoot', 'shoot', 'idle']
+  akrunshootin: ['akrunshootin', 'akshootin', 'runshootin', 'akrunshoot', 'shoot', 'idle'],
+  // reaching for things, pulling a brother up, grief, and walking away into a door
+  pickup:      ['pickup', 'idle'],
+  revive:      ['revive', 'pickup', 'crouch', 'idle'],
+  grieve:      ['grieve', 'crouch', 'idle'],
+  doorwalk:    ['doorwalk', 'walk', 'idle'],
+  getup:       ['getup', 'idle']
 };
 // Which standing pose belongs this far into a rest.
 //
@@ -2056,10 +2062,10 @@ class GameScene extends Phaser.Scene {
       if (p.rightButtonDown()) this.swordAttack();
     });
     this.input.keyboard.on('keydown-F', () => this.swordAttack());
-    this.input.keyboard.on('keydown-Q', () => this.useNuke());
+    this.input.keyboard.on('keydown-G', () => this.useNuke());
     this.input.keyboard.on('keydown-J', () => this.swordAttack());
-    this.input.keyboard.on('keydown-SHIFT', () => this.dash());
-    this.input.keyboard.on('keydown-X', () => this.toggleWalk());
+    // the same as everywhere else: Q dashes, Shift held runs
+    this.input.keyboard.on('keydown-Q', () => this.dash());
     this.input.keyboard.on('keydown-E', () => this.swapWeapon());
     // --- test keys (for tuning, harmless to ship) ---
     this.input.keyboard.on('keydown-V', () => {   // V = spawn one of each enemy
@@ -2127,7 +2133,7 @@ class GameScene extends Phaser.Scene {
       this.powHudIcons[d.key] = { ic, lbl };
     });
     this.add.text(640, 702,
-      'A/D · W jump ×2 · S crouch · Shift dash · X walk · LMB fire · UP+fire 45° · E weapon · RMB/F sword · Q nuke · N mute',
+      'A/D · Shift run · Q dash · W jump ×2 · S crouch · LMB fire · UP+fire 45° · E weapon · RMB/F sword · G nuke · N mute',
       { fontFamily: 'Courier New, monospace', fontSize: '14px', color: '#8a6f4a' })
       .setOrigin(0.5, 1).setScrollFactor(0).setDepth(60).setAlpha(0.85);
 
@@ -3296,9 +3302,10 @@ class GameScene extends Phaser.Scene {
 
     const dashing = time < this.dashUntil;
     if (!dashing) {
+      this.walkMode = !(this.keys.SHIFT && this.keys.SHIFT.isDown);
       const ground = this.crouching ? CROUCH_SPEED
                    : boostActive    ? 580
-                   : this.walkMode  ? WALK_SPEED : COMBAT_SPEED;
+                   : this.walkMode  ? WALK_SPEED : RUN_SPEED;
       this.player.setVelocityX(move * ground);
 
       // ----- jump: buffered + coyote time + DOUBLE JUMP -----
@@ -3583,6 +3590,7 @@ function makeWalker(scene, x, groundY, targetH, castId) {
 // loop behind it is what makes the action read. Turning on the spot keeps the
 // action, so only a CHANGE of action replays the intro.
 const ACTION_INTRO = {
+  crouch:   'crouchin',     // he goes down once, then holds the crouch
   run:      'runin',
   guitar:   'guitarin',
   shoot:    'shootin',
@@ -3686,6 +3694,29 @@ const CROUCH_BODY  = 0.57;   // measured: the crouch is 128px against a 226px st
 // Plays `action` on `hero`, chaining through its intro when the action is
 // changing. Returns the key actually playing, which is what callers cache to
 // decide whether anything needs replaying.
+// Play an action once and let it own the sprite until it ends: driveWalker
+// and the stand-still both leave him alone while _downUntil runs, and he does
+// not move. Returns how long it takes (0 if he has no art for it).
+function playOnce(p, action, facing) {
+  const hero = p && p._hero;
+  if (!hero || !p._real || !heroHas(hero, action)) return 0;
+  const f = facing || p._facing || 1;
+  const key = heroAnim(hero, action, f);
+  const intro = ACTION_INTRO[action];
+  const introKey = heroHas(hero, intro) ? heroAnim(hero, intro, f) : null;
+  if (p.anims.nextAnimsQueue) p.anims.nextAnimsQueue.length = 0;
+  let ms = 0;
+  if (introKey && p.scene.anims.exists(introKey)) {
+    p.play(introKey); p.chain(key);
+    ms += p.scene.anims.get(introKey).duration;
+  } else p.play(key);
+  p._curAnim = key; p._curAction = action;
+  const a = p.scene.anims.get(key);
+  ms += a ? a.duration : 400;
+  p._downUntil = p.scene.time.now + ms;
+  return ms;
+}
+
 function playAction(p, hero, action, facing) {
   const act = heroAction(hero, action);
   const key = heroAnim(hero, act, facing);
@@ -3739,6 +3770,7 @@ const PAD_KEYS = {
   E:     [69, 'KeyE',       'e'],
   SHIFT: [16, 'ShiftLeft',  'Shift'],
   Q:     [81, 'KeyQ',       'q'],
+  ENTER: [13, 'Enter',      'Enter'],
   ESC:   [27, 'Escape',     'Escape'],
   UP:    [38, 'ArrowUp',    'ArrowUp'],
   DOWN:  [40, 'ArrowDown',  'ArrowDown'],
@@ -3754,17 +3786,17 @@ const PAD_KEYS = {
 // This table is the whole mapping. Remapping later is editing it and nothing
 // else.
 const PAD_MAP = {
+  // The standard action-game layout, the same for both players.
   0:  'SPACE',   // A      jump / confirm
-  1:  'F',       // B      sword
-  2:  'K',       // X      fire / open door
-  3:  'E',       // Y      swap weapon / open door
-  5:  'Q',       // RB     nuke
+  1:  'Q',       // B      dash (and back, in the menus)
+  2:  'F',       // X      sword
+  3:  'E',       // Y      use: doors, picking up, switches, a brother
+  4:  'SHIFT',   // LB     run (hold)
+  5:  'Q',       // RB     dash
+  7:  'K',       // RT     fire
   8:  'ENTER',   // Back   skip what is being said
   9:  'ESC',     // Start  back to the menu / skip the cutscene
-  // Clicking the left stick, where a sprint lives in most games — your thumb is
-  // already on the stick that is doing the running. It was LB, which meant
-  // moving and sprinting were on opposite hands.
-  10: 'SHIFT',   // L3     sprint in the walking stages, dash in combat
+  10: 'SHIFT',   // L3     run (hold)
   12: 'UP', 13: 'DOWN', 14: 'LEFT', 15: 'RIGHT'
 };
 const PAD_LABEL = {
@@ -3855,7 +3887,9 @@ const Pad = {
     if (lat(-ax(0), 'LEFT'))  want.LEFT  = true;
     if (lat( ax(0), 'RIGHT')) want.RIGHT = true;
     if (lat(-ax(1), 'UP'))    want.UP    = true;
-    if (lat( ax(1), 'DOWN'))  want.DOWN  = true;
+    // Down is the crouch, so it takes a mostly-downward push: a stick held
+    // down-and-across while walking must not drop him into a duck.
+    if (lat( ax(1), 'DOWN') && (this._held.DOWN || ax(1) > Math.abs(ax(0)))) want.DOWN = true;
 
     // Right stick is the one thing that cannot be a key: it has to stay analog
     // so it can be gated to the pistol downstream.
@@ -3957,14 +3991,15 @@ function makePrompts(scene, x, y, items, align, depth) {
 // drives Wolffel from these exactly as it drives Eterwolf from the keyboard.
 const P2_MAP = {
   0: 'SPACE',                            // A      jump — and press it to join
-  1: 'F',                                // B      sword
-  2: 'K',                                // X      pistol
+  1: 'Q', 5: 'Q',                        // B, RB  dash
+  2: 'F',                                // X      sword
   3: 'E',                                // Y      pick your brother up
-  4: 'SHIFT', 5: 'SHIFT', 10: 'SHIFT',   // LB/RB/L3  tap to dash, hold to run
+  4: 'SHIFT', 10: 'SHIFT',               // LB, L3 run (hold)
+  7: 'K',                                // RT     fire
   8: 'BACK',                             // Back   drop out
   12: 'UP', 13: 'DOWN', 14: 'LEFT', 15: 'RIGHT'
 };
-const P2_KEYS = ['W', 'A', 'S', 'D', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'SPACE', 'SHIFT', 'E', 'K', 'F', 'BACK'];
+const P2_KEYS = ['W', 'A', 'S', 'D', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'SPACE', 'SHIFT', 'Q', 'E', 'K', 'F', 'BACK'];
 const P2Pad = {
   connected: false, keys: {}, joinReq: false, leaveReq: false, _lostAt: 0,
   // Which pad is player 2's, once the game has decided (the co-op select
@@ -4024,7 +4059,7 @@ const P2Pad = {
     if (lat(-ax(0), 'LEFT'))  want.LEFT = true;
     if (lat( ax(0), 'RIGHT')) want.RIGHT = true;
     if (lat(-ax(1), 'UP'))    want.UP = true;
-    if (lat( ax(1), 'DOWN'))  want.DOWN = true;
+    if (lat( ax(1), 'DOWN') && (this.keys.DOWN.isDown || ax(1) > Math.abs(ax(0)))) want.DOWN = true;
     P2_KEYS.forEach(n => {
       const k = this.keys[n], on = !!want[n];
       if (on && !k.isDown) {
@@ -4172,11 +4207,22 @@ function surfaceProfile(scene, texKey, segments) {
   return out;
 }
 
+// The crouch: the body box shortened from the top, the feet where they were
+// (the same as the arena's setCrouch).
+function setWalkerCrouch(p, on) {
+  const hero = p._hero;
+  p._crouching = !!on;
+  if (!hero || !p.body) return;
+  const B = hero.art.body;
+  const h = on ? Math.round(B.h * CROUCH_BODY) : B.h;
+  p.body.setSize(B.w, h).setOffset(B.x, B.y + (B.h - h));
+}
+
 function driveWalker(scene, p, keys, onGround) {
   let move = 0;
   if (keys.A.isDown || keys.LEFT.isDown)  move -= 1;
   if (keys.D.isDown || keys.RIGHT.isDown) move += 1;
-  if (move !== 0) p._facing = move;
+  if (move !== 0) p._facing = move;       // crouched, he still turns
   // A stage can take the sprint away. The bridge does, and has to: a
   // sprinting single jump carries 452px here and a walking double only 416,
   // so with the sprint available there is no gap width that a double jump can
@@ -4186,19 +4232,26 @@ function driveWalker(scene, p, keys, onGround) {
   // strides and a bigger leap, so the motion reads the same at any size.
   const k = scene.playScale || 1;
   const now = scene.time.now;
-  // Shift does both where there is a dash: a tap dashes, and keeping it held
-  // runs once the dash is over. From the Drop onward it used to be dash only,
-  // so you could never run again — and running is how you get clear.
-  const sprint = !!(keys.SHIFT && keys.SHIFT.isDown) &&
-                 !(scene.cfg && scene.cfg.noSprint) &&
-                 (!canDash || now >= (p._dashUntil || 0));
+  // Shift runs — held, everywhere, and nothing else. The dash has its own
+  // key (Q, the pad's B or RB); sharing Shift between the two made every
+  // press a guess at whether it would be read as a tap or a hold.
+  // Down (S, or down on the stick) on the floor is a crouch: he ducks where
+  // he stands, lower, and does not move, jump, dash or run until he is up.
+  const hero0 = p._hero;
+  const wantDown = !!((keys.S && keys.S.isDown) || (keys.DOWN && keys.DOWN.isDown));
+  const crouch = wantDown && onGround && now >= (p._dashUntil || 0) &&
+                 !!(p._real && hero0 && heroHas(hero0, 'crouch'));
+  if (crouch !== !!p._crouching) setWalkerCrouch(p, crouch);
+  if (crouch) move = 0;
+  const sprint = !crouch && !!(keys.SHIFT && keys.SHIFT.isDown) &&
+                 !(scene.cfg && scene.cfg.noSprint);
   const dt = Math.min(0.05, ((scene.game && scene.game.loop.delta) || 16.7) / 1000);
 
   // ---- dash ----------------------------------------------------------
   // One in the air per trip off the ground, so a crossing is jump, jump,
   // dash — and not an indefinite glide across any gap at all.
   if (onGround) p._airDashUsed = false;
-  if (canDash && keys.SHIFT && Phaser.Input.Keyboard.JustDown(keys.SHIFT) &&
+  if (canDash && !crouch && keys.Q && Phaser.Input.Keyboard.JustDown(keys.Q) &&
       now >= (p._dashReadyAt || 0) && (onGround || !p._airDashUsed)) {
     p._dashDir = move || p._facing || 1;
     p._dashUntil = now + WDASH_MS;
@@ -4251,7 +4304,7 @@ function driveWalker(scene, p, keys, onGround) {
   // last moment of a dash) still jumps instead of being lost.
   if (Phaser.Input.Keyboard.JustDown(keys.W) || Phaser.Input.Keyboard.JustDown(keys.SPACE) ||
       Phaser.Input.Keyboard.JustDown(keys.UP)) p._jumpPressedAt = now;
-  const wantJump = !dashing && now - (p._jumpPressedAt || -1e9) < JUMP_BUFFER_MS;
+  const wantJump = !dashing && !crouch && now - (p._jumpPressedAt || -1e9) < JUMP_BUFFER_MS;
   // Touching down clears the count, so the second jump is only ever available
   // once he has left the floor. Walking off an edge gives a moment's grace
   // (coyote time) and then the ground jump is spent — it used to last forever.
@@ -4349,6 +4402,7 @@ function driveWalker(scene, p, keys, onGround) {
     // up for a moment after the last shot rather than dropping his arm at once.
     const gunUp = now < (p._gunUntil || 0);
     const want = dashing ? 'dash'
+               : p._crouching ? 'crouch'
                : airborne ? airAction(hero, p.body.velocity.y, p)
                : now < (p._landUntil || 0) ? 'land'
                : gunUp     ? (moving ? 'runshoot' : 'shoot')
@@ -4549,7 +4603,7 @@ class MenuScene extends Phaser.Scene {
     this.input.keyboard.on('keydown-D', () => side(1));
     const back = () => { if (this._modes) this._closeModes(); };
     this.input.keyboard.on('keydown-ESC', back);
-    this.input.keyboard.on('keydown-F', back);          // the pad's B
+    this.input.keyboard.on('keydown-Q', back);          // the pad's B
     this._modes = null;
     this.input.on('pointerdown', () => Sfx.ensure());
 
@@ -4819,7 +4873,7 @@ class CoopSelectScene extends Phaser.Scene {
     this.input.keyboard.on('keydown-SPACE', p1Go);
     const p1Back = () => this._backPress('p1');
     this.input.keyboard.on('keydown-ESC', p1Back);
-    this.input.keyboard.on('keydown-F', p1Back);          // pad 1's B
+    this.input.keyboard.on('keydown-Q', p1Back);          // pad 1's B
     this.input.keyboard.on('keydown-BACKSPACE', p1Back);
     P2Pad.clearPresses();
     this.events.once('shutdown', () => { if (this._going) return; });
@@ -4973,7 +5027,7 @@ class CoopSelectScene extends Phaser.Scene {
     if (want !== p2.state) { p2.state = want; if (want === 'absent' && p2.ready) this._unselect(p2); this._paint(p2); }
     if (!this._going && P2Pad.connected) {
       if (Phaser.Input.Keyboard.JustDown(P2Pad.key('SPACE'))) this._press('p2');
-      if (Phaser.Input.Keyboard.JustDown(P2Pad.key('F'))) this._backPress('p2');
+      if (Phaser.Input.Keyboard.JustDown(P2Pad.key('Q'))) this._backPress('p2');
     }
     // player 1's prompt follows what he last pressed
     const d1 = InputMode.p1 === 'pad' ? 'pad' : 'kb';
@@ -5972,7 +6026,7 @@ class WalkScene extends Phaser.Scene {
     this._camBias = { v: 0 };
 
     // input
-    this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,SHIFT,M,E,ENTER,R,K');
+    this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,SHIFT,Q,M,E,ENTER,R,K');
     this.input.keyboard.on('keydown-N', () => Sfx.toggleMute());
     // Not during a scripted beat or a conversation laid over the stage: the
     // restart would happen under it and leave it talking over a reset room.
@@ -6155,7 +6209,9 @@ class WalkScene extends Phaser.Scene {
     const p = who || this.player, hero = p && p._hero;
     if (!p) return;
     p._restSince = now; p._longIdleDone = false; p._idleLooped = false;
+    if (p._crouching) setWalkerCrouch(p, false);
     if (!p._real || !hero) return;
+    if (now < (p._downUntil || 0)) return;      // mid-action: let it finish
     const key = heroAnim(hero, 'idle', p._facing);
     if (p._curAnim !== key) { playAction(p, hero, 'idle', p._facing); p._curAnim = key; }
   }
@@ -6196,6 +6252,15 @@ class WalkScene extends Phaser.Scene {
     [this._sayText, this._sayName].forEach(t => t && t.scaleX !== k && t.setScale(k));
   }
 
+  // Opening, picking up, switching on: he turns to it and reaches down.
+  _reach(p, atX) {
+    p = p || this.player;
+    if (!p || !p.active) return 0;
+    if (atX != null && Math.abs(atX - p.x) > 4) p._facing = atX > p.x ? 1 : -1;
+    p.setVelocityX(0);
+    return playOnce(p, 'pickup', p._facing);
+  }
+
   // The camera leads him a little the way he is facing, so he sees more of
   // where he is going than where he has been, and eases rather than snapping
   // when he turns. Its smoothing is the same at 60 and 144 frames a second,
@@ -6234,12 +6299,16 @@ class WalkScene extends Phaser.Scene {
   // The controls the stage actually has right now. Rebuilt when one is
   // unlocked mid-stage (the burnt street gives you the jump after the blast).
   _hintText() {
-    const cfg = this.cfg || {};
-    const arms = (armedWithBlade() ? '   ·   F SWORD' : '') +
-                 (GameState.hasPistol ? '   ·   LMB / K SHOOT' : '');
-    const shift = cfg.dash ? '   ·   SHIFT TAP DASH / HOLD RUN' : (cfg.noSprint ? '' : '   ·   SHIFT RUN');
-    return 'A/D WALK' + shift + (cfg.noJump ? '' : '   ·   W JUMP') +
-           '   ·   E ENTER' + arms + '   ·   N MUTE   ·   M EDIT';
+    const cfg = this.cfg || {}, pad = InputMode.p1 === 'pad', sep = '   ·   ';
+    const parts = [pad ? 'STICK MOVE' : 'A/D WALK'];
+    if (!cfg.noSprint) parts.push(pad ? 'LB RUN' : 'SHIFT RUN');
+    if (cfg.dash) parts.push(pad ? 'B DASH' : 'Q DASH');
+    if (!cfg.noJump) parts.push(pad ? 'A JUMP' : 'W JUMP');
+    parts.push(pad ? 'DOWN CROUCH' : 'S CROUCH', pad ? 'Y USE' : 'E USE');
+    if (armedWithBlade()) parts.push(pad ? 'X SWORD' : 'F SWORD');
+    if (GameState.hasPistol) parts.push(pad ? 'RT SHOOT' : 'LMB / K SHOOT');
+    if (!pad) parts.push('N MUTE');
+    return parts.join(sep);
   }
 
   _refreshHint() { if (this._hintBar) this._hintBar.setText(this._hintText()); }
@@ -6556,7 +6625,7 @@ class WalkScene extends Phaser.Scene {
     // A hit throws him. driveWalker sets his speed every frame, which would
     // cancel the knock on the very next one — so for its length, nothing does.
     else if (now < (this.player._knockUntil || 0)) { /* the hit carries him */ }
-    else if (this.player._down) this.player.setVelocityX(0);     // down, waiting for his brother
+    else if (this.player._down) this._crawl(this.player, this.keys, now);   // down: crawls only if you move him
     else if (!this._transitioning) driveWalker(this, this.player, this.keys, onGround);
     this._updateCoop(now, delta);
     this._runBeats();
@@ -6565,6 +6634,7 @@ class WalkScene extends Phaser.Scene {
     this._updateInspects();
     this._updateCamera(onGround);
     this._sortCams();
+    if (this._hintMode !== InputMode.p1) { this._hintMode = InputMode.p1; this._refreshHint(); }
 
     if (this.grain && this.game.loop.frame % 3 === 0) {
       this._gf = (this._gf + 1) % 3;
@@ -6593,10 +6663,9 @@ class WalkScene extends Phaser.Scene {
     // also opens a door out here.
     // Not K once there is a pistol: K fires it, and firing beside a door
     // would otherwise walk you through it.
-    const enterPressed = Phaser.Input.Keyboard.JustDown(this.keys.E)
-                      || (!GameState.hasPistol && Phaser.Input.Keyboard.JustDown(this.keys.K))
-                      || Phaser.Input.Keyboard.JustDown(this.keys.UP)
-                      || Phaser.Input.Keyboard.JustDown(this.keys.W);
+    // E (the pad's Y) and nothing else: W and Up are jump, K is fire, and a
+    // jump beside a door used to walk you through it.
+    const enterPressed = Phaser.Input.Keyboard.JustDown(this.keys.E);
     this.exitMarkers.forEach(({ m, lbl, glow, ex }) => {
       // An exit that only exists once something has happened — the way back
       // out of the storage rooms, once the thing in them is dead. Until then
@@ -6701,11 +6770,11 @@ class WalkScene extends Phaser.Scene {
     const now = this.time.now;
     if (!armedWithBlade()) return;
     const p = who || this.player;
-    if (!p || !p.active || p._down || this._dead || now < (p._nextSwingAt || 0) ||
+    if (!p || !p.active || p._down || p._crouching || this._dead || now < (p._nextSwingAt || 0) ||
         this._holdInput || this._transitioning) return;
     p._nextSwingAt = now + 380;
     const hero = p._hero;
-    const chain = ['sword', 'sword2', 'sword3'].filter(a => heroHas(hero, a));
+    const chain = ['sword', 'sword2', 'sword3', 'sword4'].filter(a => heroHas(hero, a));
     p._comboStep = (chain.length && now < (p._comboUntil || 0))
       ? ((p._comboStep || 0) + 1) % chain.length : 0;
     p._comboUntil = now + COMBO_WINDOW_MS;
@@ -7106,7 +7175,8 @@ const WalkCombat = {
     p.clearTint();            // the last hit's red fill would cover the whole clip
     p.setVelocityX(0);
     p._gunUntil = 0; p._swingUntil = 0;
-    if (hero && heroHas(hero, 'death')) {
+    if (p._down) { /* already on the floor from his knockdown: stays as he is */ }
+    else if (hero && heroHas(hero, 'death')) {
       playAction(p, hero, 'death', p._facing);
       p._curAnim = heroAnim(hero, 'death', p._facing);
     } else {
@@ -7276,7 +7346,7 @@ const WalkCombat = {
   // LMB or K, once it is yours, in any walking stage — the same as the blades.
   _updateGun(now) {
     if (!GameState.hasPistol || this._dead || this._holdInput || this._transitioning ||
-        this._inConversation || this._editorMode || this.player._down) return;
+        this._inConversation || this._editorMode || this.player._down || this.player._crouching) return;
     const ptr = this.input.activePointer;
     const mouse = ptr.isDown && ptr.button === 0 && this._ptrFire;
     const firing = mouse || (this.keys.K && this.keys.K.isDown);
@@ -7380,6 +7450,7 @@ const WalkCombat = {
     this.tweens.killTweensOf([g.gun, g.glint]);
     g.gun.destroy(); g.glint.destroy();
     GameState.hasPistol = true;
+    this._reach(p, g.x);
     Sfx.ensure(); Sfx.select();
     this.cameras.main.flash(240, 255, 226, 170);
     this._pistolCard();
@@ -7434,6 +7505,8 @@ Object.assign(WalkScene.prototype, WalkCombat);
 //  other one stands over him holding E (or Y) to pick him up.         //
 // ================================================================== //
 const REVIVE_MS = 1800;
+const BLEED_MS  = 20000;      // how long a brother lasts down before he is gone
+const CRAWL_M   = 0.5;        // how fast a downed brother drags himself (m/s)
 const Coop = {
   _coopInit() {
     this.player2 = null;
@@ -7600,6 +7673,7 @@ const Coop = {
       this._warpP2();
       return;
     }
+    if (p2._down && !this._dead && !this._transitioning) { this._crawl(p2, P2Pad.keys, now); P2Pad.clearPresses(); return; }
     if (p2._down || this._dead || this._transitioning) { p2.setVelocityX(0); P2Pad.clearPresses(); return; }
     if (this._holdInput) {
       if (now >= (p2._knockUntil || 0)) p2.setVelocityX(0);
@@ -7610,7 +7684,7 @@ const Coop = {
     if (now < (p2._knockUntil || 0)) return;
     driveWalker(this, p2, k, b.blocked.down || b.touching.down);
     if (Phaser.Input.Keyboard.JustDown(k.F)) this.swingBlade(p2);
-    if (GameState.hasPistol && k.K.isDown && !this._inConversation) {
+    if (GameState.hasPistol && k.K.isDown && !this._inConversation && !p2._crouching) {
       p2._gunUntil = now + 520;
       if (now >= (p2._nextFireAt || 0) && now >= (p2._swingUntil || 0)) {
         p2._nextFireAt = now + PISTOL_CD;
@@ -7621,17 +7695,22 @@ const Coop = {
 
   // Down: on the floor, out of the fight, until his brother picks him up.
   _knockDown(p) {
+    if (p._crouching) setWalkerCrouch(p, false);
     p._down = true;
     p._revive = 0;
     this.tweens.killTweensOf(p);
     p.setAlpha(1); p.clearTint(); p.setVelocityX(0);
     p._gunUntil = 0; p._swingUntil = 0;
     const hero = p._hero;
-    // On the floor: his own fall if he has one (Eterwolf does). Wolffel has
-    // no fall drawn, so a still of him is laid flat on the floor in his place
-    // until he is picked up.
+    // On the floor: his own fall, which ends lying down and holds there. He
+    // stays where he fell until his player moves him (see _crawl). A
+    // character with no fall drawn gets a still of him laid flat instead.
     const act = ['falldown', 'death'].find(a => heroHas(hero, a));
-    if (act) { playAction(p, hero, act, p._facing); p._curAnim = heroAnim(hero, act, p._facing); }
+    if (act) {
+      const ms = playOnce(p, act, p._facing);
+      p._downUntil = 0;                         // the down state owns him, not the clip
+      p._fallUntil = this.time.now + ms;        // no crawling until he has landed
+    }
     else if (hero) {
       playAction(p, hero, 'idle', p._facing);
       const f = p._facing || 1;
@@ -7640,15 +7719,18 @@ const Coop = {
       p._lie = lie;
       p.setVisible(false);
     }
-    p.setTint(0xb04a3a);
-    if (p._lie) p._lie.setTint(0xb04a3a);
+    p.setTint(0xffa090);             // a red wash, light enough that he still reads on a dark floor
+    if (p._lie) p._lie.setTint(0xffa090);
     const other = p === this.player ? 'WOLFFEL' : 'ETERWOLF';
     const lbl = this.add.text(p.x, p.y - 0.75 * this.charH, 'HOLD  ' + (p === this.player ? 'Y' : 'E / Y') + '  —  PICK HIM UP', {
       fontFamily: 'Courier New, monospace', fontSize: '14px', color: '#f2b13c',
       stroke: '#0d0a08', strokeThickness: 4
     }).setOrigin(0.5, 1).setDepth(31);
     const ring = this.add.graphics().setDepth(31);
-    p._downUI = [lbl, ring];
+    const bar = this.add.graphics().setDepth(31);
+    p._downUI = [lbl, ring, bar];
+    p._bleedAt = this.time.now + BLEED_MS;
+    p._gone = false;
     this._showTip(other + ' — STAND OVER HIM AND HOLD ' + (p === this.player ? 'Y' : 'E') + ' TO PICK HIM UP');
   },
 
@@ -7661,10 +7743,91 @@ const Coop = {
     if (p === this.player) { this.hp = 2; this._invulnUntil = now + 1500; }
     else { p.hp = 2; p._invulnUntil = now + 1500; }
     p.clearTint();
-    if (p._hero) { playAction(p, p._hero, 'idle', p._facing); p._curAnim = heroAnim(p._hero, 'idle', p._facing); }
+    p.setVelocityX(0);
+    // Back up: his own getting-up where he has one (Wolffel), otherwise the
+    // fall played backwards (Eterwolf), otherwise straight to standing.
+    const hero = p._hero;
+    if (hero && heroHas(hero, 'getup')) playOnce(p, 'getup', p._facing);
+    else if (hero && heroHas(hero, 'falldown')) {
+      const key = heroAnim(hero, 'falldown', p._facing), a = this.anims.get(key);
+      if (p.anims.nextAnimsQueue) p.anims.nextAnimsQueue.length = 0;
+      p.playReverse(key);
+      p._curAnim = key; p._curAction = 'falldown';
+      p._downUntil = now + (a ? Math.min(900, a.duration) : 400);
+    } else if (hero) { playAction(p, hero, 'idle', p._facing); p._curAnim = heroAnim(hero, 'idle', p._facing); }
     Sfx.ensure(); Sfx.mend();
     this._paintHearts();
     this.tweens.add({ targets: p, alpha: 0.4, duration: 110, yoyo: true, repeat: 5, onComplete: () => p.setAlpha(1) });
+  },
+
+  // Down, he lies where he fell. His player can drag him along the floor —
+  // toward his brother, away from what put him there — and he stops the
+  // moment they let go. While he is being picked up he stays put.
+  _crawl(p, keys, now) {
+    if (p._gone || now < (p._fallUntil || 0) || p._revive > 0) { p.setVelocityX(0); if (p._crawling) this._crawlStop(p); return; }
+    let move = 0;
+    if (keys.A.isDown || keys.LEFT.isDown)  move -= 1;
+    if (keys.D.isDown || keys.RIGHT.isDown) move += 1;
+    const hero = p._hero;
+    if (!move) { p.setVelocityX(0); if (p._crawling) this._crawlStop(p); return; }
+    p.setVelocityX(move * CRAWL_M * this.pxPerM);
+    const turned = move !== p._facing;
+    p._facing = move;
+    if (!hero || !p._real) return;
+    if (heroHas(hero, 'downcrawl')) {
+      const key = heroAnim(hero, 'downcrawl', move);
+      if (p._curAnim !== key) { p.play(key); p._curAnim = key; p._curAction = 'downcrawl'; }
+      else if (p.anims.isPaused) p.anims.resume();
+    } else if (turned && heroHas(hero, 'falldown')) {
+      // no crawl drawn: he stays in his fallen pose, turned the way he drags
+      const key = heroAnim(hero, 'falldown', move), a = this.anims.get(key);
+      p.play(key); p.anims.setProgress(1); p.anims.pause();
+      p._curAnim = key; p._curAction = 'falldown';
+    }
+    if (!heroHas(hero, 'downcrawl')) p.setY(p.y + Math.sin(now / 90) * 0.25);   // a shuffle
+    p._crawling = true;
+  },
+
+  _crawlStop(p) {
+    p._crawling = false;
+    if (p._curAction === 'downcrawl' && p.anims.isPlaying) p.anims.pause();
+  },
+
+  // Nobody reached him in time: he is gone. The one left kneels by him, and
+  // the fight starts over.
+  _bleedOut(down, helper) {
+    if (this._dead || down._gone) return;
+    down._gone = true;
+    this._dead = true;
+    if (down._downUI) { down._downUI.forEach(o => o.destroy()); down._downUI = null; }
+    down.setVelocityX(0);
+    if (down.anims.isPlaying) down.anims.pause();
+    this.tweens.addCounter({ from: 0, to: 1, duration: 1200, onUpdate: t => {
+      const v = t.getValue(), c = Math.round(176 - 90 * v);
+      if (down.active) down.setTint(Phaser.Display.Color.GetColor(c, Math.round(74 - 40 * v), Math.round(58 - 30 * v)));
+    } });
+    this.enemies.forEach(z => { if (z.active && z._alive) z.setVelocityX(0); });
+    stopTrack(2500);
+    Sfx.ensure(); Sfx.blip(147, 1.2, 'sine', 0.08, 98);
+    if (helper && helper.active && !helper._down) {
+      helper.setVelocity(0, 0);
+      helper._facing = down.x >= helper.x ? 1 : -1;
+      helper._downUntil = this.time.now + 1e7;
+      playOnce(helper, 'grieve', helper._facing);
+      helper._downUntil = this.time.now + 1e7;
+      const eter = helper._hero && helper._hero.id === 'eterwolf';
+      this._say([eter ? ['ETERWOLF', 'Feli...? No. No, no, no...'] : ['WOLFFEL', 'Eter...? Hermano. Get up.']]);
+    }
+    const shade = this.add.rectangle(640, 360, 1280, 720, 0x000000, 0).setScrollFactor(0).setDepth(80);
+    this.tweens.add({ targets: shade, fillAlpha: 0.45, duration: 2600 });
+    this._downTimer = this.time.delayedCall(3600, () => {
+      this._downTimer = null;
+      if (this._transitioning) return;
+      this._transitioning = true;
+      this.cameras.main.fadeOut(900, 0, 0, 0);
+      this.cameras.main.once('camerafadeoutcomplete',
+        () => this.scene.restart(this._keepData({ cast: this.castId })));
+    });
   },
 
   // The one standing holds E (Eterwolf) or Y (Wolffel's pad) over the one
@@ -7674,11 +7837,38 @@ const Coop = {
     // [who is down, who is helping, the helper's button]
     [[this.player, this.player2, P2Pad.keys.E], [this.player2, this.player, this.keys.E]].forEach(([down, helper, key]) => {
       if (!down || !helper || !down._down || !down._downUI) return;
-      const [lbl, ring] = down._downUI;
+      const [lbl, ring, bar] = down._downUI;
       lbl.setPosition(down.x, down.y - 0.55 * this.charH);
       const near = !helper._down && Math.abs(helper.x - down.x) < 0.8 * this.charH &&
                    Math.abs(helper.body.bottom - down.body.bottom) < 0.6 * this.charH;
-      down._revive = near && key && key.isDown ? down._revive + d : Math.max(0, down._revive - d * 2);
+      const helping = near && key && key.isDown;
+      down._revive = helping ? down._revive + d : Math.max(0, down._revive - d * 2);
+      // The one helping kneels to it: his reaching-down, held while he holds
+      // the button, and he does not walk off while he does.
+      if (helping && helper._real) {
+        helper._downUntil = now + 150;
+        helper.setVelocityX(0);
+        if (helper._curAction !== 'revive') {
+          helper._facing = down.x >= helper.x ? 1 : -1;
+          playAction(helper, helper._hero, 'revive', helper._facing);
+          helper._curAnim = heroAnim(helper._hero, 'revive', helper._facing);
+          helper._curAction = 'revive';
+        }
+      } else if (helper._curAction === 'revive') { helper._curAction = ''; helper._curAnim = ''; }
+      // Left too long, he is gone. The clock stops while he is being helped.
+      if (down._revive > 0) down._bleedAt += d;
+      const left = Math.max(0, (down._bleedAt - now) / BLEED_MS);
+      const secs = Math.ceil(Math.max(0, down._bleedAt - now) / 1000);
+      if (down._secs !== secs) {
+        down._secs = secs;
+        lbl.setText('HOLD  ' + (down === this.player ? 'Y' : 'E / Y') + '  —  PICK HIM UP   ' + secs + 's');
+        lbl.setColor(secs <= 5 ? '#ff5a3a' : '#f2b13c');
+      }
+      bar.clear();
+      bar.fillStyle(0x140f0b, 0.85); bar.fillRect(down.x - 32, down.y - 0.52 * this.charH, 64, 5);
+      bar.fillStyle(left > 0.3 ? 0xc93b2a : 0xff2a1a, 1);
+      bar.fillRect(down.x - 32, down.y - 0.52 * this.charH, 64 * left, 5);
+      if (now >= down._bleedAt) { this._bleedOut(down, helper); return; }
       ring.clear();
       const f = down._revive / REVIVE_MS;
       if (f > 0) {
@@ -7719,7 +7909,14 @@ const Inspect = {
       this.input.keyboard.on('keydown-E', () => {
         if (this._inConversation || this._holdInput || this._transitioning || this._dead) return;
         const it = this._inspects.find(i => i.live && this._nearInspect(i));
-        if (it) it.onUse.call(this, it);
+        if (!it || this._reachBusy) return;
+        // something on the floor — a letter, his scarf — he bends down for
+        // first; something on a wall he just looks at
+        const low = it.floorY != null && Math.abs(it.floorY - it.y) < 0.35 * this.charH;
+        if (!low) { it.onUse.call(this, it); return; }
+        this._reachBusy = true;
+        const ms = this._reach(this.player, it.x);
+        this.time.delayedCall(Math.min(420, ms || 0), () => { this._reachBusy = false; if (it.live) it.onUse.call(this, it); });
       });
     }
     const it = Object.assign({ reach: 0.55 * this.charH, live: true }, o);
@@ -8239,8 +8436,12 @@ class BunkerScene extends WalkScene {
     once('bunker-ate');
     this.crateLabel.setAlpha(0);
     this._hold(this.crateX);
+    this._reach(this.player, this.crateX);
     this._openBox(() => {
       if (!this.scene.isActive()) return;
+      // and Feli, wherever he is standing, eats (eating wolffel.gif)
+      const wf = [this.player, this.player2].find(q => q && q.active && q._hero && q._hero.id === 'wolffel');
+      if (wf) { wf._facing = this.crateX >= wf.x ? 1 : -1; playOnce(wf, 'burger', wf._facing); }
       this._panel(CRATE_LINES, (i, line) => {
         if (line.cue === 'munch') this.time.delayedCall(260, () => Sfx.munch());
       }, () => this._release());
@@ -8310,7 +8511,42 @@ BunkerScene.prototype.goExit = function (ex) {
   this.time.delayedCall(120, () => Sfx.blip(700, 0.05, 'square', 0.08, 400));
   this.time.delayedCall(220, () => { Sfx.burst(0.35, 0.45, 220, 0.8); Sfx.blip(90, 0.4, 'sawtooth', 0.06, 60); });
   this.cameras.main.shake(260, 0.003);
-  this.time.delayedCall(900, () => { if (this.scene.isActive()) WalkScene.prototype.goExit.call(this, ex); });
+  // Then up the stairs: each brother walks to the doorway, turns his back to
+  // us and climbs into the dark (walk through door.gif / walk up.gif).
+  const doorX = this._paintToWorld((1701 + 1966) / 2, 0).x;
+  const walkers = [this.player, this.player2].filter(q => q && q.active && !q._down);
+  let end = 900;
+  walkers.forEach((q, i) => {
+    const t = this._walkIntoDoor(q, doorX + (i ? -0.16 : 0.04) * this.charH, 380 + i * 280);
+    end = Math.max(end, t);
+  });
+  this.time.delayedCall(end, () => { if (this.scene.isActive()) WalkScene.prototype.goExit.call(this, ex); });
+};
+
+// One brother into the doorway. Returns when he is gone, in ms from now.
+BunkerScene.prototype._walkIntoDoor = function (q, x, delay) {
+  const hero = q._hero, k = this.playScale || 1;
+  q.setVelocity(0, 0);
+  q.body.enable = false;
+  q._downUntil = this.time.now + 1e7;           // nothing else animates him now
+  const walkMs = Math.max(150, Math.abs(x - q.x) / (WALK_SPEED * k) * 1000);
+  const upMs = 1150;
+  this.time.delayedCall(delay, () => {
+    if (!q.active) return;
+    q._facing = x >= q.x ? 1 : -1;
+    if (hero) { const key = heroAnim(hero, 'walk', q._facing); q.play(key); q._curAnim = key; }
+    this.tweens.add({ targets: q, x, duration: walkMs, ease: 'Linear', onComplete: () => {
+      if (!q.active) return;
+      if (hero) { const key = heroAnim(hero, 'doorwalk', 1); q.play(key); q._curAnim = key; }
+      const s0x = q.scaleX, s0y = q.scaleY;
+      this.tweens.add({ targets: q, y: q.y - 0.12 * this.charH, scaleX: s0x * 0.84, scaleY: s0y * 0.84,
+                        alpha: 0, duration: upMs, ease: 'Sine.easeIn' });
+      this.tweens.addCounter({ from: 255, to: 60, duration: upMs, onUpdate: t => {
+        const c = Math.round(t.getValue()); if (q.active) q.setTint(Phaser.Display.Color.GetColor(c, c, c)); } });
+      [0, 300, 600, 900].forEach(ms => this.time.delayedCall(ms, () => { Sfx.ensure(); Sfx.step(false); }));
+    } });
+  });
+  return delay + walkMs + upMs;
 };
 
 // Where things are on the bunker painting (bunker_wide.png, 2048x768), read
@@ -10793,6 +11029,7 @@ class StoreScene extends WalkScene {
   _throwLever() {
     if (this._leverBusy) return;
     this._leverBusy = true;
+    this._reach(this.player, this.leverX);
     this.leverOnState = !this.leverOnState;
     Sfx.ensure(); Sfx.select();
     const a = this.leverOnState ? this.leverOff : this.leverOn;
@@ -10814,6 +11051,7 @@ class StoreScene extends WalkScene {
   _openChest() {
     if (this._swordsTaken || !this.chest) return;
     this._swordsTaken = true;
+    this._reach(this.player, this.chestX);
     GameState.hasSwords = true;
     this.cfg.noSprint = false;
     this._refreshHint();
@@ -11888,6 +12126,7 @@ class StorageTwoScene extends WalkScene {
 
   _throwSwitch() {
     if (this.roomLit || this._staged) return;
+    this._reach(this.player, this.swX != null ? this.swX : null);
     if (this.creature) this.time.delayedCall(620, () => this.creature.clearTint());
     // the stop beyond the switch goes with the dark
     if (this.darkWall) {
@@ -12163,12 +12402,12 @@ class DebugScene extends GameScene {
 
   _buildDebugPanel() {
     const lines = [
-      'SANDBOX                                   F9 / ESC — leave',
+      'SANDBOX                                        ESC — leave',
       '1 walker   2 runner   3 brute   4 flyer',
       '5 zomba    6 archer   7 kingo   8 boss    9 ALIEN   0 CRAWLER',
       'C clear    P character    O finisher    R reset',
-      'A/D move · S crouch · X walk/run · W jump ×2 · Shift dash',
-      'LMB/K fire · E swap weapon · F/RMB sword (3-hit chain) · Q nuke'
+      'A/D move · Shift run · Q dash · W jump ×2 · S crouch',
+      'LMB/K fire · E swap weapon · F/RMB sword · G nuke'
     ];
     this.add.rectangle(14, 96, 560, 166, 0x0a0807, 0.72)
       .setOrigin(0, 0).setScrollFactor(0).setDepth(70);
@@ -12339,18 +12578,8 @@ function leaveSandbox(from) {
   from.scene.start('MenuScene');
 }
 
-if (DEV_BUILD) {
-  // A plain DOM listener, because no scene owns the hotkey and it has to work
-  // from wherever you happen to be. Boot is excluded: the sandbox needs the
-  // textures and animations that BootScene.create() registers.
-  window.addEventListener('keydown', e => {
-    if (e.key !== 'F9' || !window.__game) return;
-    const live = window.__game.scene.getScenes(true)[0];
-    if (!live || live.scene.key === 'BootScene') return;
-    e.preventDefault();
-    enterSandbox(live);
-  });
-}
+// The sandbox is reached from the main menu only (DEBUG SANDBOX) — there is
+// no hotkey into it from the middle of the game any more.
 
 // ------------------------------------------------------------------ //
 //  BOOT THE GAME                                                      //

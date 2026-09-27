@@ -71,7 +71,23 @@ const SRC = {
   falldown:   A + 'Idle_v3_prone_east.gif',
   crouchwalk: A + 'Idle_v3_crouchwalk_east.gif',
   // --- the second gun ---
-  akwalk:     A + 'Idle_v3_akwalk_east.gif'
+  akwalk:     A + 'Idle_v3_akwalk_east.gif',
+  // --- the new round of clips ---
+  // slash 2 eterwolf.gif: draws, winds back, the arc on 6-8, guard after (16).
+  // It is the third beat of the combo now, in place of the energy blade.
+  katana3:    A + 'Idle_v3_katana3_east.gif',
+  // sword slash 3rd eterwolf.gif: the straight sword off his back, the arc on
+  // 9-10, held out after (21). The fourth beat.
+  broadsword: A + 'Idle_v3_broadsword_east.gif',
+  // pick up.gif: bends and reaches for something, straightens (8).
+  pickup:     A + 'Idle_v3_pickup_east.gif',
+  // revive wolffel.gif: faces us, reaching a hand down to his brother (20);
+  // 5-18 loops (seam 0.29 of a step).
+  revive:     A + 'Idle_v3_revive_front.gif',
+  // crouch down sad.gif: drops to his knees, head down (9) — his brother gone.
+  grieve:     A + 'Idle_v3_grieve_se.gif',
+  // walk through door.gif: from behind, walking away (8, one whole cycle).
+  doorwalk:   A + 'Idle_v3_doorwalk_back.gif'
 };
 
 // Several clips open with a one-shot action and only then settle into
@@ -173,6 +189,19 @@ for (const [name, gate] of Object.entries(TRIM_LEADIN)) {
 }
 
 L.shareX(clips, SHARE_X);
+// Actions done on the spot are held on his feet instead of on their box, so
+// his body does not slide to meet the arc or the reach (see anchorX). The
+// number is the frame whose soles anchor it: where he stands when it starts.
+const ANCHOR = { katana3: 0, broadsword: 0, pickup: 0, revive: 5, grieve: 0, doorwalk: 'mean' };
+for (const [name, at] of Object.entries(ANCHOR)) {
+  const d = clips[name];
+  if (!d) continue;
+  const cx = at === 'mean'
+    ? d.frames.reduce((s2, _, i) => s2 + L.solesX(d, i), 0) / d.frames.length
+    : L.solesX(d, at);
+  L.anchorX(clips, name, cx);
+}
+L.pinEach(clips, 'grieve');     // down on his knees: every frame on the floor
 
 // ---------- uniform, feet-anchored canvas ----------
 // One canvas for every clip so the sprite never jumps when the animation
@@ -232,7 +261,19 @@ const K = {
   cwalk:     clips.crouchwalk ? pool('cwalk',  'crouchwalk', false) : null,
   cwalkW:    clips.crouchwalk ? pool('cwalkW', 'crouchwalk', true)  : null,
   akwalk:    clips.akwalk  ? pool('akwalk',  'akwalk',  false) : null,
-  akwalkW:   clips.akwalk  ? pool('akwalkW', 'akwalk',  true)  : null
+  akwalkW:   clips.akwalk  ? pool('akwalkW', 'akwalk',  true)  : null,
+  katana3:   clips.katana3 ? pool('katana3',  'katana3', false) : null,
+  katana3W:  clips.katana3 ? pool('katana3W', 'katana3', true)  : null,
+  bsword:    clips.broadsword ? pool('bsword',  'broadsword', false) : null,
+  bswordW:   clips.broadsword ? pool('bswordW', 'broadsword', true)  : null,
+  pickup:    clips.pickup ? pool('pickup',  'pickup', false) : null,
+  pickupW:   clips.pickup ? pool('pickupW', 'pickup', true)  : null,
+  revive:    clips.revive ? pool('revive',  'revive', false) : null,
+  reviveW:   clips.revive ? pool('reviveW', 'revive', true)  : null,
+  grieve:    clips.grieve ? pool('grieve',  'grieve', false) : null,
+  grieveW:   clips.grieve ? pool('grieveW', 'grieve', true)  : null,
+  doorwalk:  clips.doorwalk ? pool('doorwalk',  'doorwalk', false) : null,
+  doorwalkW: clips.doorwalk ? pool('doorwalkW', 'doorwalk', true)  : null
 };
 // Each looping tail reuses frames already emitted for its intro, so splitting
 // a clip in two costs no extra image data.
@@ -483,6 +524,35 @@ const mod = {
     } : {})
   }
 };
+
+// ---- the new round ---------------------------------------------------------
+// The combo's third and fourth beats, cut to the swing: wind-up, the arc, and
+// the follow-through into guard, with the standing frames at the head dropped
+// (the previous beat has already left the blade out).
+if (K.katana3) {
+  mod.anims.sword3  = A_(K.katana3.slice(3, 12),  30, 0);
+  mod.anims.sword3W = A_(K.katana3W.slice(3, 12), 30, 0);
+}
+if (K.bsword) {
+  mod.anims.sword4  = A_(K.bsword.slice(5, 14),  28, 0);
+  mod.anims.sword4W = A_(K.bswordW.slice(5, 14), 28, 0);
+}
+if (K.pickup) {
+  mod.anims.pickup  = A_(K.pickup,  16, 0);
+  mod.anims.pickupW = A_(K.pickupW, 16, 0);
+}
+if (K.revive) {
+  mod.anims.revive  = A_(K.revive.slice(5, 19),  10);
+  mod.anims.reviveW = A_(K.reviveW.slice(5, 19), 10);
+}
+if (K.grieve) {
+  mod.anims.grieve  = A_(K.grieve,  10, 0);
+  mod.anims.grieveW = A_(K.grieveW, 10, 0);
+}
+if (K.doorwalk) {
+  mod.anims.doorwalk  = A_(K.doorwalk,  10);
+  mod.anims.doorwalkW = A_(K.doorwalkW, 10);
+}
 
 // Every clip pools all of its frames, but the animations only ever slice parts
 // out — the dash keeps 6 of 21, the crouch 10 of 29, and the replaced sword

@@ -109,6 +109,45 @@ function shareX(clips, names, log) {
   }
 }
 
+// Where the soles are in frame i: the x-centre of whatever is opaque in the
+// lowest ten rows of the drawing.
+function solesX(d, i) {
+  const f = d.frames[i], W = d.W, H = d.H;
+  let y1 = -1;
+  for (let y = H - 1; y >= 0 && y1 < 0; y--)
+    for (let x = 0; x < W; x++) if (f[(y * W + x) * 4 + 3] > 30) { y1 = y; break; }
+  let s = 0, n = 0;
+  for (let y = Math.max(0, y1 - 10); y <= y1; y++)
+    for (let x = 0; x < W; x++) if (f[(y * W + x) * 4 + 3] > 30) { s += x; n++; }
+  return n ? s / n : W / 2;
+}
+
+// Hold a clip on its feet rather than on its box. An action done on the spot
+// — bending to pick something up, a sword swing, sinking to the knees —
+// throws the silhouette out to one side, and centring on the box (shared or
+// per frame) slides the body the other way to meet it. Instead every frame
+// gets one box symmetric about `cx`, the soles in the frame the clip starts
+// from, so the cutter puts his feet at the canvas centre — exactly where the
+// idle has them — and anything he does moves around that point.
+function anchorX(clips, name, cx, log) {
+  const d = clips[name];
+  if (!d) return;
+  const minX = Math.min.apply(null, d.boxes.map(b => b.minX));
+  const maxX = Math.max.apply(null, d.boxes.map(b => b.maxX));
+  const half = Math.ceil(Math.max(cx - minX, maxX - cx));
+  const lo = Math.round(cx) - half, hi = Math.round(cx) + half;
+  d.boxes = d.boxes.map(b => ({ minX: lo, maxX: hi, minY: b.minY, maxY: b.maxY }));
+  (log || console.log)(`${name}: anchored on the feet at x${Math.round(cx)} (box ${lo}-${hi})`);
+}
+
+// Every frame's lowest point on the floor, rather than one offset for the
+// whole clip. Right for anything that goes down to the ground — a fall, a
+// crawl, getting up — where the drawing drifts up the frame as the body
+// lowers, and a clip-wide offset would leave him lying in the air.
+function pinEach(clips, name) {
+  if (clips[name]) clips[name]._pinEach = true;
+}
+
 // The canvas every frame of every clip is cut onto.
 //
 // Height is not just the tallest silhouette. A frame sits `groundRow - maxY`
@@ -178,10 +217,12 @@ function makeCutter(CW, CH) {
     }
     const out = new PNG({ width: CW, height: CH });
     const ox = Math.floor((CW - w) / 2);
-    const oy = (CH - h - 2) - (d._groundRow - b.maxY);
+    const oy = (CH - h - 2) - (d._pinEach ? 0 : (d._groundRow - b.maxY));
     for (let y = 0; y < h; y++)
       for (let x = 0; x < w; x++) {
-        const si = ((b.minY + y) * d.W + (b.minX + x)) * 4;
+        const sx = b.minX + x;
+        if (sx < 0 || sx >= d.W) continue;        // an anchored box can overhang the source
+        const si = ((b.minY + y) * d.W + sx) * 4;
         if (d.frames[i][si + 3] <= 30) continue;
         const di = ((oy + y) * CW + (ox + (mirror ? w - 1 - x : x))) * 4;
         out.data[di] = d.frames[i][si];
@@ -253,4 +294,5 @@ function muzzleTip(d, i, CW, CH, mirror) {
   return { x: ox + lx, y: oy + (my - b.minY) };
 }
 
-module.exports = { decodeGif, stripMatte, bbox, loadClips, shareX, canvasFor, makeCutter, leadIn, muzzleTip, PNG };
+module.exports = { decodeGif, stripMatte, bbox, loadClips, shareX, solesX, anchorX, pinEach,
+                   canvasFor, makeCutter, leadIn, muzzleTip, PNG };

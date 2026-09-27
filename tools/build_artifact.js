@@ -174,6 +174,7 @@ body{
 .legend .sword.on{opacity:1}
 .legend .sword.on::after{content:''}
 .legend .k{color:var(--ember); font-weight:700}
+.legend .row{flex-basis:100%}
 h1{margin:0; font-size:13px; font-weight:700; letter-spacing:.34em; color:var(--dim);
   width:var(--gw);}
 h1 span{color:var(--faint); letter-spacing:.08em; font-weight:600; float:right}
@@ -184,24 +185,23 @@ h1 span{color:var(--faint); letter-spacing:.08em; font-weight:600; float:right}
 <div id="game"></div>
 <div class="legend">
   <span><b>MOVE</b> <span class="k">A D</span></span>
-  <span><b>RUN</b> hold <span class="k">SHIFT</span></span>
   <span><b>JUMP</b> <span class="k">W</span> / <span class="k">SPACE</span></span>
-  <span><b>DOOR</b> <span class="k">E</span></span>
-  <span><b>CROUCH</b> <span class="k">S</span></span>
-  <span><b>DASH</b> tap <span class="k">SHIFT</span></span>
+  <span><b>RUN</b> hold <span class="k">SHIFT</span></span>
+  <span><b>DASH</b> <span class="k">Q</span></span>
+  <span><b>CROUCH</b> hold <span class="k">S</span></span>
+  <span><b>USE &middot; DOOR &middot; PICK UP</b> <span class="k">E</span></span>
+  <span class="sword"><b>SWORD</b> <span class="k">F</span> / <span class="k">RMB</span></span>
   <span><b>FIRE</b> <span class="k">LMB</span> / <span class="k">K</span></span>
   <span><b>AIM 45&deg;</b> <span class="k">UP</span> + FIRE</span>
-  <span><b>WEAPON</b> <span class="k">E</span></span>
-  <span class="sword"><b>SWORD</b> <span class="k">F</span> / <span class="k">RMB</span></span>
-  <span><b>SANDBOX</b> <span class="k">F9</span></span>
+  <span><b>SWAP WEAPON</b> <span class="k">E</span> in a fight</span>
   <span><b>RESTART STAGE</b> <span class="k">R</span></span>
-  <span><b>FULLSCREEN</b> <span class="k">ALT</span>+<span class="k">ENTER</span></span>
-  <span><b>MUTE</b> <span class="k">N</span></span>
+  <span><b>SKIP DIALOGUE</b> <span class="k">ENTER</span></span>
   <span><b>MENU</b> <span class="k">ESC</span></span>
-  <span><b>SKIP DIALOGUE</b> <span class="k">ENTER</span> / click SKIP</span>
-  <span><b>PROP EDITOR</b> <span class="k">M</span> toggle &middot; drag &middot; <span class="k">O</span> export</span>
-  <span><b>CONTROLLER</b> <span class="k">F10</span> tester &middot; Xbox pad supported</span>
-  <span><b>PLAYER 2</b> second pad: <span class="k">A</span> join &middot; <span class="k">B</span> sword &middot; <span class="k">X</span> pistol &middot; <span class="k">Y</span> pick up &middot; <span class="k">LB/RB</span> dash &middot; <span class="k">BACK</span> leave</span>
+  <span><b>MUTE</b> <span class="k">N</span></span>
+  <span><b>FULLSCREEN</b> <span class="k">ALT</span>+<span class="k">ENTER</span></span>
+  <span class="row"><b>CONTROLLER</b> <span class="k">A</span> jump &middot; <span class="k">LB</span>/<span class="k">L3</span> run &middot; <span class="k">B</span>/<span class="k">RB</span> dash &middot; <span class="k">&darr;</span> crouch &middot; <span class="k">Y</span> use &middot; <span class="k">X</span> sword &middot; <span class="k">RT</span> fire &middot; <span class="k">R-STICK &uarr;</span> aim 45&deg; &middot; <span class="k">BACK</span> skip &middot; <span class="k">START</span> menu</span>
+  <span class="row"><b>PLAYER 2</b> second controller, same buttons &middot; <span class="k">A</span> join &middot; hold <span class="k">Y</span> by a downed brother to pick him up &middot; <span class="k">BACK</span> leave</span>
+  <span class="row"><b>DEV</b> sandbox in the main menu &middot; <span class="k">M</span> prop editor (<span class="k">O</span> export) &middot; <span class="k">F10</span> controller tester &middot; <span class="k">F11</span> collision</span>
 </div>
 ` + order.map(f => {
   // charset on every tag: these are separate files now, and a script without

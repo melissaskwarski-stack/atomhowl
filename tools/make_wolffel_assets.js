@@ -33,7 +33,10 @@ const SRC = {
   idle:   A('wf_idle_se.gif'),      // 3/4 view, breathing on the spot
   walk:   A('wf_walk_east.gif'),
   run:    A('wf_sprint_east.gif'),
-  burger: A('wf_burger_se.gif'),    // reaches into his side and eats
+  // eating wolffel.gif: 21 frames, 3/4 view — he brings it up, eats, and puts
+  // it down again. It replaced the old burger clip; the name stays 'burger'
+  // because that is what his idle chain and the game call it.
+  burger: A('wf_eat_se.gif'),
   aim:    A('wf_aim_east.gif'),     // extends the arm; stands in for shooting
   // A slab of a greatsword he hauls off his back, swings through a full arc
   // and drags back down: 21 frames that open and close on the same standing
@@ -57,29 +60,50 @@ const SRC = {
   // Running with the pistol held up at roughly 45 degrees, and walking while
   // firing it flat. Both are east-only, mirrored here like the rest of him.
   p45:    A('wf_pistol45_east.gif'),
-  pfire:  A('wf_pistolfire_east.gif')
+  pfire:  A('wf_pistolfire_east.gif'),
+  // death fall down wolfell.gif: 28 frames. He staggers and goes down on his
+  // front through 0-11, then crawls on the floor; 16-25 is one whole crawl
+  // and loops without a seam (measured: 0.07 of an ordinary step).
+  death:  A('wf_death_east.gif'),
+  // get up from healing.gif: frame 0 is a standing reference; 1-8 take him
+  // from face down on the floor back up onto his feet.
+  getup:  A('wf_getup_se.gif'),
+  // pick up wolffel.gif: bends, reaches down and forward, straightens (9).
+  pickup: A('wf_pickup_east.gif'),
+  // sad when eterwolf down.gif: faces us, bows his head and sinks into a
+  // squat (16) — when his brother has gone for good.
+  grieve: A('wf_grieve_front.gif'),
+  // walk up.gif: from behind, walking away from us (25) — through a door.
+  doorwalk: A('wf_doorwalk_back.gif')
 };
 
 // Where each one-shot settles into something repeatable.
 const LOOP_FROM = { aim: 7 };
-// The burger, cut by what the frames actually show: he reaches into his side
-// pocket (0-2), brings it up (3), eats (4-6), and lowers it again (7-8).
-//
-// So the whole business is one performance rather than a loop — out, three
-// bites, and away — which is what it looks like when someone eats something
-// standing up. Retracing 5 between the bites keeps each one from seaming, and
-// putting it back is the reach played in reverse, because there is no frame of
-// him pocketing it and running 2-1-0 backwards is exactly that motion.
-const TAKE = [0, 1, 2, 3];
-const CHEW = [4, 5, 6, 5];
-const PUT  = [7, 8, 2, 1, 0];
+// The eating clip is one whole performance — up, eats, down — and plays
+// straight through.
 // The arm swings wide in the aim and the burger comes up across the body, so
 // both would shimmy if each frame were centred on its own silhouette.
-const SHARE_X = ['idle0', 'aim', 'burger', 'sword', 'crouch', 'jump', 'p45', 'pfire'];
+const SHARE_X = ['idle0', 'aim', 'sword', 'crouch', 'jump', 'p45', 'pfire'];
+// Actions done on the spot are held on his feet instead (see anchorX): the
+// box would slide his body to meet the reach, the bow or the fall. The number
+// is the frame whose soles he is anchored on — where he is standing when it
+// starts, or for getting up, where he ends up standing.
+const ANCHOR = { burger: 0, death: 0, getup: 8, pickup: 0, grieve: 0, doorwalk: 'mean' };
+// and the ones that go down to the floor keep every frame on it
+const PIN_EACH = ['death', 'getup'];
 
 const clips = L.loadClips(SRC);
 if (!clips.idle) { console.error('need the idle clip'); process.exit(1); }
 L.shareX(clips, SHARE_X);
+for (const [name, at] of Object.entries(ANCHOR)) {
+  const d = clips[name];
+  if (!d) continue;
+  const cx = at === 'mean'
+    ? d.frames.reduce((s, _, i) => s + L.solesX(d, i), 0) / d.frames.length
+    : L.solesX(d, at);
+  L.anchorX(clips, name, cx);
+}
+PIN_EACH.forEach(n => L.pinEach(clips, n));
 
 const { CW, CH } = L.canvasFor(clips);
 const cut = L.makeCutter(CW, CH);
@@ -126,14 +150,26 @@ const K = {
   p45:      pool('p45',      'p45',    false),
   p45W:     pool('p45W',     'p45',    true),
   pfire:    pool('pfire',    'pfire',  false),
-  pfireW:   pool('pfireW',   'pfire',  true)
+  pfireW:   pool('pfireW',   'pfire',  true),
+  death:    pool('death',    'death',  false),
+  deathW:   pool('deathW',   'death',  true),
+  getup:    pool('getup',    'getup',  false),
+  getupW:   pool('getupW',   'getup',  true),
+  pickup:   pool('pickup',   'pickup', false),
+  pickupW:  pool('pickupW',  'pickup', true),
+  grieve:   pool('grieve',   'grieve', false),
+  grieveW:  pool('grieveW',  'grieve', true),
+  doorwalk: pool('doorwalk', 'doorwalk', false),
+  doorwalkW: pool('doorwalkW', 'doorwalk', true)
 };
-// The looping tails reuse frames the intros already emitted.
+// The game plays 'burgerin' and chains 'burger' behind it, so the eating is
+// split between them: the reach up to his mouth (0-3), then the eating and
+// putting it down (4-20). Once through, one meal.
 if (K.burgerin) {
-  const seq = TAKE.concat(CHEW, CHEW, CHEW, PUT);
-  const pick = (pool, list) => list.map(i => pool[Math.min(i, pool.length - 1)]);
-  K.burger  = pick(K.burgerin,  seq);
-  K.burgerW = pick(K.burgerinW, seq);
+  K.burger    = K.burgerin.slice(4);
+  K.burgerW   = K.burgerinW.slice(4);
+  K.burgerin  = K.burgerin.slice(0, 4);
+  K.burgerinW = K.burgerinW.slice(0, 4);
 }
 if (K.shootin) {
   K.shoot  = K.shootin.slice(LOOP_FROM.aim);
@@ -192,10 +228,8 @@ add('runW',      K.runW,      14);
 // the raw clip, kept for anything that wants it whole
 add('burgerin',  K.burgerin,  10, 0);
 add('burgerinW', K.burgerinW, 10, 0);
-// He takes two bites and is done, rather than chewing on forever: the chew
-// out, three bites, away — once through (repeat 0), and the game puts him back
-// on his feet after. 7fps runs the 21 frames in about three seconds, which is
-// an unhurried snack rather than a man wolfing something down.
+// Once through (repeat 0), and the game puts him back on his feet after. 7fps
+// runs the 21 frames in three seconds: an unhurried snack.
 // (the note below is the old two-bite loop, kept for the reasoning)
 // when it finishes — see longIdleOnce.
 add('burger',    K.burger,    7, 0);
@@ -301,6 +335,43 @@ if (K.jump) {
   add('jumpfallW', [K.jumpW[12], K.jumpW[13], K.jumpW[14]],  14, 0);
   add('land',      [K.jump[16], K.jump[17], K.jump[18]],     18, 0);
   add('landW',     [K.jumpW[16], K.jumpW[17], K.jumpW[18]],  18, 0);
+}
+
+// ---- going down, and back up ---------------------------------------------
+// falldown: the stagger and the fall, running on into the start of the crawl
+// so it hands straight over to the loop. downcrawl: one whole crawl, looped,
+// while he waits for his brother. death: just the fall, for when it is over.
+// getup: face down to standing, off get up from healing.gif.
+if (K.death) {
+  add('falldown',   K.death.slice(0, 16),   20, 0);
+  add('falldownW',  K.deathW.slice(0, 16),  20, 0);
+  add('downcrawl',  K.death.slice(16, 26),  8);
+  add('downcrawlW', K.deathW.slice(16, 26), 8);
+  add('death',      K.death.slice(0, 12),   16, 0);
+  add('deathW',     K.deathW.slice(0, 12),  16, 0);
+}
+if (K.getup) {
+  add('getup',  K.getup.slice(1),  14, 0);
+  add('getupW', K.getupW.slice(1), 14, 0);
+}
+// ---- hands ------------------------------------------------------------------
+// pickup: reaching down for something and coming back up, once. revive: the
+// same reach held at the bottom, rocking, while he pulls his brother up.
+if (K.pickup) {
+  add('pickup',  K.pickup,  16, 0);
+  add('pickupW', K.pickupW, 16, 0);
+  add('revive',  [4, 5, 6, 5].map(i => K.pickup[i]),  6);
+  add('reviveW', [4, 5, 6, 5].map(i => K.pickupW[i]), 6);
+}
+// ---- grief, and the door ----------------------------------------------------
+if (K.grieve) {
+  add('grieve',  K.grieve,  10, 0);
+  add('grieveW', K.grieveW, 10, 0);
+}
+if (K.doorwalk) {
+  // 5-16 is one whole stride pair and loops without a seam (0.04 of a step)
+  add('doorwalk',  K.doorwalk.slice(5, 17),  12);
+  add('doorwalkW', K.doorwalkW.slice(5, 17), 12);
 }
 
 const mod = {
