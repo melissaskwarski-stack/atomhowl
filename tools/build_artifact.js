@@ -35,6 +35,8 @@ const SCRIPTS = [
   ['build/ui_assets.js',       'ui_assets.js'],
   ['build/scene_assets.js',    'scene_assets.js'],
   ['build/scene_assets2.js',   'scene_assets2.js'],
+  ['build/scene_assets3.js',   'scene_assets3.js'],
+  ['build/scene_assets4.js',   'scene_assets4.js'],
   ['src_game/ah_game.js',      'ah_game.js']
 ];
 
@@ -115,12 +117,14 @@ if (fs.existsSync(HAND)) {
 }
 
 for (const [src, name] of SCRIPTS) {
+  if (!fs.existsSync(p(src))) continue;        // e.g. a scene-art part this build did not need
   total += copy(src, name);
   files.push(name);
 }
 
 const order = ['phaser.min.js', 'ew_assets.js', 'wf_assets.js', 'enemy_assets.js',
                'zomb_assets.js', 'ui_assets.js', 'scene_assets.js', 'scene_assets2.js',
+               'scene_assets3.js', 'scene_assets4.js',
                'media.js', 'voice.js', 'devflag.js', 'ah_game.js'];
 
 // Shown in the page header so it is possible to tell at a glance whether the

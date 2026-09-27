@@ -3708,7 +3708,11 @@ const Pad = {
   read() {
     if (!navigator.getGamepads) return null;
     const list = navigator.getGamepads();
-    for (let i = 0; i < list.length; i++) if (list[i] && list[i].connected) return list[i];
+    // the first pad that is not player 2's
+    const p2 = (typeof P2Pad !== 'undefined') ? P2Pad.assigned : null;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i] && list[i].connected && list[i].index !== p2) return list[i];
+    }
     return null;
   },
 
@@ -3799,6 +3803,63 @@ function padWake() {
 // Every button and both sticks, live, with the key each one is typing. The
 // point is that "is my controller working" answers itself: press something and
 // watch it light up, instead of deducing a mis-binding from how the game plays.
+// ---- what player 1 is holding ----------------------------------------------
+// A real key press is the keyboard; the pad types synthetic ones, which are
+// not isTrusted. Prompts show keys or buttons to match.
+const InputMode = { p1: 'kb' };
+if (typeof window !== 'undefined') {
+  window.addEventListener('keydown', e => { InputMode.p1 = e.isTrusted ? 'kb' : 'pad'; }, true);
+}
+
+// A button prompt in ATOMHOWL's colours. On a keyboard: the key's name in an
+// ember outline. On a controller: the button's letter in a ring of its
+// colour, the way it is printed on the pad. Returns a container, drawn from
+// its left edge, and its width.
+const PAD_BTN_COL = { A: 0x6cc24a, B: 0xd4493a, X: 0x3f86d8, Y: 0xe8b73c };
+function makeGlyph(scene, x, y, label, depth) {
+  const c = scene.add.container(x, y).setDepth(depth || 20);
+  const pad = PAD_BTN_COL[label] != null && label.length === 1;
+  if (pad) {
+    const col = PAD_BTN_COL[label];
+    const g = scene.add.graphics();
+    g.fillStyle(0x0d0a08, 0.9); g.fillCircle(13, 0, 13);
+    g.lineStyle(2.5, col, 1); g.strokeCircle(13, 0, 13);
+    const t = scene.add.text(13, 0, label, { fontFamily: F_UI, fontSize: '15px', fontStyle: '700',
+      color: '#' + col.toString(16).padStart(6, '0') }).setOrigin(0.5);
+    c.add([g, t]);
+    c._w = 26;
+  } else {
+    const t = scene.add.text(0, 0, label, { fontFamily: F_UI, fontSize: '13px', fontStyle: '700', color: '#f0e6d4' }).setOrigin(0, 0.5);
+    const w = Math.max(28, t.width + 16);
+    t.setX((w - t.width) / 2);
+    const g = scene.add.graphics();
+    g.fillStyle(0x140f0b, 0.9); g.fillRoundedRect(0, -13, w, 26, 5);
+    g.lineStyle(1.5, 0xf2b13c, 0.9); g.strokeRoundedRect(0, -13, w, 26, 5);
+    g.lineStyle(1.5, 0xf2b13c, 0.35); g.lineBetween(3, 10, w - 3, 10);
+    c.add([g, t]);
+    c._w = w;
+  }
+  return c;
+}
+// A row of prompts: [[glyph label or null, text], ...], laid out from x.
+// align 'left' | 'center' | 'right' about x. Returns the container.
+function makePrompts(scene, x, y, items, align, depth) {
+  const row = scene.add.container(0, y).setDepth(depth || 20);
+  let cx = 0;
+  items.forEach(([glyph, text]) => {
+    if (glyph) { const g = makeGlyph(scene, cx, 0, glyph, depth); row.add(g); cx += g._w + 7; }
+    if (text) {
+      const t = scene.add.text(cx, 0, text, { fontFamily: F_UI, fontSize: '14px', fontStyle: '700', color: '#d9c7a8',
+        stroke: '#070605', strokeThickness: 3 }).setOrigin(0, 0.5);
+      row.add(t); cx += t.width + 22;
+    }
+  });
+  const w = Math.max(0, cx - 22);
+  row.x = align === 'center' ? x - w / 2 : align === 'right' ? x - w : x;
+  row._w = w;
+  return row;
+}
+
 // ---- player 2 ---------------------------------------------------------------
 // The second controller plugged in. Unlike the first (Pad, above) it does not
 // type — two players cannot share one keyboard's worth of keys. It fills a set
@@ -3817,13 +3878,32 @@ const P2_MAP = {
 const P2_KEYS = ['W', 'A', 'S', 'D', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'SPACE', 'SHIFT', 'E', 'K', 'F', 'BACK'];
 const P2Pad = {
   connected: false, keys: {}, joinReq: false, leaveReq: false, _lostAt: 0,
+  // Which pad is player 2's, once the game has decided (the co-op select
+  // screen, and co-op play). With one controller the keyboard is player 1 and
+  // the controller is player 2; with two or more, controller 1 is player 1 and
+  // controller 2 is player 2. Player 1's Pad skips this one.
+  assigned: null,
+  autoAssign() {
+    if (!navigator.getGamepads) return;
+    const list = Array.from(navigator.getGamepads()).filter(g => g && g.connected);
+    if (this.assigned != null && list.some(g => g.index === this.assigned)) return;
+    this.assigned = list.length === 1 ? list[0].index : list.length >= 2 ? list[1].index : null;
+  },
   key(n) {
     return this.keys[n] || (this.keys[n] = { isDown: false, isUp: true, _justDown: false, _justUp: false, keyCode: -1 });
   },
-  // The second connected pad. The first is player 1's (Pad reads that one).
+  // Player 2's pad: the assigned one if there is one, else the second
+  // connected pad (the first is player 1's; Pad reads that one).
   read() {
     if (!navigator.getGamepads) return null;
     const list = navigator.getGamepads();
+    if (this.assigned != null) {
+      for (let i = 0; i < list.length; i++) {
+        const g = list[i];
+        if (g && g.connected && g.index === this.assigned) return g;
+      }
+      return null;
+    }
     let n = 0;
     for (let i = 0; i < list.length; i++) {
       const g = list[i];
@@ -4377,17 +4457,29 @@ class MenuScene extends Phaser.Scene {
     this._highlight(0);
 
     const move = d => {
+      if (this._modes) return;
       this._cursor = (this._cursor + d + this._btns.length) % this._btns.length;
       Sfx.ensure(); Sfx.hover();
       this._highlight(this._cursor);
     };
     this.input.keyboard.on('keydown-DOWN', () => move(1));
     this.input.keyboard.on('keydown-UP', () => move(-1));
-    // SPACE as well as ENTER: the other two menus already take both, and the
-    // pad's A button types SPACE, so without this it could not confirm here.
-    const activate = () => { Sfx.ensure(); Sfx.select(); items[this._cursor][1](); };
+    const activate = () => {
+      if (this._modes) { this._pickMode(); return; }
+      Sfx.ensure(); Sfx.select(); items[this._cursor][1]();
+    };
     this.input.keyboard.on('keydown-ENTER', activate);
     this.input.keyboard.on('keydown-SPACE', activate);
+    // the mode cards: left / right to choose, Esc or the pad's B to go back
+    const side = d => { if (this._modes) this._moveMode(d); };
+    this.input.keyboard.on('keydown-LEFT', () => side(-1));
+    this.input.keyboard.on('keydown-RIGHT', () => side(1));
+    this.input.keyboard.on('keydown-A', () => side(-1));
+    this.input.keyboard.on('keydown-D', () => side(1));
+    const back = () => { if (this._modes) this._closeModes(); };
+    this.input.keyboard.on('keydown-ESC', back);
+    this.input.keyboard.on('keydown-F', back);          // the pad's B
+    this._modes = null;
     this.input.on('pointerdown', () => Sfx.ensure());
 
     this._toastTxt = this.add.text(86, 604, '', {
@@ -4470,10 +4562,111 @@ class MenuScene extends Phaser.Scene {
       this.scene.start(c.scene, Object.assign({}, c.data, { cast: GameState.castId })));
   }
 
+  // NEW GAME: the list steps aside for two cards — one brother, or both.
   _newGame() {
+    if (this._modes) return;
+    const items = [];
+    this._btns.forEach(b => {
+      b.txt.disableInteractive();
+      this.tweens.add({ targets: [b.txt, b.rule], alpha: 0, x: '-=30', duration: 220 });
+    });
+    torchTexture(this);
+    const mk = (i, key, title, sub) => {
+      const x = 700 + i * 330, y = 368;
+      const glow = this.add.image(x, y, TORCH_KEY).setDepth(11).setBlendMode(Phaser.BlendModes.ADD)
+        .setTint(0xff8a2a).setDisplaySize(420, 560).setAlpha(0);
+      const art = this.textures.exists(key) ? this.add.image(x, y, key).setDepth(12) : null;
+      if (art) art.setScale(420 / art.height);
+      const t = this.add.text(x, y + 232, title, { fontFamily: F_UI, fontSize: '26px', fontStyle: '700', color: '#f0e6d4',
+        stroke: '#070605', strokeThickness: 5 }).setOrigin(0.5).setDepth(13);
+      const u = this.add.rectangle(x, y + 254, 0, 2, 0xf2b13c, 1).setDepth(13);
+      const st = this.add.text(x, y + 272, sub, { fontFamily: F_UI, fontSize: '13px', fontStyle: '600', color: '#a08d72',
+        stroke: '#070605', strokeThickness: 3 }).setOrigin(0.5).setDepth(13);
+      const zone = this.add.zone(x, y + 20, 300, 520).setInteractive({ useHandCursor: true }).setDepth(14);
+      zone.on('pointerover', () => { if (this._modes && this._modes.cur !== i) { this._modes.cur = i; Sfx.ensure(); Sfx.hover(); this._paintModes(); } });
+      zone.on('pointerdown', () => { if (this._modes) { this._modes.cur = i; this._pickMode(); } });
+      const parts = [glow, art, t, u, st, zone].filter(Boolean);
+      parts.forEach(o => { if (o !== zone) o.setAlpha(0); });
+      if (art) this.tweens.add({ targets: art, alpha: 1, duration: 320, delay: 80 + i * 80 });
+      this.tweens.add({ targets: [t, st], alpha: 1, duration: 320, delay: 120 + i * 80 });
+      return { x, glow, art, t, u, st, zone, parts };
+    };
+    this._modes = {
+      cur: 0,
+      cards: [mk(0, 'scene_modesingle', 'SINGLE PLAYER', 'ETERWOLF, ON HIS OWN'),
+              mk(1, 'scene_modemulti', 'MULTIPLAYER', 'BOTH BROTHERS  ·  SECOND PLAYER ON A CONTROLLER')],
+      head: this.add.text(700 + 165, 108, 'NEW GAME', { fontFamily: F_UI, fontSize: '15px', fontStyle: '700', color: '#f2b13c',
+        letterSpacing: 6 }).setOrigin(0.5).setDepth(13),
+      prompts: null, mode: null
+    };
+    this._paintModes();
+  }
+
+  _paintModes() {
+    const M = this._modes;
+    if (!M) return;
+    M.cards.forEach((c, i) => {
+      const on = i === M.cur;
+      if (c.art) {
+        this.tweens.killTweensOf(c.art);
+        this.tweens.add({ targets: c.art, scale: (on ? 440 : 390) / c.art.height, alpha: on ? 1 : 0.5, duration: 200, ease: 'Quad.easeOut' });
+        c.art.setTint(on ? 0xffffff : 0x9a8e82);
+      }
+      this.tweens.add({ targets: c.glow, alpha: on ? 0.42 : 0, duration: 220 });
+      this.tweens.add({ targets: c.u, width: on ? c.t.width : 0, duration: 220 });
+      c.t.setColor(on ? '#fff2c8' : '#8a7a66');
+    });
+    // prompts for whatever is in his hands
+    if (M.prompts) M.prompts.destroy();
+    M.mode = InputMode.p1;
+    const pad = M.mode === 'pad';
+    M.prompts = makePrompts(this, 700 + 165, 672, [
+      [pad ? null : '◀ ▶', pad ? '◀ ▶  CHOOSE' : 'CHOOSE'],
+      [pad ? 'A' : 'ENTER', 'SELECT'],
+      [pad ? 'B' : 'ESC', 'BACK']
+    ], 'center', 13);
+  }
+
+  _moveMode(d) {
+    const M = this._modes;
+    M.cur = (M.cur + d + M.cards.length) % M.cards.length;
+    Sfx.ensure(); Sfx.hover();
+    this._paintModes();
+  }
+
+  _closeModes() {
+    const M = this._modes;
+    this._modes = null;
+    M.cards.forEach(c => c.parts.forEach(o => o.destroy()));
+    M.head.destroy();
+    if (M.prompts) M.prompts.destroy();
+    this._btns.forEach(b => {
+      b.txt.setInteractive({ useHandCursor: true });
+      this.tweens.add({ targets: b.txt, alpha: 1, x: '+=30', duration: 220 });
+      this.tweens.add({ targets: b.rule, x: '+=30', duration: 220 });
+    });
+    this._highlight(this._cursor);
+    Sfx.ensure(); Sfx.hover();
+  }
+
+  // One brother: straight into the game. Both: the character select.
+  _pickMode() {
+    const M = this._modes;
+    if (!M || M.going) return;
+    M.going = true;
+    Sfx.ensure(); Sfx.select();
     resetProgress();
+    GameState.castId = 'eterwolf';
+    const multi = M.cur === 1;
+    GameState.coop = false;
+    P2Pad.assigned = null;
     this.cameras.main.fadeOut(600, 0, 0, 0);
-    this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('CharSelectScene'));
+    this.cameras.main.once('camerafadeoutcomplete', () =>
+      this.scene.start(multi ? 'CoopSelectScene' : 'IntroDialogueScene'));
+  }
+
+  update() {
+    if (this._modes && this._modes.mode !== InputMode.p1) this._paintModes();
   }
 
   _toast(msg) {
@@ -4492,6 +4685,243 @@ class MenuScene extends Phaser.Scene {
 //  player controls — rather than a separate portrait that could drift //
 //  out of sync with the sprite.                                       //
 // ================================================================== //
+// ================================================================== //
+//  CO-OP CHARACTER SELECT                                             //
+//                                                                     //
+//  The two brothers on the two pedestals of the select room: Wolffel,  //
+//  player 2, on the left; Eterwolf, player 1, on the right. No boxes — //
+//  a floating tag beside each, the prompt in keys or pad buttons for   //
+//  whoever is holding what. Each blinks and breathes; selecting plays  //
+//  a flash and swaps him into his stance, and he is READY. Both ready, //
+//  and the game starts with both of them in it.                       //
+// ================================================================== //
+// Each figure: its standing and stance images, and where its feet are on
+// each (baked by the select-art script; the same scale for both of a
+// brother's images, so he does not change size when he draws).
+const SELECT_ART = {
+  p1: { idle: 'scene_selp1', stance: 'scene_selp1s', feet: { idle: [123, 514], stance: [200, 528] } },
+  p2: { idle: 'scene_selp2', stance: 'scene_selp2s', feet: { idle: [128, 514], stance: [197, 512] } }
+};
+const SELECT_H = 400;          // on-screen height of a standing brother
+
+class CoopSelectScene extends Phaser.Scene {
+  constructor() { super('CoopSelectScene'); }
+
+  create() {
+    const W = 1280, H = 720;
+    this.cameras.main.setBackgroundColor('#07090d');
+    this.cameras.main.fadeIn(420, 0, 0, 0);
+    if (this.textures.exists('scene_selectbg')) {
+      const bg = this.add.image(W / 2, H / 2, 'scene_selectbg').setDepth(-20);
+      bg.setScale(Math.max(W / bg.width, H / bg.height));
+    }
+    // a little darker at the top and bottom, where the words are
+    const shade = this.add.graphics().setDepth(-10);
+    for (let i = 0; i < 40; i++) {
+      shade.fillStyle(0x000000, 0.5 * (1 - i / 40));
+      shade.fillRect(0, i * 3, W, 3);
+      shade.fillRect(0, H - (i + 1) * 3, W, 3);
+    }
+    this.add.text(W / 2, 46, 'SELECT CHARACTER', { fontFamily: F_UI, fontSize: '30px', fontStyle: '700',
+      color: '#f0e6d4', stroke: '#070605', strokeThickness: 6 }).setOrigin(0.5).setDepth(20);
+    const chev = this.add.text(W / 2, 76, '⌄', { fontFamily: F_UI, fontSize: '22px', color: '#f2b13c' }).setOrigin(0.5).setDepth(20);
+    this.tweens.add({ targets: chev, y: 82, yoyo: true, repeat: -1, duration: 700, ease: 'Sine.easeInOut' });
+
+    torchTexture(this);
+    this._t0 = this.time.now;
+    this.sides = {
+      p2: this._brother('p2', 253, 492, 'PLAYER 2', 'WOLFFEL', 1),
+      p1: this._brother('p1', 1026, 492, 'PLAYER 1', 'ETERWOLF', -1)
+    };
+    this.sides.p1.state = 'joined';
+    this.sides.p2.state = 'absent';
+    this._going = false;
+    this._back = null;
+    this._paintAll();
+
+    // player 1: the keyboard, or pad 1 through the keys it types
+    const p1Go = () => this._press('p1');
+    this.input.keyboard.on('keydown-ENTER', p1Go);
+    this.input.keyboard.on('keydown-SPACE', p1Go);
+    const p1Back = () => this._backPress('p1');
+    this.input.keyboard.on('keydown-ESC', p1Back);
+    this.input.keyboard.on('keydown-F', p1Back);          // pad 1's B
+    this.input.keyboard.on('keydown-BACKSPACE', p1Back);
+    P2Pad.clearPresses();
+    this.events.once('shutdown', () => { if (this._going) return; });
+  }
+
+  // One brother on his pedestal, and his tag on the inner side of him.
+  _brother(id, x, feetY, role, name, tagDir) {
+    const A = SELECT_ART[id], k = SELECT_H / 520;
+    const mk = (key, feet) => {
+      if (!this.textures.exists(key)) return null;
+      const src = this.textures.get(key).getSourceImage();
+      return this.add.image(x, feetY, key).setOrigin(feet[0] / src.width, feet[1] / src.height).setScale(k).setDepth(5);
+    };
+    const idle = mk(A.idle, A.feet.idle), idleBlink = mk(A.idle + 'blink', A.feet.idle);
+    const stance = mk(A.stance, A.feet.stance), stanceBlink = mk(A.stance + 'blink', A.feet.stance);
+    [idleBlink, stance, stanceBlink].forEach(o => o && o.setAlpha(0));
+    if (idleBlink) idleBlink.setDepth(6);
+    if (stanceBlink) stanceBlink.setDepth(6);
+    // the pedestal's light, under him
+    const glow = this.add.image(x, feetY + 4, TORCH_KEY).setDepth(4).setBlendMode(Phaser.BlendModes.ADD)
+      .setTint(0x5aa8ff).setDisplaySize(330, 70).setAlpha(0.35);
+    // the tag
+    const tx = x + tagDir * 150, ty = 236;
+    const align = tagDir > 0 ? 0 : 1;
+    const roleT = this.add.text(tx, ty, role, { fontFamily: F_UI, fontSize: '13px', fontStyle: '700', color: '#f2b13c',
+      letterSpacing: 4 }).setOrigin(align, 0.5).setDepth(20);
+    const nameT = this.add.text(tx, ty + 28, name, { fontFamily: F_UI, fontSize: '30px', fontStyle: '700', color: '#f0e6d4',
+      stroke: '#070605', strokeThickness: 6 }).setOrigin(align, 0.5).setDepth(20);
+    const line = this.add.graphics().setDepth(19);
+    const arrow = this.add.text(x, feetY - SELECT_H - 26, '▼', { fontFamily: F_UI, fontSize: '22px', color: '#f2b13c',
+      stroke: '#070605', strokeThickness: 4 }).setOrigin(0.5).setDepth(20);
+    this.tweens.add({ targets: arrow, y: arrow.y + 8, yoyo: true, repeat: -1, duration: 520, ease: 'Sine.easeInOut' });
+    const self = { id, x, feetY, tagDir, tx, ty, align, idle, idleBlink, stance, stanceBlink, glow, roleT, nameT, line, arrow,
+                   prompt: null, device: null, state: 'joined', ready: false, punch: 1, nextBlink: 0, blinkUntil: 0, dbl: false };
+    line.lineStyle(1.5, 0xf2b13c, 0.55);
+    const lx0 = tx + (tagDir > 0 ? -12 : 12), lx1 = x + tagDir * 60;
+    line.lineBetween(lx0, ty + 54, lx1, ty + 54);
+    line.lineBetween(lx1, ty + 54, lx1 + tagDir * -8, ty + 62);
+    return self;
+  }
+
+  // What each side shows for its state and its player's hands.
+  _paint(sd) {
+    const pad = sd.id === 'p2' || InputMode.p1 === 'pad';
+    sd.device = pad ? 'pad' : 'kb';
+    if (sd.prompt) sd.prompt.destroy();
+    const where = sd.align === 0 ? 'left' : 'right';
+    let items;
+    if (sd.state === 'absent') items = [[null, 'CONNECT A CONTROLLER']];
+    else if (sd.state === 'waiting') items = [['A', 'JOIN']];
+    else if (sd.ready) items = [[null, '✓  READY'], [pad ? 'B' : 'ESC', 'CANCEL']];
+    else items = [[pad ? 'A' : 'ENTER', 'READY']];
+    sd.prompt = makePrompts(this, sd.tx, sd.ty + 88, items, where, 20);
+    if (sd.ready) sd.prompt.list[0].setColor('#9fe06a');
+    const on = sd.state === 'joined' || sd.ready;
+    sd.arrow.setVisible(on && !sd.ready);
+    sd.roleT.setColor(on ? '#f2b13c' : '#6e5c46');
+    sd.nameT.setColor(sd.ready ? '#fff2c8' : on ? '#f0e6d4' : '#7d7064');
+    [sd.idle, sd.stance].forEach(o => o && o.setTint(on ? 0xffffff : 0x5a5a64));
+  }
+  _paintAll() { Object.values(this.sides).forEach(sd => this._paint(sd)); }
+
+  _press(id) {
+    const sd = this.sides[id];
+    if (this._going || !sd) return;
+    if (sd.state === 'absent') return;
+    if (sd.state === 'waiting') {
+      sd.state = 'joined';
+      Sfx.ensure(); Sfx.select();
+      [sd.idle].forEach(o => o && this._flash(o));
+      this._paint(sd);
+      return;
+    }
+    if (sd.ready) return;
+    this._select(sd);
+  }
+
+  _backPress(id) {
+    const sd = this.sides[id];
+    if (this._going) return;
+    if (sd.ready) { this._unselect(sd); return; }
+    if (id === 'p2') { if (sd.state === 'joined') { sd.state = 'waiting'; this._paint(sd); } return; }
+    // player 1 backing out of the screen
+    this._going = true;
+    P2Pad.assigned = null;
+    Sfx.ensure(); Sfx.hover();
+    this.cameras.main.fadeOut(300, 0, 0, 0);
+    this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('MenuScene'));
+  }
+
+  _flash(img) {
+    img.setTintFill(0xffffff);
+    this.time.delayedCall(90, () => img.clearTint());
+  }
+
+  // The pick: a flash and a punch, he draws into his stance, light off the
+  // pedestal, and he is ready.
+  _select(sd) {
+    sd.ready = true;
+    Sfx.ensure(); Sfx.select(); Sfx.sword();
+    if (sd.idle) this._flash(sd.idle);
+    this.tweens.addCounter({ from: 1.07, to: 1, duration: 360, ease: 'Back.easeOut', onUpdate: tw => { sd.punch = tw.getValue(); } });
+    if (sd.idle) this.tweens.add({ targets: sd.idle, alpha: 0, duration: 200, delay: 60 });
+    if (sd.stance) { sd.stance.setAlpha(0); this.tweens.add({ targets: sd.stance, alpha: 1, duration: 200, delay: 60 }); }
+    const ring = this.add.ellipse(sd.x, sd.feetY + 2, 120, 26).setStrokeStyle(3, 0x8fd0ff, 0.9).setDepth(4.5)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    this.tweens.add({ targets: ring, scaleX: 3.2, scaleY: 3.2, alpha: 0, duration: 520, ease: 'Quad.easeOut', onComplete: () => ring.destroy() });
+    this.tweens.add({ targets: sd.glow, alpha: 0.95, duration: 120, yoyo: true, hold: 120 });
+    for (let i = 0; i < 14; i++) {
+      const a = Math.PI + (i / 13) * Math.PI;
+      const sp = this.add.circle(sd.x + Math.cos(a) * 60, sd.feetY, 2.5, 0xbfe4ff, 1).setDepth(7).setBlendMode(Phaser.BlendModes.ADD);
+      this.tweens.add({ targets: sp, x: sd.x + Math.cos(a) * 150, y: sd.feetY + Math.sin(a) * 110, alpha: 0,
+                        duration: 520 + i * 12, ease: 'Quad.easeOut', onComplete: () => sp.destroy() });
+    }
+    this.cameras.main.shake(90, 0.002);
+    this._paint(sd);
+    if (Object.values(this.sides).every(s => s.ready)) this._both();
+  }
+
+  _unselect(sd) {
+    sd.ready = false;
+    Sfx.ensure(); Sfx.hover();
+    if (sd.stance) this.tweens.add({ targets: sd.stance, alpha: 0, duration: 180 });
+    if (sd.idle) this.tweens.add({ targets: sd.idle, alpha: 1, duration: 180 });
+    this._paint(sd);
+  }
+
+  _both() {
+    this._going = true;
+    // the prompts make way
+    Object.values(this.sides).forEach(sd => { if (sd.prompt) this.tweens.add({ targets: sd.prompt, alpha: 0, duration: 200 }); });
+    const t = this.add.text(640, 610, "LET'S GO", { fontFamily: F_UI, fontSize: '64px', fontStyle: '700', color: '#fff2c8',
+      stroke: '#070605', strokeThickness: 9 }).setOrigin(0.5).setDepth(40).setScale(0.6).setAlpha(0);
+    this.tweens.add({ targets: t, scale: 1, alpha: 1, duration: 260, ease: 'Back.easeOut' });
+    this.time.delayedCall(900, () => {
+      GameState.coop = true;
+      GameState.castId = 'eterwolf';
+      P2Pad.joinReq = false;
+      P2Pad.clearPresses();
+      this.cameras.main.fadeOut(600, 0, 0, 0);
+      this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('IntroDialogueScene'));
+    });
+  }
+
+  update(time, delta) {
+    // who is which controller, and whether player 2 has one
+    P2Pad.autoAssign();
+    const p2 = this.sides.p2;
+    const want = P2Pad.connected ? (p2.state === 'absent' ? 'waiting' : p2.state) : 'absent';
+    if (want !== p2.state) { p2.state = want; if (want === 'absent' && p2.ready) this._unselect(p2); this._paint(p2); }
+    if (!this._going && P2Pad.connected) {
+      if (Phaser.Input.Keyboard.JustDown(P2Pad.key('SPACE'))) this._press('p2');
+      if (Phaser.Input.Keyboard.JustDown(P2Pad.key('F'))) this._backPress('p2');
+    }
+    // player 1's prompt follows what he last pressed
+    const d1 = InputMode.p1 === 'pad' ? 'pad' : 'kb';
+    if (this.sides.p1.device !== d1) this._paint(this.sides.p1);
+    // breathing and blinking
+    const now = this.time.now;
+    Object.values(this.sides).forEach((sd, i) => {
+      const k = SELECT_H / 520 * sd.punch;
+      const br = 1 + Math.sin((now + i * 900) / 900) * 0.007;
+      [sd.idle, sd.idleBlink, sd.stance, sd.stanceBlink].forEach(o => o && o.setScale(k, k * br));
+      if (now >= sd.nextBlink) {
+        sd.blinkUntil = now + 120;
+        sd.dbl = Math.random() < 0.25;
+        sd.nextBlink = now + (sd.dbl ? 260 : 2500 + Math.random() * 2500);
+      }
+      const shut = now < sd.blinkUntil;
+      if (sd.idleBlink) sd.idleBlink.setAlpha(shut && !sd.ready ? sd.idle.alpha : 0);
+      if (sd.stanceBlink) sd.stanceBlink.setAlpha(shut && sd.ready ? sd.stance.alpha : 0);
+      sd.glow.setAlpha((sd.state === 'absent' ? 0.18 : 0.34) + Math.sin(now / 500 + i) * 0.06);
+    });
+  }
+}
+
 class CharSelectScene extends Phaser.Scene {
   constructor() { super('CharSelectScene'); }
 
@@ -7044,10 +7474,11 @@ const Coop = {
   },
 
   _updateCoop(now, delta) {
+    if (GameState.coop) P2Pad.autoAssign();
     // joining and leaving
     if (P2Pad.leaveReq) {
       P2Pad.leaveReq = false;
-      if (this.player2) { GameState.coop = false; this._despawnP2(); this._showTip('PLAYER 2 LEFT'); }
+      if (this.player2) { GameState.coop = false; P2Pad.assigned = null; this._despawnP2(); this._showTip('PLAYER 2 LEFT'); }
     }
     if (P2Pad.joinReq) {
       P2Pad.joinReq = false;
@@ -11889,7 +12320,7 @@ window.__game = new Phaser.Game({
   scale: Object.assign({ mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
     (typeof document !== 'undefined' && document.getElementById('game')) ? { fullscreenTarget: 'game' } : {}),
   physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
-  scene: [BootScene, StartScene, MenuScene, CharSelectScene, IntroDialogueScene,
+  scene: [BootScene, StartScene, MenuScene, CharSelectScene, CoopSelectScene, IntroDialogueScene,
           BunkerScene, ExitScene, JumpScene, BridgeScene, DashScene,
           ShopStreetScene, StoreScene,
           StorageOneScene, StorageTwoScene, EnemyCinematicScene,

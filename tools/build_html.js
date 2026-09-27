@@ -140,6 +140,19 @@ const SCENE_SRC = {
   bunkerboxclosed: ['public/assets/bunker_box_closed.png'],
   bunkerboxopen:   ['public/assets/bunker_box_open.png'],
   bunkerdooropen:  ['public/assets/bunker_door_open.png'],
+  // New game: the mode cards, and the co-op character select (the room, each
+  // brother standing and in his stance, and an eyelid overlay for each)
+  modesingle:   ['public/assets/mode_single.png'],
+  modemulti:    ['public/assets/mode_multi.png'],
+  selectbg:     ['public/assets/select_bg.png'],
+  selp1:        ['public/assets/select_p1.png'],
+  selp1blink:   ['public/assets/select_p1_blink.png'],
+  selp1s:       ['public/assets/select_p1_stance.png'],
+  selp1sblink:  ['public/assets/select_p1_stance_blink.png'],
+  selp2:        ['public/assets/select_p2.png'],
+  selp2blink:   ['public/assets/select_p2_blink.png'],
+  selp2s:       ['public/assets/select_p2_stance.png'],
+  selp2sblink:  ['public/assets/select_p2_stance_blink.png'],
   // The burnt street's Twingo, in its three states: burning, blowing up, and
   // the wreck left behind. Each drawn at its own scale and position, so the
   // game locks them together on the wheels (TWINGO_ART in ah_game.js).
@@ -173,8 +186,8 @@ let prev = { BG_DATA: null, MOBS: {}, SCENES: {} };
 if (fs.existsSync(p('build/scene_assets.js'))) {
   const sandbox = { window: {} };
   new Function('window', fs.readFileSync(p('build/scene_assets.js'), 'utf8'))(sandbox.window);
-  if (fs.existsSync(p('build/scene_assets2.js'))) {
-    new Function('window', fs.readFileSync(p('build/scene_assets2.js'), 'utf8'))(sandbox.window);
+  for (let n = 2; fs.existsSync(p('build/scene_assets' + n + '.js')); n++) {
+    new Function('window', fs.readFileSync(p('build/scene_assets' + n + '.js'), 'utf8'))(sandbox.window);
   }
   prev = {
     BG_DATA: sandbox.window.BG_DATA || null,
@@ -198,30 +211,32 @@ for (const [key, candidates] of Object.entries(SCENE_SRC)) {
   }
 }
 
-// Two files, not one. The hosted build is published file by file, and a
-// single file may not pass 16MB; the scene art alone was heading past it. The
-// keys are dealt into two halves by size, and the second half merges into the
-// first when it loads.
-const half = { a: {}, b: {} };
-let sizeA = 0;
-const LIMIT_A = 10.5 * 1024 * 1024;
+// Several files, not one. The hosted build is published file by file, and a
+// single file may not pass 16MB; the scene art alone is well past it. The keys
+// are dealt into parts of up to ~10.5MB each, in order, and every part after
+// the first merges into window.SCENES when it loads. As many parts as it takes
+// (scene_assets.js, scene_assets2.js, scene_assets3.js, ...).
+const LIMIT_PART = 10.5 * 1024 * 1024;
+const parts = [{}];
+let sizeNow = 0;
 for (const [k, uri] of Object.entries(scenes)) {
-  if (sizeA + uri.length <= LIMIT_A) { half.a[k] = uri; sizeA += uri.length; }
-  else half.b[k] = uri;
+  if (sizeNow + uri.length > LIMIT_PART && Object.keys(parts[parts.length - 1]).length) { parts.push({}); sizeNow = 0; }
+  parts[parts.length - 1][k] = uri;
+  sizeNow += uri.length;
 }
-const sceneBlock =
-  '/* Scene + monster art */ ' +
-  `window.BG_DATA = ${JSON.stringify(prev.BG_DATA)}; ` +
-  `window.MOBS = ${JSON.stringify(prev.MOBS)}; ` +
-  `window.SCENES = ${JSON.stringify(half.a)};`;
-const sceneBlock2 =
-  '/* Scene art, second half */ ' +
-  `window.SCENES = Object.assign(window.SCENES || {}, ${JSON.stringify(half.b)});`;
-fs.writeFileSync(p('build/scene_assets.js'), sceneBlock);
-fs.writeFileSync(p('build/scene_assets2.js'), sceneBlock2);
-console.log(`scene art split: ${Object.keys(half.a).length} in scene_assets.js ` +
-  `(${(sceneBlock.length / 1048576).toFixed(1)}MB), ${Object.keys(half.b).length} in ` +
-  `scene_assets2.js (${(sceneBlock2.length / 1048576).toFixed(1)}MB)`);
+while (parts.length < 2) parts.push({});
+const sceneBlocks = parts.map((part, i) => i === 0
+  ? '/* Scene + monster art */ ' +
+    `window.BG_DATA = ${JSON.stringify(prev.BG_DATA)}; ` +
+    `window.MOBS = ${JSON.stringify(prev.MOBS)}; ` +
+    `window.SCENES = ${JSON.stringify(part)};`
+  : `/* Scene art, part ${i + 1} */ ` +
+    `window.SCENES = Object.assign(window.SCENES || {}, ${JSON.stringify(part)});`);
+// the files from a longer split last time would otherwise linger
+for (let n = sceneBlocks.length + 1; fs.existsSync(p('build/scene_assets' + n + '.js')); n++) fs.unlinkSync(p('build/scene_assets' + n + '.js'));
+sceneBlocks.forEach((block, i) => fs.writeFileSync(p('build/scene_assets' + (i ? i + 1 : '') + '.js'), block));
+console.log('scene art split: ' + sceneBlocks.map((b, i) =>
+  `scene_assets${i ? i + 1 : ''}.js ${Object.keys(parts[i]).length} (${(b.length / 1048576).toFixed(1)}MB)`).join(', '));
 
 // ---------- media ----------
 // Inlined, not referenced. The page is opened straight off disk as a single
@@ -326,8 +341,7 @@ const blocks = [
   read('build/enemy_assets.js'),
   read('build/zomb_assets.js'),
   read('build/ui_assets.js'),
-  sceneBlock,
-  sceneBlock2,
+  ...sceneBlocks,
   mediaBlock,
   voiceBlock,
   devBlock,
