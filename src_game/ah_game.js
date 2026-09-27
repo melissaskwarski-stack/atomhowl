@@ -4172,27 +4172,6 @@ function surfaceProfile(scene, texKey, segments) {
   return out;
 }
 
-// The dash's kick-off: dash effect.png, five frames of green energy erupting
-// from where his heels leave the ground, played once behind him. The strip is
-// five 240x250 cells, each burst centred on its base at row 245.
-const DASH_FX = { key: 'scene_fxdash', n: 5, cw: 240, ch: 250, base: 245, peak: 228 };
-function dashBurst(scene, p) {
-  const F = DASH_FX;
-  if (!scene.textures.exists(F.key)) return;
-  const tex = scene.textures.get(F.key);
-  for (let i = 0; i < F.n; i++) if (!tex.has('db' + i)) tex.add('db' + i, 0, i * F.cw, 0, F.cw, F.ch);
-  if (!scene.anims.exists('fx-dash')) {
-    scene.anims.create({ key: 'fx-dash', frameRate: 22, repeat: 0,
-      frames: Array.from({ length: F.n }, (_, i) => ({ key: F.key, frame: 'db' + i })) });
-  }
-  const charH = scene.charH || 200, dir = p._dashDir || p._facing || 1;
-  const fx = scene.add.sprite(p.x - dir * 0.18 * charH, p.body.bottom + 2, F.key, 'db0')
-    .setOrigin(0.5, (F.base + 1) / F.ch).setDepth(p.depth - 1)
-    .setScale((0.55 * charH) / F.peak).setFlipX(dir < 0);
-  fx.play('fx-dash');
-  fx.once('animationcomplete', () => fx.destroy());
-}
-
 function driveWalker(scene, p, keys, onGround) {
   let move = 0;
   if (keys.A.isDown || keys.LEFT.isDown)  move -= 1;
@@ -4226,7 +4205,9 @@ function driveWalker(scene, p, keys, onGround) {
     p._dashReadyAt = now + WDASH_MS + WDASH_COOL;
     p._dashGhostAt = 0;
     if (!onGround) p._airDashUsed = true;
-    dashBurst(scene, p);
+    // No burst sprite here any more (dash effect.png read as a green,
+    // acid-like spike) — the motion-blur ghosts and speed lines below still
+    // sell the dash.
     Sfx.ensure(); Sfx.dash();
   }
   const dashing = now < (p._dashUntil || 0);
