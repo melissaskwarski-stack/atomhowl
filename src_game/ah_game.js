@@ -433,7 +433,93 @@ function playSample(key, o) {
   return h;
 }
 
-if (typeof window !== 'undefined') window.__samples = { loadSample, playSample };   // for tests
+// ---- El Acecho --------------------------------------------------------------
+// The song the bunker radio picks up once the broadcast is lost. One source, two
+// ways to hear it: through the radio (thin, crunchy, echoing, wavering like a
+// weak signal) and clean (a quiet bed once they are outside). Switching is a
+// crossfade between the two, so the song never restarts. It lives outside any
+// scene, because every door tears the scene down.
+const RadioSong = {
+  src: null, radioG: null, cleanG: null, out: null, playing: false, started: false,
+  _mode: 'radio', _level: 0, _duck: 1,
+  start(vol, ms) {
+    if (this.started) return;
+    Sfx.ensure();
+    const c = Sfx.ctx;
+    if (!c || !Sfx.samples) return;
+    this.started = true;
+    this.out = c.createGain(); this.out.gain.value = 1; this.out.connect(Sfx.samples);
+    // radio path: band-limited, a little crunch, an echo, a slow wobble
+    const hp = c.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 520;
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 2600;
+    const ws = c.createWaveShaper();
+    const curve = new Float32Array(1024);
+    for (let i = 0; i < 1024; i++) { const x = i / 511.5 - 1; curve[i] = Math.tanh(2.2 * x) / Math.tanh(2.2); }
+    ws.curve = curve;
+    const dl = c.createDelay(1.5); dl.delayTime.value = 0.28;
+    const fb = c.createGain(); fb.gain.value = 0.35;
+    const wet = c.createGain(); wet.gain.value = 0.5;
+    this.radioG = c.createGain(); this.radioG.gain.value = 0.0001;
+    const wob = c.createGain(); wob.gain.value = 1;
+    const lfo = c.createOscillator(); lfo.frequency.value = 0.35;
+    const lg = c.createGain(); lg.gain.value = 0.18; lfo.connect(lg); lg.connect(wob.gain); lfo.start();
+    this._lfo = lfo;
+    hp.connect(lp); lp.connect(ws); ws.connect(wob);
+    wob.connect(this.radioG); wob.connect(dl); dl.connect(fb); fb.connect(dl); dl.connect(wet); wet.connect(this.radioG);
+    this.radioG.connect(this.out);
+    // clean path
+    this.cleanG = c.createGain(); this.cleanG.gain.value = 0.0001; this.cleanG.connect(this.out);
+    this._in = hp;
+    this._mode = 'radio';
+    this._level = vol != null ? vol : 0.5;
+    loadSample('songAcecho').then(buf => {
+      if (!buf || !this.started) return;
+      const src = c.createBufferSource();
+      src.buffer = buf;
+      src.connect(this._in); src.connect(this.cleanG);
+      src.onended = () => { if (this.src === src) this._end(); };
+      src.start();
+      this.src = src; this.playing = true;
+      this._apply(ms || 1500);
+    });
+  },
+  _ramp(g, v, ms) {
+    const t = Sfx.ctx.currentTime;
+    g.gain.cancelScheduledValues(t);
+    g.gain.setValueAtTime(Math.max(0.0001, g.gain.value), t);
+    g.gain.linearRampToValueAtTime(Math.max(0.0001, v), t + Math.max(0.02, (ms || 0) / 1000));
+  },
+  _apply(ms) {
+    if (!this.radioG) return;
+    const v = this._level * this._duck;
+    this._ramp(this.radioG, this._mode === 'radio' ? v : 0, ms);
+    this._ramp(this.cleanG, this._mode === 'clean' ? v : 0, ms);
+  },
+  // through the radio, at this level
+  radio(vol, ms) { if (!this.started) return; this._mode = 'radio'; this._level = vol; this._apply(ms || 300); },
+  // clean and quiet
+  clean(vol, ms) { if (!this.started) return; this._mode = 'clean'; this._level = vol; this._apply(ms || 2500); },
+  duck(on, ms) { if (!this.started) return; this._duck = on ? 0.35 : 1; this._apply(ms || 300); },
+  get level() { return this._level; },
+  get mode() { return this._mode; },
+  fadeOut(ms) {
+    if (!this.started || !this.out) return;
+    const out = this.out, src = this.src;
+    this._ramp(out, 0, ms || 1500);
+    setTimeout(() => { try { if (src) src.stop(); } catch (e) {} try { out.disconnect(); } catch (e) {} }, (ms || 1500) + 100);
+    this._end();
+  },
+  _end() {
+    try { if (this._lfo) this._lfo.stop(); } catch (e) {}
+    this.src = null; this.radioG = null; this.cleanG = null; this._lfo = null;
+    this.playing = false;
+    // started stays true: it plays once
+  },
+  // a new game may hear it again
+  reset() { if (this.playing) this.fadeOut(600); this.started = false; this.out = null; this._duck = 1; }
+};
+
+if (typeof window !== 'undefined') window.__samples = { loadSample, playSample, RadioSong };   // for tests
 
 function pickAudio(list) {
   const probe = document.createElement('audio');
@@ -510,6 +596,7 @@ function stopMusic(ms) {
 // for the track it is already hearing and it simply carries on.
 let _track = null, _trackKey = null;
 function playTrack(key, vol) {
+  if (RadioSong.playing) RadioSong.fadeOut(1500);
   if (_track && _trackKey === key) return;
   stopTrack(300);
   const list = mediaList(key);
@@ -1031,6 +1118,7 @@ function showBladeUnlocked() {
 // A new game starts from nothing. GameState lived for the whole page, so NEW
 // GAME after ESC kept the blades, the pistol and every room already cleared.
 function resetProgress() {
+  RadioSong.reset();
   GameState.hasWeapon = false;
   GameState.hasSwords = false;
   GameState.hasPistol = false;
@@ -4424,6 +4512,7 @@ class MenuScene extends Phaser.Scene {
       band.fillRect(i * 10, 0, 10, H);
     }
 
+    if (RadioSong.playing) RadioSong.fadeOut(800);
     startMusic();
 
     const LX = 86;                                   // shared left margin
@@ -8109,11 +8198,21 @@ class BunkerScene extends WalkScene {
     this._radioLive(false);
     if (this._static) this._static.setVolume(0.24, 350);
     const stopChatter = () => { if (this._chatter) { this._chatter.stop(); this._chatter = null; } };
+    // The broadcast is lost to static — and out of the static, a song: El
+    // Acecho, coming through the radio.
+    const song = () => {
+      if (RadioSong.started) return;
+      Sfx.ensure(); Sfx.burst(0.5, 0.35, 2400, 0.7);
+      if (this._static) { this._static.setVolume(0.3, 80); this._static.setVolume(0.05, 1400); }
+      RadioSong.start(0.55, 1800);
+    };
     this.time.delayedCall(1300, () => {
       if (!this.scene.isActive()) return;
       this._panel(RADIO_LINES, (i, line) => {
         this._radioLine = i;
         stopChatter();
+        // the brothers talk over the song; it comes back up between them
+        if (line.who !== 'RADIO') { song(); RadioSong.duck(true); }
         if (!this._static) return;
         if (line.who === 'RADIO') {
           // loud under the voice, and the voice itself as chatter while it types
@@ -8132,11 +8231,14 @@ class BunkerScene extends WalkScene {
             this._static.setVolume(0.34, 120);
             this.time.delayedCall(700, () => {
               if (this._radioLine === i && this._static) this._static.setVolume(0.16, 400);
+              if (this._radioLine === i) song();
             });
           });
         }
       }, () => {
         stopChatter();
+        song();
+        RadioSong.duck(false, 900);
         if (this._static) this._static.setVolume(0.04, 900);
         this._release();
         this._showTip('THE PLAZA  —  OUT THROUGH THE DOOR');
@@ -8181,6 +8283,12 @@ class BunkerScene extends WalkScene {
       const near = Math.max(0, 1 - dm / 4.5);
       const want = (this._radioUsed ? 0.05 : 0.03) * near;
       if (Math.abs(this._static.volume - want) > 0.004) this._static.setVolume(want, 250);
+    }
+    // the song on the radio: loudest at the bench, still there across the room
+    if (RadioSong.playing && RadioSong.mode === 'radio' && !this._inConversation) {
+      const dm = Math.abs(this.player.x - this.radioX) / this.pxPerM;
+      const want = 0.2 + 0.4 * Math.max(0, 1 - dm / 6);
+      if (Math.abs(RadioSong.level - want) > 0.01) RadioSong.radio(want, 250);
     }
     const door = this.exits && this.exits.find(e => e.target === 'ExitScene');
     if (door) door.lockedLabel = this._radioUsed ? 'NOT ON AN EMPTY STOMACH' : 'GO WHERE, THOUGH?';
@@ -8363,6 +8471,8 @@ class ExitScene extends WalkScene {
     // The fires across the valley are heard the whole time out here, low and
     // far off; the cinematic brings them up while the camera is out there.
     this._crackle = playSample('sfxFireFar', { loop: true, far: true, vol: 0, scale: 0.6 });
+    // El Acecho, off the bunker radio, carries on out here: clean, and low
+    if (RadioSong.playing && RadioSong.mode === 'radio') RadioSong.clean(0.22, 2500);
     if (this._crackle) this._crackle.setVolume(GameState.seen['exit-intro'] ? 0.28 : 0.12, 1500);
     this._introTimers = [];
     this._exitTalking = false;

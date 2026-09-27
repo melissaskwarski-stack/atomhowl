@@ -50,7 +50,9 @@ const MEDIA = {
   // recorded effects: the car going up, the car burning, fires far off
   sfxBoom: [['public/assets/car_explosion.mp3', 'car_explosion.mp3']],
   sfxFire: [['public/assets/fire.mp3', 'fire.mp3']],
-  sfxFireFar: [['public/assets/fire_distance.mp3', 'fire_distance.mp3']]
+  sfxFireFar: [['public/assets/fire_distance.mp3', 'fire_distance.mp3']],
+  // El Acecho: on the bunker radio, then quietly outside
+  songAcecho: [['public/assets/el_acecho.mp3', 'el_acecho.mp3']]
 };
 
 const files = [];

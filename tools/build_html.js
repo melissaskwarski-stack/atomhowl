@@ -262,6 +262,8 @@ const MEDIA_SRC = {
   sfxBoom: [['public/assets/car_explosion.mp3', 'audio/mpeg']],
   sfxFire: [['public/assets/fire.mp3', 'audio/mpeg']],
   sfxFireFar: [['public/assets/fire_distance.mp3', 'audio/mpeg']],
+  // El Acecho: on the bunker radio, then quietly outside
+  songAcecho: [['public/assets/el_acecho.mp3', 'audio/mpeg']],
 };
 
 // ---------- dialogue voice ----------
