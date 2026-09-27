@@ -476,6 +476,7 @@ const RadioSong = {
       if (!buf || !this.started) return;
       const src = c.createBufferSource();
       src.buffer = buf;
+      src.loop = true;                  // it keeps going round until the thing in the corner stands
       src.connect(this._in); src.connect(this.cleanG);
       src.onended = () => { if (this.src === src) this._end(); };
       src.start();
@@ -513,7 +514,7 @@ const RadioSong = {
     try { if (this._lfo) this._lfo.stop(); } catch (e) {}
     this.src = null; this.radioG = null; this.cleanG = null; this._lfo = null;
     this.playing = false;
-    // started stays true: it plays once
+    // started stays true: once it has gone it does not come back
   },
   // a new game may hear it again
   reset() { if (this.playing) this.fadeOut(600); this.started = false; this.out = null; this._duck = 1; }
@@ -8208,7 +8209,7 @@ class BunkerScene extends WalkScene {
       if (RadioSong.started) return;
       Sfx.ensure(); Sfx.burst(0.5, 0.35, 2400, 0.7);
       if (this._static) { this._static.setVolume(0.3, 80); this._static.setVolume(0.05, 1400); }
-      RadioSong.start(0.55, 1800);
+      RadioSong.start(0.38, 1800);
     };
     this.time.delayedCall(1300, () => {
       if (!this.scene.isActive()) return;
@@ -8291,7 +8292,7 @@ class BunkerScene extends WalkScene {
     // the song on the radio: loudest at the bench, still there across the room
     if (RadioSong.playing && RadioSong.mode === 'radio' && !this._inConversation) {
       const dm = Math.abs(this.player.x - this.radioX) / this.pxPerM;
-      const want = 0.2 + 0.4 * Math.max(0, 1 - dm / 6);
+      const want = 0.12 + 0.26 * Math.max(0, 1 - dm / 6);
       if (Math.abs(RadioSong.level - want) > 0.01) RadioSong.radio(want, 250);
     }
     const door = this.exits && this.exits.find(e => e.target === 'ExitScene');
@@ -8476,7 +8477,7 @@ class ExitScene extends WalkScene {
     // far off; the cinematic brings them up while the camera is out there.
     this._crackle = playSample('sfxFireFar', { loop: true, far: true, vol: 0, scale: 0.6 });
     // El Acecho, off the bunker radio, carries on out here: clean, and low
-    if (RadioSong.playing && RadioSong.mode === 'radio') RadioSong.clean(0.22, 2500);
+    if (RadioSong.playing && RadioSong.mode === 'radio') RadioSong.clean(0.14, 2500);
     if (this._crackle) this._crackle.setVolume(GameState.seen['exit-intro'] ? 0.28 : 0.12, 1500);
     this._introTimers = [];
     this._exitTalking = false;
@@ -11862,6 +11863,8 @@ class StorageTwoScene extends WalkScene {
     if (!this.creature || this._risen) return;
     this._risen = true;
     this.creature.play('creature-rise');
+    // the song that has followed them since the bunker radio goes as it stands
+    if (RadioSong.playing) RadioSong.fadeOut(2500);
     Sfx.ensure(); Sfx.burst(0.5, 0.18, 180, 0.7);     // a wet, low shift of weight
   }
 
