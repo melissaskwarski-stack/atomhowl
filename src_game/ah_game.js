@@ -4749,6 +4749,9 @@ class MenuScene extends Phaser.Scene {
     const multi = M.cur === 1;
     GameState.coop = false;
     P2Pad.assigned = null;
+    // The menu song carries on into the character select; going straight into
+    // the game, it fades out with the picture.
+    if (!multi) stopMusic(700);
     this.cameras.main.fadeOut(600, 0, 0, 0);
     this.cameras.main.once('camerafadeoutcomplete', () =>
       this.scene.start(multi ? 'CoopSelectScene' : 'IntroDialogueScene'));
@@ -4974,6 +4977,7 @@ class CoopSelectScene extends Phaser.Scene {
       GameState.castId = 'eterwolf';
       P2Pad.joinReq = false;
       P2Pad.clearPresses();
+      stopMusic(700);                 // the menu song goes out with the picture
       this.cameras.main.fadeOut(600, 0, 0, 0);
       this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('IntroDialogueScene'));
     });
