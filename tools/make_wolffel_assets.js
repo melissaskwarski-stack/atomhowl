@@ -38,11 +38,13 @@ const SRC = {
   // because that is what his idle chain and the game call it.
   burger: A('wf_eat_se.gif'),
   aim:    A('wf_aim_east.gif'),     // extends the arm; stands in for shooting
-  // A slab of a greatsword he hauls off his back, swings through a full arc
-  // and drags back down: 21 frames that open and close on the same standing
-  // pose (f20 -> f0 differs by 8, against 149 inside), so the two halves cut
-  // cleanly into two swings.
-  sword:  A('wf_greatsword_east.gif'),
+  // sing sword wolffel.gif, 20 frames, side on: the blade comes out in front
+  // of him (2-3), up over his shoulder (4) and HELD there (5-8, four frames
+  // with nothing moving — the slow start), drawn back (9), the cut with its
+  // red arc (10), the follow-through (11-13), held out (14-16) and put away
+  // (17-19). He stands at the left of it and the blade reaches the right
+  // edge, so the clip is cut off his feet and carries a shift (animShift).
+  sword:  A('wf_swing_east.gif'),
   crouch: A('wf_crouch_east.gif'),
   akwalk: A('wf_akwalk_east.gif'),        // walking and firing the rifle
   pwalk:  A('wf_pistolwalk_east.gif'),    // walking with the pistol up
@@ -243,22 +245,47 @@ add('shootinW',  K.shootinW.slice(0, 3),  44, 0);
 add('shoot',     K.shoot,     10);
 add('shootW',    K.shootW,    10);
 
-// ---- the greatsword -------------------------------------------------------
-// It is too heavy for a fast three-hit chain, so the combo is the two halves
-// of the clip: he hauls it up and sweeps (2-14), then drags it back down
-// (14-20), and the third beat is the whole thing swung both ways.
+// ---- the sword ---------------------------------------------------------------
+// Cut to be quick. The standing frames at the front and the four-frame hold
+// over his shoulder are gone, and every beat knows which of its frames is the
+// cut (gif frame 10, the red arc), so the game lands the hit on it rather than
+// on the button (strike, below).
+//   first   out, up, back, CUT, through                     2-5, 9-13
+//   second  the blade already out: up, back, CUT, through   5, 9-13
+//   third   up, back, CUT, through, held, and put away      4-5, 9-18
+const SWING_CUT = 10;
+const SWING = {
+  sword:      [2, 3, 4, 5, 9, 10, 11, 12, 13],
+  sword2:     [5, 9, 10, 11, 12, 13],
+  sword3:     [4, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18],
+  swordguard: [14, 15, 16],
+  deathblow:  [2, 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+};
+const SWING_FPS = { sword: 28, sword2: 28, sword3: 26, swordguard: 4, deathblow: 15 };
+const strike = {};
 if (K.gs) {
-  add('sword',   K.gs.slice(2, 15),   26, 0);
-  add('swordW',  K.gsW.slice(2, 15),  26, 0);
-  add('sword2',  K.gs.slice(14),      26, 0);
-  add('sword2W', K.gsW.slice(14),     26, 0);
-  add('sword3',  K.gs.slice(2),       28, 0);
-  add('sword3W', K.gsW.slice(2),      28, 0);
-  // the quiet band mid-swing, where he holds it out
-  add('swordguard',  K.gs.slice(11, 15),  4);
-  add('swordguardW', K.gsW.slice(11, 15), 4);
-  // no front-facing art, so the finisher is the full two-way swing
-  add('deathblow',  K.gs.slice(2),  15, 0);
+  const pick = (keys, idx) => idx.map(i => keys[i]);
+  for (const [name, idx] of Object.entries(SWING)) {
+    const loop = name === 'swordguard' ? -1 : 0;
+    add(name,       pick(K.gs,  idx), SWING_FPS[name], loop);
+    add(name + 'W', pick(K.gsW, idx), SWING_FPS[name], loop);
+    const at = idx.indexOf(SWING_CUT);
+    if (at >= 0 && name !== 'deathblow') { strike[name] = at; strike[name + 'W'] = at; }
+  }
+}
+// Where his feet land in the swing against where they land standing side on
+// (idle0, the pose he swings from), in canvas px: the game moves the drawing
+// by this much while a swing plays, and not his body, so he stands still.
+const animShift = {};
+if (clips.sword && clips.idle0) {
+  const at = (d, i, mirror) => {
+    const b = d.boxes[i], w = b.maxX - b.minX + 1, ox = Math.floor((CW - w) / 2), x = L.solesX(d, i) - b.minX;
+    return ox + (mirror ? w - 1 - x : x);
+  };
+  const e = Math.round(at(clips.sword, 0, false) - at(clips.idle0, 0, false));
+  const w = Math.round(at(clips.sword, 0, true) - at(clips.idle0, 0, true));
+  Object.keys(SWING).forEach(n => { animShift[n] = e; animShift[n + 'W'] = w; });
+  console.log(`sword: feet ${e}px (east) / ${w}px (west) from where he stands; the hit on frame`, JSON.stringify(strike));
 }
 
 // ---- the dash -------------------------------------------------------------
@@ -394,6 +421,7 @@ const mod = {
   longIdleOnce: true,      // two bites, then back to standing
   body, muzzle, muzzles,
   canvasW: CW, canvasH: CH,
+  animShift, strike,
   pending: ['west art (all mirrored east)',
             'a front-facing finisher', 'a real standing firing clip'],
   frames,

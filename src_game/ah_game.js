@@ -1892,6 +1892,10 @@ class GameScene extends Phaser.Scene {
 
   create() {
     stopMusic(200);
+    if (!this._shiftHooked) {
+      this._shiftHooked = true;
+      this.events.on('postupdate', () => heroShift(this.player));
+    }
     const cam = this.cameras.main;
     this.physics.world.setBounds(0, 0, WORLD_W, WORLD_H);
     cam.setBounds(0, 0, WORLD_W, WORLD_H);
@@ -3046,7 +3050,7 @@ class GameScene extends Phaser.Scene {
     this.crouching = on;
     const B = this.hero.art.body;
     const h = on ? Math.round(B.h * CROUCH_BODY) : B.h;
-    this.player.body.setSize(B.w, h).setOffset(B.x, B.y + (B.h - h));
+    this.player.body.setSize(B.w, h).setOffset(B.x + (this.player._animShift || 0), B.y + (B.h - h));
     this.curAnim = '';                  // let the state machine pick the stance
   }
 
@@ -4215,7 +4219,26 @@ function setWalkerCrouch(p, on) {
   if (!hero || !p.body) return;
   const B = hero.art.body;
   const h = on ? Math.round(B.h * CROUCH_BODY) : B.h;
-  p.body.setSize(B.w, h).setOffset(B.x, B.y + (B.h - h));
+  p.body.setSize(B.w, h).setOffset(B.x + (p._animShift || 0), B.y + (B.h - h));
+}
+
+// A clip cut off-centre carries how far his feet sit from where they sit
+// standing (art.animShift, canvas px): Wolffel's swing, where he stands at the
+// left of the picture and the blade reaches across it. While it plays the
+// drawing is moved by that much and the body is not — the origin and the
+// body's offset move together — so he swings where he stands. Run after the
+// scene's update, when whatever is going to play this frame is playing.
+function heroShift(p) {
+  const hero = p && p._hero;
+  if (!hero || !p._real || !p.body || !p.active) return;
+  const map = hero.art.animShift, a = p.anims.currentAnim;
+  const pre = hero.pre + '-';
+  const want = (map && a && a.key.indexOf(pre) === 0 && map[a.key.slice(pre.length)]) || 0;
+  const d = want - (p._animShift || 0);
+  if (!d) return;
+  p._animShift = want;
+  p.setDisplayOrigin(p.displayOriginX + d, p.displayOriginY);
+  p.body.setOffset(p.body.offset.x + d, p.body.offset.y);
 }
 
 function driveWalker(scene, p, keys, onGround) {
@@ -5691,6 +5714,10 @@ class WalkScene extends Phaser.Scene {
 
   buildWalk(cfg) {
     this.cfg = cfg;
+    if (!this._shiftHooked) {
+      this._shiftHooked = true;
+      this.events.on('postupdate', () => { heroShift(this.player); heroShift(this.player2); });
+    }
     // Scenes are reused, so a hold left on by the last run (a restart during
     // a scripted beat) would start this one with the player frozen.
     this._holdInput = false;
@@ -6802,7 +6829,7 @@ class WalkScene extends Phaser.Scene {
       ? ((p._comboStep || 0) + 1) % chain.length : 0;
     p._comboUntil = now + COMBO_WINDOW_MS;
     const act = chain[p._comboStep] || 'sword';
-    Sfx.ensure(); Sfx.sword();
+    Sfx.ensure();
     if (hero && p._real) {
       const key = playAction(p, hero, act, p._facing);
       p._curAnim = key;
@@ -6811,7 +6838,34 @@ class WalkScene extends Phaser.Scene {
       if (p === this.player) this._swingUntil = p._swingUntil;
     }
     const dir = p._facing || 1;
-    if (this.flyers) this._parry(p, dir);
+    // The hit lands on the frame the blade does (art.strike: which frame of
+    // the beat is the cut), not on the button. Wolffel's swing goes up and
+    // back before it comes down; Eterwolf's art has no wind-up and hits now.
+    const clip = hero && p._real && hero.art.strike ? this.anims.get(p._curAnim) : null;
+    const at = clip ? hero.art.strike[act] : null;
+    const delay = at != null ? at * (clip.msPerFrame || 1000 / (clip.frameRate || 24)) : 0;
+    if (this.flyers) this._parry(p, dir, delay);
+    if (delay > 0) {
+      // On the frame itself, whatever the frame rate; the timer is only there
+      // in case something else takes the sprite before the clip gets there.
+      let landed = false;
+      const land = () => {
+        if (landed) return;
+        landed = true;
+        p.off('animationupdate', onFrame);
+        if (p.active && !p._down && !this._dead && !this._transitioning) this._bladeLands(p, dir);
+      };
+      const onFrame = (anim, frame) => { if (anim === clip && frame.index - 1 >= at) land(); };
+      p.on('animationupdate', onFrame);
+      this.time.delayedCall(delay + 120, land);
+      return;
+    }
+    this._bladeLands(p, dir);
+  }
+
+  // The blade arriving: what it cuts, the moment it gets there.
+  _bladeLands(p, dir) {
+    Sfx.sword();
     // An enemy in reach takes it: the nearest one in front, within an arm and
     // a blade of him, and at his height. A flyer knocked down onto the street
     // counts, if it is the nearer.
@@ -7706,7 +7760,8 @@ const WalkFlyers = {
       if (!f.active || !f._alive || f._state !== 'spit') return;
       f._state = 'hover';
       flyerPose(f, 'hover');
-      f.play('flyer-hover');
+      // on from the top of the bob, where the spit's last frame holds the body
+      f.play({ key: 'flyer-hover', startFrame: FLYER_SHEET.glide.indexOf(FLYER_SHEET.spitFrom) });
       f._nextSpitAt = this.time.now + Phaser.Math.Between(FLYER_SPIT_GAP[0], FLYER_SPIT_GAP[1]);
     });
   },
@@ -7815,8 +7870,8 @@ const WalkFlyers = {
   },
 
   // A swing opens the window in which it sends spikes back.
-  _parry(p, dir) {
-    p._parryUntil = this.time.now + PARRY_MS;
+  _parry(p, dir, delay) {
+    p._parryUntil = this.time.now + (delay || 0) + PARRY_MS;
     p._parryDir = dir;
   },
 
@@ -7870,6 +7925,8 @@ const WalkFlyers = {
   _flyerDown(f, dir, state) {
     f.off('animationupdate');
     f.anims.stop();
+    this.tweens.killTweensOf(f);        // brought down mid-rise, it falls: the rise is over
+    f.setAlpha(1);
     // it falls in its gliding pose, still facing the way it was, and lands so
     flyerPose(f, 'hover');
     f.setTexture(FLYER_SHEET.key, 'ff0');
@@ -7897,6 +7954,7 @@ const WalkFlyers = {
 
   _flyerRise(f) {
     f.setAlpha(1);
+    f.rotation = 0;
     const H = this.charH;
     f._state = 'rising';
     flyerPose(f, 'hover');
@@ -7905,7 +7963,7 @@ const WalkFlyers = {
     f.y = this.groundY - 0.45 * H;
     Sfx.ensure(); Sfx.swoop();
     this.tweens.add({ targets: f, y: this.groundY - FLYER_ALT * H, duration: 800, ease: 'Sine.easeOut',
-      onComplete: () => { if (f._alive) { f._state = 'hover'; f._nextSpitAt = this.time.now + 1600; } } });
+      onComplete: () => { if (f._alive && f._state === 'rising') { f._state = 'hover'; f._nextSpitAt = this.time.now + 1600; } } });
   },
 
   killFlyer(f, dir) {
