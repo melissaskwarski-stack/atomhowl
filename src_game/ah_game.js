@@ -4816,20 +4816,28 @@ class MenuScene extends Phaser.Scene {
 // ================================================================== //
 //  CO-OP CHARACTER SELECT                                             //
 //                                                                     //
-//  The two brothers on the two pedestals of the select room: Wolffel,  //
-//  player 2, on the left; Eterwolf, player 1, on the right. No boxes — //
+//  The two brothers on the two pedestals of the select room: Eterwolf, //
+//  player 1, on the left; Wolffel, player 2, on the right. No boxes — //
 //  a floating tag beside each, the prompt in keys or pad buttons for   //
 //  whoever is holding what. Each blinks and breathes; selecting plays  //
 //  a flash and swaps him into his stance, and he is READY. Both ready, //
 //  and the game starts with both of them in it.                       //
 // ================================================================== //
-// Each figure: its standing and stance images, and where its feet are on
-// each (baked by the select-art script; the same scale for both of a
-// brother's images, so he does not change size when he draws).
+// Each figure: its standing and stance images, and where its two soles are
+// on each (image px: centre x, bottom y), measured off the art. He is held at
+// the point between his soles, and that point goes on the middle of the
+// pedestal, so both feet land on the lit disc: the stance is wide and its back
+// foot sits 50px higher, and holding him by the lower foot left that one
+// hanging above the rim. The same scale for both of a brother's images, so he
+// does not change size when he draws.
 const SELECT_ART = {
-  p1: { idle: 'scene_selp1', stance: 'scene_selp1s', feet: { idle: [123, 514], stance: [200, 528] } },
-  p2: { idle: 'scene_selp2', stance: 'scene_selp2s', feet: { idle: [128, 514], stance: [197, 512] } }
+  p1: { idle: 'scene_selp1', stance: 'scene_selp1s',
+        soles: { idle: [[37.5, 517], [201.5, 514]], stance: [[52, 480], [273.5, 531]] } },
+  p2: { idle: 'scene_selp2', stance: 'scene_selp2s',
+        soles: { idle: [[44, 505], [211.5, 517]], stance: [[79.5, 478], [277.5, 515]] } }
 };
+// The middle of each pedestal's lit disc, in the 1280x720 room.
+const SELECT_PEDESTAL = { left: [267, 488], right: [1022, 488] };
 const SELECT_H = 400;          // on-screen height of a standing brother
 
 class CoopSelectScene extends Phaser.Scene {
@@ -4858,8 +4866,8 @@ class CoopSelectScene extends Phaser.Scene {
     torchTexture(this);
     this._t0 = this.time.now;
     this.sides = {
-      p2: this._brother('p2', 253, 492, 'PLAYER 2', 'WOLFFEL', 1),
-      p1: this._brother('p1', 1026, 492, 'PLAYER 1', 'ETERWOLF', -1)
+      p1: this._brother('p1', ...SELECT_PEDESTAL.left, 'PLAYER 1', 'ETERWOLF', 1),
+      p2: this._brother('p2', ...SELECT_PEDESTAL.right, 'PLAYER 2', 'WOLFFEL', -1)
     };
     this.sides.p1.state = 'joined';
     this.sides.p2.state = 'absent';
@@ -4879,16 +4887,27 @@ class CoopSelectScene extends Phaser.Scene {
     this.events.once('shutdown', () => { if (this._going) return; });
   }
 
-  // One brother on his pedestal, and his tag on the inner side of him.
+  // One brother on his pedestal, and his tag on the inner side of him. The
+  // art is drawn turned the other way from where he stands now, so it is
+  // mirrored to face the middle, about his feet.
   _brother(id, x, feetY, role, name, tagDir) {
     const A = SELECT_ART[id], k = SELECT_H / 520;
-    const mk = (key, feet) => {
+    const mid = soles => [(soles[0][0] + soles[1][0]) / 2, (soles[0][1] + soles[1][1]) / 2];
+    const mk = (key, soles) => {
       if (!this.textures.exists(key)) return null;
-      const src = this.textures.get(key).getSourceImage();
-      return this.add.image(x, feetY, key).setOrigin(feet[0] / src.width, feet[1] / src.height).setScale(k).setDepth(5);
+      const src = this.textures.get(key).getSourceImage(), m = mid(soles);
+      return this.add.image(x, feetY, key).setFlipX(true)
+        .setOrigin(m[0] / src.width, m[1] / src.height).setScale(k).setDepth(5);
     };
-    const idle = mk(A.idle, A.feet.idle), idleBlink = mk(A.idle + 'blink', A.feet.idle);
-    const stance = mk(A.stance, A.feet.stance), stanceBlink = mk(A.stance + 'blink', A.feet.stance);
+    // A soft shadow under each boot, which is most of what makes him stand on
+    // the disc rather than in front of it. Mirrored like the art.
+    const shade = soles => soles.map(([sx, sy]) => {
+      const m = mid(soles);
+      return this.add.ellipse(x - (sx - m[0]) * k, feetY + (sy - m[1]) * k - 1, 64, 13, 0x000000, 0.55).setDepth(4.6);
+    });
+    const idle = mk(A.idle, A.soles.idle), idleBlink = mk(A.idle + 'blink', A.soles.idle);
+    const stance = mk(A.stance, A.soles.stance), stanceBlink = mk(A.stance + 'blink', A.soles.stance);
+    const shadows = { idle: shade(A.soles.idle), stance: shade(A.soles.stance) };
     [idleBlink, stance, stanceBlink].forEach(o => o && o.setAlpha(0));
     if (idleBlink) idleBlink.setDepth(6);
     if (stanceBlink) stanceBlink.setDepth(6);
@@ -4906,7 +4925,7 @@ class CoopSelectScene extends Phaser.Scene {
     const arrow = this.add.text(x, feetY - SELECT_H - 26, '▼', { fontFamily: F_UI, fontSize: '22px', color: '#f2b13c',
       stroke: '#070605', strokeThickness: 4 }).setOrigin(0.5).setDepth(20);
     this.tweens.add({ targets: arrow, y: arrow.y + 8, yoyo: true, repeat: -1, duration: 520, ease: 'Sine.easeInOut' });
-    const self = { id, x, feetY, tagDir, tx, ty, align, idle, idleBlink, stance, stanceBlink, glow, roleT, nameT, line, arrow,
+    const self = { id, x, feetY, tagDir, tx, ty, align, idle, idleBlink, stance, stanceBlink, shadows, glow, roleT, nameT, line, arrow,
                    prompt: null, device: null, state: 'joined', ready: false, punch: 1, nextBlink: 0, blinkUntil: 0, dbl: false };
     line.lineStyle(1.5, 0xf2b13c, 0.55);
     const lx0 = tx + (tagDir > 0 ? -12 : 12), lx1 = x + tagDir * 60;
@@ -4932,7 +4951,7 @@ class CoopSelectScene extends Phaser.Scene {
     sd.arrow.setVisible(on && !sd.ready);
     sd.roleT.setColor(on ? '#f2b13c' : '#6e5c46');
     sd.nameT.setColor(sd.ready ? '#fff2c8' : on ? '#f0e6d4' : '#7d7064');
-    [sd.idle, sd.stance].forEach(o => o && o.setTint(on ? 0xffffff : 0x5a5a64));
+    [sd.idle, sd.stance, sd.idleBlink, sd.stanceBlink].forEach(o => o && o.setTint(on ? 0xffffff : 0x5a5a64));
   }
   _paintAll() { Object.values(this.sides).forEach(sd => this._paint(sd)); }
 
@@ -5046,6 +5065,8 @@ class CoopSelectScene extends Phaser.Scene {
       const shut = now < sd.blinkUntil;
       if (sd.idleBlink) sd.idleBlink.setAlpha(shut && !sd.ready ? sd.idle.alpha : 0);
       if (sd.stanceBlink) sd.stanceBlink.setAlpha(shut && sd.ready ? sd.stance.alpha : 0);
+      sd.shadows.idle.forEach(o => o.setAlpha(sd.idle ? sd.idle.alpha : 0));
+      sd.shadows.stance.forEach(o => o.setAlpha(sd.stance ? sd.stance.alpha : 0));
       sd.glow.setAlpha((sd.state === 'absent' ? 0.18 : 0.34) + Math.sin(now / 500 + i) * 0.06);
     });
   }
