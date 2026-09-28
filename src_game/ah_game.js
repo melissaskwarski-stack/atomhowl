@@ -7705,11 +7705,19 @@ const Coop = {
     // On the floor: his own fall, which ends lying down and holds there. He
     // stays where he fell until his player moves him (see _crawl). A
     // character with no fall drawn gets a still of him laid flat instead.
-    const act = ['falldown', 'death'].find(a => heroHas(hero, a));
+    const act = ['downfall', 'falldown', 'death'].find(a => heroHas(hero, a));
+    p._downShiftPx = 0;
     if (act) {
       const ms = playOnce(p, act, p._facing);
       p._downUntil = 0;                         // the down state owns him, not the clip
       p._fallUntil = this.time.now + ms;        // no crawling until he has landed
+      // Eterwolf's fall is drawn round the body he crawls with, not round
+      // where he stood: he is carried forward onto it, and the first frame —
+      // still standing — lands exactly where he was.
+      if (act === 'downfall' && hero.art.downShift) {
+        p._downShiftPx = hero.art.downShift * Math.abs(p.scaleX);
+        this._slideBody(p, (p._facing || 1) * p._downShiftPx);
+      }
     }
     else if (hero) {
       playAction(p, hero, 'idle', p._facing);
@@ -7744,17 +7752,38 @@ const Coop = {
     else { p.hp = 2; p._invulnUntil = now + 1500; }
     p.clearTint();
     p.setVelocityX(0);
+    // The time on the floor was not a rest: back up, the idle starts over
+    // rather than going straight to the guitar or the burger.
+    p._restSince = 0; p._longIdleDone = false; p._idleLooped = false;
     // Back up: his own getting-up where he has one (Wolffel), otherwise the
-    // fall played backwards (Eterwolf), otherwise straight to standing.
+    // fall played backwards (Eterwolf), otherwise straight to standing. The
+    // fall ends standing where the crawl started from, behind the crawl's
+    // centre (the way he faces now: he may have turned round crawling), so he
+    // goes back there the moment he is on his feet.
     const hero = p._hero;
-    if (hero && heroHas(hero, 'getup')) playOnce(p, 'getup', p._facing);
-    else if (hero && heroHas(hero, 'falldown')) {
-      const key = heroAnim(hero, 'falldown', p._facing), a = this.anims.get(key);
+    const back = () => {
+      if (p._downShiftPx) this._slideBody(p, -(p._facing || 1) * p._downShiftPx);
+      p._downShiftPx = 0;
+    };
+    if (hero && heroHas(hero, 'getup')) { back(); playOnce(p, 'getup', p._facing); }
+    else if (hero && heroHas(hero, 'downfall')) {
+      const key = heroAnim(hero, 'downfall', p._facing), a = this.anims.get(key);
       if (p.anims.nextAnimsQueue) p.anims.nextAnimsQueue.length = 0;
       p.playReverse(key);
-      p._curAnim = key; p._curAction = 'falldown';
-      p._downUntil = now + (a ? Math.min(900, a.duration) : 400);
-    } else if (hero) { playAction(p, hero, 'idle', p._facing); p._curAnim = heroAnim(hero, 'idle', p._facing); }
+      p._curAnim = key; p._curAction = 'downfall';
+      p._downUntil = now + 1e7;                 // his until he is standing
+      let done = false;
+      const up = () => {
+        if (done || !p.active || p._down) return;
+        done = true;
+        back();
+        p._downUntil = 0;
+        playAction(p, hero, 'idle', p._facing);
+        p._curAnim = heroAnim(hero, 'idle', p._facing);
+      };
+      p.once('animationcomplete-' + key, up);
+      this.time.delayedCall((a ? a.duration : 800) + 300, up);   // if the clip is cut short
+    } else if (hero) { back(); playAction(p, hero, 'idle', p._facing); p._curAnim = heroAnim(hero, 'idle', p._facing); }
     Sfx.ensure(); Sfx.mend();
     this._paintHearts();
     this.tweens.add({ targets: p, alpha: 0.4, duration: 110, yoyo: true, repeat: 5, onComplete: () => p.setAlpha(1) });
@@ -7770,22 +7799,37 @@ const Coop = {
     if (keys.D.isDown || keys.RIGHT.isDown) move += 1;
     const hero = p._hero;
     if (!move) { p.setVelocityX(0); if (p._crawling) this._crawlStop(p); return; }
-    p.setVelocityX(move * CRAWL_M * this.pxPerM);
-    const turned = move !== p._facing;
+    p.setVelocityX(move * CRAWL_M * (this.pxPerM || this.charH / HUMAN_M));
     p._facing = move;
     if (!hero || !p._real) return;
     if (heroHas(hero, 'downcrawl')) {
       const key = heroAnim(hero, 'downcrawl', move);
       if (p._curAnim !== key) { p.play(key); p._curAnim = key; p._curAction = 'downcrawl'; }
       else if (p.anims.isPaused) p.anims.resume();
-    } else if (turned && heroHas(hero, 'falldown')) {
-      // no crawl drawn: he stays in his fallen pose, turned the way he drags
-      const key = heroAnim(hero, 'falldown', move), a = this.anims.get(key);
-      p.play(key); p.anims.setProgress(1); p.anims.pause();
-      p._curAnim = key; p._curAction = 'falldown';
     }
-    if (!heroHas(hero, 'downcrawl')) p.setY(p.y + Math.sin(now / 90) * 0.25);   // a shuffle
     p._crawling = true;
+  },
+
+  // Move him along the floor by dx, but not into anything solid at his height
+  // or out of the world: going down or getting up must never put him inside a
+  // crate or a wall for the physics to throw him out of.
+  _slideBody(p, dx) {
+    if (!dx || !p.body) return 0;
+    const b = p.body, dir = Math.sign(dx);
+    let room = Math.abs(dx);
+    const floors = this.floorsW || [];
+    (this.solidsW || []).forEach(o => {
+      const sb = o.body;
+      if (!sb || floors.includes(o)) return;
+      if (dir > 0 ? !sb.checkCollision.left : !sb.checkCollision.right) return;
+      if (sb.bottom <= b.top + 2 || sb.top >= b.bottom - 2) return;     // above or below him
+      const gap = dir > 0 ? sb.left - b.right : b.left - sb.right;
+      if (gap >= -1) room = Math.min(room, Math.max(0, gap));
+    });
+    const wb = this.physics.world.bounds;
+    room = Math.min(room, Math.max(0, dir > 0 ? wb.right - b.right : b.left - wb.x));
+    p.x += dir * room;
+    return dir * room;
   },
 
   _crawlStop(p) {

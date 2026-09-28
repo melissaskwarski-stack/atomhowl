@@ -87,7 +87,11 @@ const SRC = {
   // crouch down sad.gif: drops to his knees, head down (9) — his brother gone.
   grieve:     A + 'Idle_v3_grieve_se.gif',
   // walk through door.gif: from behind, walking away (8, one whole cycle).
-  doorwalk:   A + 'Idle_v3_doorwalk_back.gif'
+  doorwalk:   A + 'Idle_v3_doorwalk_back.gif',
+  // eterwolf fall down crawl.gif: he sags from standing onto his hands and
+  // knees (0-12), head down, then crawls (13-20 loops: 21 is 13 again, seam
+  // 0.03 of a step). Down in co-op, waiting for his brother.
+  downcrawl:  A + 'Idle_v3_downcrawl_east.gif'
 };
 
 // Several clips open with a one-shot action and only then settle into
@@ -124,7 +128,7 @@ const FREEZE_BELOW = {};
 // to wide, and per-frame centring would swing his whole body to meet it.
 const SHARE_X = ['jump', 'katana', 'katanaW', 'katana2W', 'esword',
                  'eswordF', 'crouch', 'crouchwalk', 'falldown', 'death', 'p45',
-                 'guitar'];
+                 'guitar', 'downcrawl'];
 
 // Bursts: the physics launches the instant the key goes down, so a clip that
 // opens on two or three frames of the character still standing reads as him
@@ -202,6 +206,12 @@ for (const [name, at] of Object.entries(ANCHOR)) {
   L.anchorX(clips, name, cx);
 }
 L.pinEach(clips, 'grieve');     // down on his knees: every frame on the floor
+// Going down and crawling: every frame on the floor. It shares one box (SHARE_X
+// above), which centres the canvas on the crawling body rather than on where
+// he stood, so he turns round on the spot while crawling and the canvas stays
+// the width it is — the crawl reaches 180px ahead of his feet. The game moves
+// him forward by downShift (below) as he goes down, and back as he gets up.
+L.pinEach(clips, 'downcrawl');
 
 // ---------- uniform, feet-anchored canvas ----------
 // One canvas for every clip so the sprite never jumps when the animation
@@ -273,7 +283,9 @@ const K = {
   grieve:    clips.grieve ? pool('grieve',  'grieve', false) : null,
   grieveW:   clips.grieve ? pool('grieveW', 'grieve', true)  : null,
   doorwalk:  clips.doorwalk ? pool('doorwalk',  'doorwalk', false) : null,
-  doorwalkW: clips.doorwalk ? pool('doorwalkW', 'doorwalk', true)  : null
+  doorwalkW: clips.doorwalk ? pool('doorwalkW', 'doorwalk', true)  : null,
+  dcrawl:    clips.downcrawl ? pool('dcrawl',  'downcrawl', false) : null,
+  dcrawlW:   clips.downcrawl ? pool('dcrawlW', 'downcrawl', true)  : null
 };
 // Each looping tail reuses frames already emitted for its intro, so splitting
 // a clip in two costs no extra image data.
@@ -552,6 +564,23 @@ if (K.grieve) {
 if (K.doorwalk) {
   mod.anims.doorwalk  = A_(K.doorwalk,  10);
   mod.anims.doorwalkW = A_(K.doorwalkW, 10);
+}
+// Down in co-op: the fall runs straight into the crawl's first frame, and the
+// crawl is 7fps so a planted knee drags back at about the 0.5 m/s he moves.
+if (K.dcrawl) {
+  mod.anims.downfall   = A_(K.dcrawl.slice(0, 13),  16, 0);
+  mod.anims.downfallW  = A_(K.dcrawlW.slice(0, 13), 16, 0);
+  mod.anims.downcrawl  = A_(K.dcrawl.slice(13, 21),  7);
+  mod.anims.downcrawlW = A_(K.dcrawlW.slice(13, 21), 7);
+  // How far behind the canvas centre he is standing in the fall's first frame,
+  // against where the idle stands (canvas px, facing east). Both are placed
+  // the way the cutter places them: box centred on the canvas.
+  const at = (box, x) => Math.floor((CW - (box.maxX - box.minX + 1)) / 2) + (x - box.minX);
+  const idle0 = clips.idle.boxes[0], dc = clips.downcrawl;
+  const f0 = L.bbox(dc.frames[0], dc.W, dc.H);
+  mod.downShift = Math.round(at(idle0, (idle0.minX + idle0.maxX) / 2) -
+                             at(dc.boxes[0], (f0.minX + f0.maxX) / 2));
+  console.log(`downcrawl: standing start ${mod.downShift}px behind the crawl's centre`);
 }
 
 // Every clip pools all of its frames, but the animations only ever slice parts
