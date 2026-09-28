@@ -1166,6 +1166,7 @@ function saveCheckpoint(sceneKey, data) {
   try {
     const d = Object.assign({}, data || {});
     delete d.resumed;
+    delete d.walkIn;
     localStorage.setItem(SAVE_KEY, JSON.stringify({
       scene: sceneKey, data: d,
       state: { hasWeapon: GameState.hasWeapon, hasSwords: GameState.hasSwords,
@@ -4249,6 +4250,30 @@ function setWalkerCrouch(p, on) {
   p.body.setSize(B.w, h).setOffset(B.x + (p._animShift || 0), B.y + (B.h - h));
 }
 
+// Walking between stages. Off the edge of one, the brothers keep walking
+// (running, if they were) through the fade instead of stopping and standing
+// in it; into the next, they come in off the edge walking as it fades up.
+// Driven here rather than by driveWalker, which turns gravity back on every
+// frame: past the end of the floor they must walk on, not drop.
+const EDGE_FADE_MS = 420;
+const WALK_IN_MS   = 460;
+function scriptedWalk(p, dir, speed, run) {
+  if (!p || !p.active || !p.body) return;
+  p.setVelocity(dir * speed, 0);
+  p._facing = dir;
+  const hero = p._hero;
+  if (!hero || !p._real) return;
+  const act = run && heroHas(hero, 'run') ? 'run' : 'walk';
+  const key = heroAnim(hero, act, dir);
+  if (p._curAnim !== key) { playAction(p, hero, act, dir); p._curAnim = key; }
+}
+function freeWalk(p, on) {
+  if (!p || !p.active || !p.body) return;
+  p.setCollideWorldBounds(!on);
+  p.body.setAllowGravity(!on);
+  if (on) p.setVelocityY(0);
+}
+
 // A clip cut off-centre carries how far his feet sit from where they sit
 // standing (art.animShift, canvas px): Wolffel's swing, where he stands at the
 // left of the picture and the blade reaches across it. While it plays the
@@ -6275,6 +6300,9 @@ class WalkScene extends Phaser.Scene {
       this._gf = 0;
     }
     this._transitioning = false;
+    this._exitWalk = null;
+    this._walkIn = null;
+    if (data.walkIn) this._startWalkIn(data.walkIn);
     // Every stage is a checkpoint: CONTINUE puts you back at its start.
     saveCheckpoint(this.scene.key, this.sys.settings.data);
   }
@@ -6511,7 +6539,7 @@ class WalkScene extends Phaser.Scene {
         const d = this.sys.settings.data || {};
         // `resumed` is what tells the stage that its set pieces have already
         // happened, so they are not played at you a second time.
-        this.scene.restart(Object.assign({}, d, { resumed: true }));
+        this.scene.restart(Object.assign({}, d, { resumed: true, walkIn: 0 }));
       });
       return;
     }
@@ -6701,6 +6729,12 @@ class WalkScene extends Phaser.Scene {
     }
     // A hit throws him. driveWalker sets his speed every frame, which would
     // cancel the knock on the very next one — so for its length, nothing does.
+    else if (this._exitWalk) scriptedWalk(this.player, this._exitWalk.dir, this._exitWalk.speed, this._exitWalk.run);
+    else if (this._walkIn) {
+      this._walkIn.left -= Math.min(100, delta || 16);
+      if (this._walkIn.left <= 0) this._endWalkIn();
+      else scriptedWalk(this.player, this._walkIn.dir, this._walkIn.speed, false);
+    }
     else if (now < (this.player._knockUntil || 0)) { /* the hit carries him */ }
     else if (this.player._down) this._crawl(this.player, this.keys, now);   // down: crawls only if you move him
     else if (!this._transitioning) driveWalker(this, this.player, this.keys, onGround);
@@ -6926,22 +6960,56 @@ class WalkScene extends Phaser.Scene {
 
   goExit(ex) {
     this._transitioning = true;
-    this.player.setVelocityX(0);
-    // Stop the stride too, or he pedals on the spot for the whole fade.
-    if (this.player._real) {
-      playAction(this.player, this.player._hero, 'idle', this.player._facing);
-      this.player._curAnim = heroAnim(this.player._hero, 'idle', this.player._facing);
+    const p = this.player;
+    // Off the edge of the picture (the exits you walk into rather than open),
+    // they keep walking through the fade, and walk in on the other side.
+    const walkOut = !!ex.auto && ex.kind !== 'combat';
+    let dir = 0;
+    if (walkOut) {
+      dir = (ex.x != null ? ex.x : p.x) >= this.worldW / 2 ? 1 : -1;
+      const k = this.playScale || 1, run = Math.abs(p.body.velocity.x) > WALK_SPEED * k * 1.15;
+      this._exitWalk = { dir, run, speed: (run ? RUN_SPEED : WALK_SPEED) * k };
+      [p, this.player2].forEach(q => { if (q && q.active && !q._down) freeWalk(q, true); });
+    } else {
+      p.setVelocityX(0);
+      // Stop the stride too, or he pedals on the spot for the whole fade.
+      if (p._real) {
+        playAction(p, p._hero, 'idle', p._facing);
+        p._curAnim = heroAnim(p._hero, 'idle', p._facing);
+      }
     }
     Sfx.ensure(); Sfx.dash();
     // Short. One stage running into the next is a step, not a scene change,
     // and 450 out plus 600 in is a second of black every time you walk off
     // the edge of a screen — which is what made the walk feel broken up.
-    this.cameras.main.fadeOut(ex.fadeMs || 260, 0, 0, 0);
+    this.cameras.main.fadeOut(walkOut ? EDGE_FADE_MS : (ex.fadeMs || 260), 0, 0, 0);
     this.cameras.main.once('camerafadeoutcomplete', () => {
       const target = ex.kind === 'combat' ? 'GameScene' : ex.target;
       this.scene.start(target, Object.assign({}, ex.data || {},
-        ex.spawnXFrac != null ? { spawnXFrac: ex.spawnXFrac } : {}));
+        ex.spawnXFrac != null ? { spawnXFrac: ex.spawnXFrac } : {},
+        walkOut ? { walkIn: dir } : {}));
     });
+  }
+
+  // In off the edge: stood a few steps outside it and walked in as the stage
+  // fades up, then the controls are his.
+  _startWalkIn(dir) {
+    const k = this.playScale || 1, speed = WALK_SPEED * k;
+    const dx = speed * WALK_IN_MS / 1000;
+    [this.player, this.player2].forEach(q => {
+      if (!q || !q.active) return;
+      q.x -= dir * dx;
+      freeWalk(q, true);
+      scriptedWalk(q, dir, speed, false);
+    });
+    // Counted down by frame time: on a reused scene, create() still reads the
+    // clock where the stage last left it, so a deadline set here is stale.
+    this._walkIn = { dir, speed, left: WALK_IN_MS };
+  }
+
+  _endWalkIn() {
+    [this.player, this.player2].forEach(q => freeWalk(q, false));
+    this._walkIn = null;
   }
 }
 
@@ -8330,6 +8398,12 @@ const Coop = {
       this._warpP2();
       return;
     }
+    if (!p2._down && (this._exitWalk || this._walkIn)) {
+      const w = this._exitWalk || this._walkIn;
+      scriptedWalk(p2, w.dir, w.speed, !!w.run);
+      P2Pad.clearPresses();
+      return;
+    }
     if (p2._down && !this._dead && !this._transitioning) { this._crawl(p2, P2Pad.keys, now); P2Pad.clearPresses(); return; }
     if (p2._down || this._dead || this._transitioning) { p2.setVelocityX(0); P2Pad.clearPresses(); return; }
     if (this._holdInput) {
@@ -8674,6 +8748,8 @@ const Inspect = {
     this._inConversation = true;
     this._holdInput = true;
     this._calmIdle = true;
+    // a tip on the screen would sit over it: it goes while this is up
+    if (this._tip) { this.tweens.killTweensOf(this._tip); this._tip.setAlpha(0); }
     const p = this.player;
     if (p) {
       p.setVelocity(0, 0);
@@ -11499,9 +11575,11 @@ class StoreScene extends WalkScene {
     this._buildLever({ x0: 0.2095, x1: 0.2295, y0: 0.2474, y1: 0.3906 });
     // The window, glazed. The horde will break it; nothing does yet.
     this._buildGlass({ x0: 0.408, x1: 0.453, y0: 0.195, y1: 0.372 });
-    // The shop owner's portrait, small, on the lamp-lit wall just left of the
-    // chest (the lamp hangs at 0.788; the chest stands at 0.866).
-    this._buildPortrait(0.800, 0.225, 0.062);
+    // The shop owner's portrait on the lamp-lit wall over the chest balcony,
+    // hung where a picture hangs: at the eye height of someone standing on the
+    // balcony (its floor is 0.303, a man's eyes about 0.13), about a metre
+    // tall, between the pipe at 0.696 and the lamp's pool of light (0.765+).
+    this._buildPortrait(0.735, 0.165, 0.095);
 
     // Phaser builds each scene ONCE and reuses it, so anything set on `this`
     // survives into the next visit unless create() puts it back. Two things
@@ -11852,7 +11930,7 @@ class StoreScene extends WalkScene {
       onUse() {
         this.showDocument({
           key: 'scene_shopowner', maxW: 440, maxH: 580, cy: 330,
-          speaker: 'ETERWOLF', caption: 'Looks like a portrait of the shop owner.',
+          caption: 'The shop owner. A red scarf at his throat, as always.',
           onClose() { once('saw-shopowner'); }
         });
       }
@@ -12808,8 +12886,9 @@ class StorageTwoScene extends WalkScene {
       beats: this._mode === 'dark' ? [{ at: 0, tip: 'FIND THE LIGHTS' }] : [],
       // The way back is the way in, and it opens when the thing is dead.
       exits: [
+        // Out once the pistol is taken and what it left has been looked at.
         { xFrac: 0.012, w: 90, target: 'StorageOneScene', auto: true, silent: true,
-          fadeMs: 190, spawnXFrac: 0.955, when: () => !!GameState.seen['fight1-won'] }
+          spawnXFrac: 0.955, when: () => !!GameState.seen['fight1-won'] && !!GameState.seen['saw-scarf'] }
       ],
       drawFallback(WW) {
         const g = this.add.graphics().setDepth(-20);
@@ -12995,12 +13074,18 @@ class StorageTwoScene extends WalkScene {
       // The fight music does not stop here: it carries on through the walk
       // back and under the horde in the tienda, and only fades once the
       // tienda is clear (_hordeCleared).
-      this.time.delayedCall(1800, () => {
-        this._say([['ETERWOLF', "Let's get out of here."],
-                   ['WOLFFEL',  'Back the way we came.']]);
-      });
-      this.time.delayedCall(3600, () => this._showTip('WALK BACK  —  THE WAY YOU CAME'));
+      if (GameState.seen['saw-scarf']) this._leaveStorage(1800);
+      else this.time.delayedCall(2000, () => this._showTip('IT LEFT SOMETHING BEHIND  —  LOOK AT IT'));
     };
+  }
+
+  // Both done — the pistol and the scarf — and they go.
+  _leaveStorage(ms) {
+    this.time.delayedCall(ms, () => {
+      this._say([['ETERWOLF', "Let's get out of here."],
+                 ['WOLFFEL',  'Back the way we came.']]);
+    });
+    this.time.delayedCall(ms + 1800, () => this._showTip('WALK BACK  —  THE WAY YOU CAME'));
   }
 
   fx(f) { return this.bgGeom.x + f * this.bgGeom.w; }
@@ -13025,52 +13110,25 @@ class StorageTwoScene extends WalkScene {
     if (this._mode === 'after') this._scarfInspect();
   }
 
-  // Once the thing is dead: E at the scarf.
+  // Once the thing is dead: E at the scarf. A note, the way the letter and
+  // the portrait are: the thing itself, and a line under it. Nobody talks.
+  // It has to be looked at before the way out opens.
   _scarfInspect() {
     const im = this.clothes;
     if (!im || this._scarfIt) return;
     this._scarfIt = this.addInspect({
       x: im.x, y: im.y - im.displayHeight * 0.5, floorY: this.groundY, label: 'E  —  LOOK',
-      // the close look is once a game; after that, just what they say
       onUse(it) {
-        this._retireInspect(it);
-        if (firstCinematic('storage-scarf')) this._lookAtScarf();
-        else this._say([['PLAYER', "The owner's scarf. The one from the portrait."],
-                        ['PLAYER', 'So that thing was him... Poor bastard.']]);
+        const first = !GameState.seen['saw-scarf'];
+        this.showDocument({
+          key: 'scene_ownerclothes', maxW: 620, maxH: 420, cy: 330,
+          caption: 'A red scarf, still wound in chain — the one the shop owner wears in his portrait.',
+          onClose() {
+            once('saw-scarf');
+            if (first && GameState.seen['fight1-won']) this._leaveStorage(400);
+          }
+        });
       }
-    });
-  }
-
-  // He stops over it and the picture closes in on the scarf and him: the one
-  // from the portrait by the chest. Then back out, and on.
-  _lookAtScarf() {
-    const cam = this.cameras.main, p = this.player, im = this.clothes;
-    this._holdInput = true;
-    this._calmIdle = true;
-    p.setVelocityX(0);
-    p._facing = im.x >= p.x ? 1 : -1;
-    // the tip makes way for what he says
-    if (this._tip) { this.tweens.killTweensOf(this._tip); this.tweens.add({ targets: this._tip, alpha: 0, duration: 250 }); }
-    this._hudCamOn();
-    cam.stopFollow();
-    cam.pan((im.x + p.x) / 2, this.groundY - this.charH * 0.5, 800, 'Sine.easeInOut', true);
-    cam.zoomTo(1.45, 800, 'Sine.easeInOut', true);
-    Sfx.ensure(); Sfx.blip(196, 0.9, 'sine', 0.05, 147);
-    this.time.delayedCall(600, () => this._say([
-      ['PLAYER', "The owner's scarf. The one from the portrait."],
-      ['PLAYER', 'So that thing was him... Poor bastard.']]));
-    this.time.delayedCall(5600, () => {
-      if (!p.active) return;
-      cam.pan(p.x, p.y, 800, 'Sine.easeInOut', true);
-      cam.zoomTo(1, 800, 'Sine.easeInOut', true, (c, t) => {
-        if (t < 1 || !p.active) return;
-        cam.startFollow(p, false, 0.1, 0.1);
-        this._look = 0;
-        this._hudCamOff();
-        this._holdInput = false;
-        this._calmIdle = false;
-        if (this._gunDrop && this._gunDrop.gun && this._gunDrop.gun.active) this._showTip('IT DROPPED SOMETHING');
-      });
     });
   }
 
