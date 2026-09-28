@@ -1102,6 +1102,29 @@ function once(id) {
   GameState.seen[id] = true;
   return true;
 }
+// A cinematic plays once a game. Dying, the R restart, walking back into the
+// room and CONTINUE never show it again; only NEW GAME does (resetProgress
+// clears seen). When it has been seen the stage still does what the cinematic
+// did — the thing still comes through the window — just without taking the
+// camera and the controls to show it. The flag also goes straight into the
+// saved checkpoint, which otherwise holds seen as it was when the stage began,
+// so quitting out mid-stage and continuing does not bring it back either.
+// Returns true the one time the cinematic should play.
+function firstCinematic(id) {
+  const key = 'cine:' + id;
+  if (GameState.seen[key]) return false;
+  GameState.seen[key] = true;
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    const save = raw && JSON.parse(raw);
+    if (save && save.state) {
+      save.state.seen = Object.assign({}, save.state.seen, { [key]: true });
+      localStorage.setItem(SAVE_KEY, JSON.stringify(save));
+    }
+  } catch (e) { /* no storage: it still plays only once this session */ }
+  return true;
+}
+function cinematicSeen(id) { return !!GameState.seen['cine:' + id]; }
 // The blades come out of the chest in the store. The older route through the
 // city hands you a gun before it hands you a fight, so it keeps its sword on
 // that instead — nothing that worked before stops working.
@@ -11131,10 +11154,12 @@ class NightStreetScene extends WalkScene {
     this._flyersSent = 0;
     this.onEnemyKilled = x => this._nightKill(x);
     this.onFlyerKilled = () => this._nightCheck();
-    if (d.retry) this.time.delayedCall(500, () => this._nightFight(true));
+    // The scream on the ledge is a cinematic: once a game. After that (a
+    // death, R, CONTINUE) the fight just starts again as it does on a retry.
+    if (d.retry || cinematicSeen('night-ledge')) this.time.delayedCall(500, () => this._nightFight(true));
     else {
       this.time.delayedCall(900, () => this._say([['PLAYER', 'Night already. How long were we in there?']]));
-      this.time.delayedCall(3300, () => this._nightIntro());
+      this.time.delayedCall(3300, () => { if (firstCinematic('night-ledge')) this._nightIntro(); else this._nightFight(true); });
     }
   }
 
@@ -11548,7 +11573,13 @@ class StoreScene extends WalkScene {
 
   _hordeKill() {
     this._hordeKills++;
-    if (this._hordeKills === 3) this.time.delayedCall(900, () => this._windowCutscene());
+    // The window: the cutscene the first time; after that (a death, R) just
+    // what it shows — the pane goes and three come through it, on the same
+    // beats — with the fight never stopping.
+    if (this._hordeKills === 3) this.time.delayedCall(900, () => {
+      if (firstCinematic('store-window')) this._windowCutscene();
+      else this._windowNoCutscene();
+    });
     if (this._hordeKills >= HORDE_TOTAL) this._hordeCleared();
   }
 
@@ -11603,6 +11634,15 @@ class StoreScene extends WalkScene {
     // and the two behind it, once he has it back
     at(6000, () => this._windowCrash(true));
     at(9200, () => this._windowCrash(true));
+  }
+
+  _windowNoCutscene() {
+    if (this._dead || this._transitioning || !this.glassBox) return;
+    const at = (ms, fn) => this.time.delayedCall(ms, () => { if (!this._dead && this.scene.isActive()) fn(); });
+    at(0, () => { this._windowCrash(true); this._showTip('MORE COMING THROUGH THE WINDOW'); });
+    at(1000, () => { Sfx.ensure(); Sfx.roar(); this.cameras.main.shake(260, 0.004); });
+    at(4100, () => this._windowCrash(true));
+    at(7300, () => this._windowCrash(true));
   }
 
   // One through the glass: the pane goes the first time, it leaps from the
