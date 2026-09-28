@@ -1114,6 +1114,11 @@ function firstCinematic(id) {
   const key = 'cine:' + id;
   if (GameState.seen[key]) return false;
   GameState.seen[key] = true;
+  persistSeen(key);
+  return true;
+}
+// Write one seen flag into the saved checkpoint as well as GameState.
+function persistSeen(key) {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
     const save = raw && JSON.parse(raw);
@@ -1121,8 +1126,7 @@ function firstCinematic(id) {
       save.state.seen = Object.assign({}, save.state.seen, { [key]: true });
       localStorage.setItem(SAVE_KEY, JSON.stringify(save));
     }
-  } catch (e) { /* no storage: it still plays only once this session */ }
-  return true;
+  } catch (e) { /* no storage: it still holds for this session */ }
 }
 function cinematicSeen(id) { return !!GameState.seen['cine:' + id]; }
 // The blades come out of the chest in the store. The older route through the
@@ -8773,6 +8777,10 @@ try { if (document.fonts) document.fonts.load("31px Caveat"); } catch (e) { /* n
 class BunkerScene extends WalkScene {
   constructor() { super('BunkerScene'); }
   create() {
+    // The radio and the food box are once a game (firstCinematic, which also
+    // reaches the saved checkpoint); the room reads its own flags for them.
+    if (cinematicSeen('bunker-radio')) GameState.seen['bunker-radio'] = true;
+    if (cinematicSeen('bunker-ate')) GameState.seen['bunker-ate'] = true;
     stopMusic(200);
     this.cameras.main.fadeIn(450, 0, 0, 0);
     this.buildWalk({
@@ -8863,6 +8871,8 @@ class BunkerScene extends WalkScene {
     this._calmIdle = false;
     this._doorOpen = false;
     this._buildRadio();
+    // Already heard: El Acecho is on the radio, as it was left.
+    if (this._radioUsed) { if (!RadioSong.started) RadioSong.start(0.12, 1500); else RadioSong.duck(false, 300); }
     this._buildCrate();
     // The wolf painted on the banner by the bunks. Not theirs — nothing here
     // is — and Feli would know.
@@ -9071,6 +9081,7 @@ class BunkerScene extends WalkScene {
     if (this._radioUsed) return;
     this._radioUsed = true;
     once('bunker-radio');
+    firstCinematic('bunker-radio');
     this.radioLabel.setAlpha(0);
     this._hold(this.radioX);
     Sfx.ensure(); Sfx.select();
@@ -9131,6 +9142,7 @@ class BunkerScene extends WalkScene {
     if (this._ate) return;
     this._ate = true;
     once('bunker-ate');
+    firstCinematic('bunker-ate');
     this.crateLabel.setAlpha(0);
     this._hold(this.crateX);
     this._reach(this.player, this.crateX);
@@ -9187,6 +9199,8 @@ class BunkerScene extends WalkScene {
 BunkerScene.prototype.goExit = function (ex) {
   if (ex.target !== 'ExitScene' || this._doorOpen) return WalkScene.prototype.goExit.call(this, ex);
   this._doorOpen = true;
+  // the walk up and through: once a game; after that, just the door
+  if (!firstCinematic('bunker-door')) return WalkScene.prototype.goExit.call(this, ex);
   this._transitioning = true;
   const p = this.player;
   p.setVelocityX(0);
@@ -9294,6 +9308,9 @@ const CRATE_LINES = [
 class ExitScene extends WalkScene {
   constructor() { super('ExitScene'); }
   create() {
+    // The first look outside is once a game: the road reads 'exit-intro'.
+    if (cinematicSeen('exit-intro')) GameState.seen['exit-intro'] = true;
+    this._calmIdle = false;
     this.cameras.main.fadeIn(260, 0, 0, 0);
     this.buildWalk({
       bgKey: 'scene_exit',
@@ -9409,6 +9426,7 @@ class ExitScene extends WalkScene {
   // they are looking at. Enter or Space skips the drift.
   _exitIntro() {
     once('exit-intro');
+    firstCinematic('exit-intro');
     const cam = this.cameras.main, p = this.player;
     this._holdInput = true;
     this._calmIdle = true;
@@ -9503,6 +9521,8 @@ const LETTER_SIGN = "Rosa";
 class JumpScene extends WalkScene {
   constructor() { super('JumpScene'); }
   create() {
+    // The blast is once a game: seen, the street opens on the wreck.
+    if (cinematicSeen('twingo')) GameState.seen['twingo-blown'] = true;
     this.cameras.main.fadeIn(260, 0, 0, 0);
     this.buildWalk({
       bgKey: 'scene_jump',
@@ -9858,6 +9878,7 @@ class JumpScene extends WalkScene {
 
   // He stops. Something in the car is hissing, and then it isn't a car.
   _twingoGo() {
+    firstCinematic('twingo');
     this._twState = 'building';
     this._holdInput = true;
     this._inConversation = true;          // no R, no ESC mid-blast
@@ -10417,6 +10438,7 @@ class BridgeScene extends WalkScene {
   constructor() { super('BridgeScene'); }
 
   create() {
+    const bridgeGone = !!(this.sys.settings.data || {}).resumed || cinematicSeen('bridge-collapse');
     this.cameras.main.fadeIn(260, 0, 0, 0);
     const H = 720;
 
@@ -10502,10 +10524,13 @@ class BridgeScene extends WalkScene {
       // The painting has already drawn what is down there — a black slab over
       // the top of it would hide the one thing worth seeing.
       gapShade: false,
-      beats: [
-        { at: 0, say: [['PLAYER', 'Bridge is still standing. Come on.']],
-                 tip: 'CROSS THE BRIDGE' }
-      ],
+      // Gone already (a fall, or the collapse seen this game): no talk of it
+      // standing, and the tip is the double jump.
+      beats: bridgeGone
+        ? [{ at: 0, say: [['PLAYER', 'Looks like we have to jump it.']],
+                    tip: 'JUMP, THEN JUMP AGAIN IN MID-AIR TO CLEAR THE GAP' }]
+        : [{ at: 0, say: [['PLAYER', 'Bridge is still standing. Come on.']],
+                    tip: 'CROSS THE BRIDGE' }],
       exits: [
         { xFrac: 0.985, w: 90, target: 'DashScene', auto: true,
           silent: true, fadeMs: 190 }
@@ -10537,11 +10562,11 @@ class BridgeScene extends WalkScene {
       this.bgImage.setTint((c << 16) | (c << 8) | c);
       this._bgTone = BRIDGE_TONE;
     }
-    // Coming back from a fall, the span is already gone and stays gone.
-    if ((this.sys.settings.data || {}).resumed) {
+    // Coming back from a fall, or any time after the collapse has been seen
+    // this game, the span is already gone and stays gone.
+    if (bridgeGone) {
       this.bridgeState = 'gone';
-      this.span = null; this.halves = null; this._holdInput = false;
-      this._showTip('JUMP, THEN JUMP AGAIN IN MID-AIR TO CLEAR THE GAP');
+      this.span = null; this.halves = null; this.spanBody = null; this._holdInput = false;
     } else {
       this._armSpan();
     }
@@ -10781,6 +10806,7 @@ class BridgeScene extends WalkScene {
 
   _collapse() {
     if (this.bridgeState !== 'intact') return;     // only ever once
+    firstCinematic('bridge-collapse');
     this.bridgeState = 'shaking';
     Sfx.ensure();
     const sx = this.span.x;
@@ -11334,6 +11360,7 @@ class NightStreetScene extends WalkScene {
   _nightCleared() {
     this._nightDone = true;
     once('night-cleared');
+    persistSeen('night-cleared');
     this.cfg.keep = null;
     if (this._hordeTimer) { this._hordeTimer.remove(); this._hordeTimer = null; }
     stopTrack(3000);
@@ -12143,7 +12170,7 @@ StoreScene.prototype.goExit = function (ex) {
   this.cameras.main.once('camerafadeoutcomplete', () => {
     // First time only. Walking back and forth through a door should not make
     // them rediscover torches.
-    if (once('storage-torches')) {
+    if (once('storage-torches') & firstCinematic('storage-torches')) {
       this.scene.start('IntroDialogueScene', {
         lines: STORAGE_DARK_LINES, sleeper: null, keepMusic: true,
         hold: 500, fadeMs: 420, bgKey: 'scene_storage1dark',
@@ -12749,7 +12776,12 @@ class StorageTwoScene extends WalkScene {
   //            there, the brothers see what this is, and it comes for them
   //   after  — it is dead: the lit room, empty, and the way back out
   create() {
-    const d = this.sys.settings.data || {};
+    let d = this.sys.settings.data || {};
+    // The meeting in the dark (switch, lights, the thing getting up, the
+    // stills) is once a game. Seen, the room comes up lit with the fight on.
+    if (!GameState.seen['fight1-won'] && !d.fight && cinematicSeen('storage-meet')) {
+      d = this.sys.settings.data = Object.assign({}, d, { fight: true, retry: true, spawnXFrac: STORAGE_FIGHT_X });
+    }
     this._mode = GameState.seen['fight1-won'] ? 'after' : (d.fight ? 'fight' : 'dark');
     const lit = this._mode !== 'dark';
     // Scenes are reused, so everything the dark visit hung on `this` has to be
@@ -12798,7 +12830,11 @@ class StorageTwoScene extends WalkScene {
       // Lights on, switch thrown.
       this.roomLit = true;
       if (this.swOn) { this.swOff.setAlpha(0); this.swOn.setAlpha(1); }
-      if (this._mode === 'fight') this._setUpFight(d);
+      // Its standing up in the goo is once a game too; after that it just comes.
+      if (this._mode === 'fight') {
+        if (!d.retry && firstCinematic('storage-fight')) this._setUpFight(d);
+        else this._fightNoIntro();
+      }
       else this.time.delayedCall(400, () => this._showTip('BACK THE WAY YOU CAME  —  LEFT'));
       return;
     }
@@ -12902,6 +12938,24 @@ class StorageTwoScene extends WalkScene {
     this.time.delayedCall(d.retry ? 1400 : 3200, () => { this._fightReady = true; });
   }
 
+  // The fight without its introduction: the music, and it comes out of the
+  // goo at him, the camera following him the whole time.
+  _fightNoIntro() {
+    playTrack('fightMusic');
+    this._fightPending = false;
+    this._holdInput = false;
+    this._inConversation = false;
+    this.time.delayedCall(500, () => {
+      if (this._dead || this._transitioning || !this.player) return;
+      this.onEnemyKilled = (kx, dir) => this._fightWon(kx, dir);
+      const z = this.spawnAlien({ x: this.fx(STORAGE_GOO_X), speed: 0.45, rage: 0.66, calmLunge: true, lungeDelay: 1500 });
+      if (z) { z.setAlpha(0); this.tweens.add({ targets: z, alpha: 1, duration: 400 }); }
+      Sfx.ensure(); Sfx.roar();
+      this.cameras.main.shake(260, 0.004);
+      this._showTip('F  OR  RIGHT-CLICK  —  CUT IT DOWN');
+    });
+  }
+
   _fightStarts() {
     this._fightPending = false;
     this._holdInput = false;
@@ -12977,7 +13031,13 @@ class StorageTwoScene extends WalkScene {
     if (!im || this._scarfIt) return;
     this._scarfIt = this.addInspect({
       x: im.x, y: im.y - im.displayHeight * 0.5, floorY: this.groundY, label: 'E  —  LOOK',
-      onUse(it) { this._retireInspect(it); this._lookAtScarf(); }
+      // the close look is once a game; after that, just what they say
+      onUse(it) {
+        this._retireInspect(it);
+        if (firstCinematic('storage-scarf')) this._lookAtScarf();
+        else this._say([['PLAYER', "The owner's scarf. The one from the portrait."],
+                        ['PLAYER', 'So that thing was him... Poor bastard.']]);
+      }
     });
   }
 
@@ -13123,6 +13183,7 @@ class StorageTwoScene extends WalkScene {
   // Lights on, and then the room is allowed to land before anything moves.
   _stageTheThing() {
     this._staged = true;
+    firstCinematic('storage-meet');
     // From the first moment, not from when the panel appears: ESC in the gap
     // before it would otherwise leave for the menu with the launch still
     // pending, and the panel would come up over the menu.
@@ -13232,6 +13293,12 @@ class EnemyCinematicScene extends Phaser.Scene {
   constructor() { super('EnemyCinematicScene'); }
 
   create() {
+    // Once a game: seen, straight into the fight without them.
+    if (!firstCinematic('storage-stills')) {
+      playTrack('fightMusic');
+      this.scene.start('StorageTwoScene', { fight: true, retry: true, spawnXFrac: STORAGE_FIGHT_X, cast: GameState.castId });
+      return;
+    }
     const W = 1280, H = 720;
     this.cameras.main.setBackgroundColor('#000000');
     this.cameras.main.fadeIn(500, 0, 0, 0);
