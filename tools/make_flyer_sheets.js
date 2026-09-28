@@ -1,17 +1,20 @@
 #!/usr/bin/env node
-// The flying creature of the night street, cut out of its three gifs onto grid
+// The flying creature of the night street, cut out of its gifs onto grid
 // sheets the game slices by frame index, plus its spike shrunk to game size.
 //
-//   front view 2nd creature i.gif  8 frames: hovering, wings beating, facing us
-//   spit spike .gif               16 frames: side on, facing east; the spray of
-//                                  spikes leaves its mouth from frame 6
-//   death of enemy 2.gif          25 frames: it melts to red (0-16), then its
-//                                  head drops and splashes (17-24). Only the
-//                                  melt is kept: the game dissolves the body
-//                                  after it and leaves a pool of its own.
+//   better fly and spit.gif  16 frames, side on, facing east: it glides with
+//                            a slow bob (0-4), a red charge fills its mouth
+//                            (5-8), the spikes burst out of it (9) and the
+//                            spray spreads (10-15). Flying and spitting are
+//                            one clip, so they are one sheet with one box:
+//                            the body never jumps between the two.
+//   death of enemy 2.gif     25 frames: it melts to red (0-16), then its
+//                            head drops and splashes (17-24). Only the melt
+//                            is kept: the game dissolves the body after it
+//                            and leaves a pool of its own.
 //
 // Every clip keeps ONE box across its frames, so the body never slides inside
-// its cell, and all three share the gifs' own scale (they are drawn to it).
+// its cell, and both share the gifs' own scale (they are drawn to it).
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -21,9 +24,8 @@ const { PNG } = L;
 const ROOT = path.resolve(__dirname, '..');
 const A = f => path.join(ROOT, 'public/assets', f);
 const CLIPS = [
-  { name: 'hover', src: 'flyer_hover.gif', out: 'flyer_hover_sheet.png', frames: null, cols: 8 },
-  { name: 'spit',  src: 'flyer_spit.gif',  out: 'flyer_spit_sheet.png',  frames: null, cols: 8 },
-  { name: 'death', src: 'flyer_death.gif', out: 'flyer_death_sheet.png', frames: [0, 16], cols: 9 },
+  { name: 'fly',   src: 'flyer_flyspit.gif', out: 'flyer_flyspit_sheet.png', frames: null, cols: 8 },
+  { name: 'death', src: 'flyer_death.gif',   out: 'flyer_death_sheet.png',   frames: [0, 16], cols: 9 },
 ];
 const PAD = 2;
 
@@ -55,22 +57,20 @@ for (const c of CLIPS) {
               `${Math.round(fs.statSync(A(c.out)).size / 1024)}KB`);
 }
 
-// Where things are, in each sheet cell's own pixels.
-// The spit: the spray is what appears between frame 5 and frame 7.
+// Where things are, in each sheet cell's own pixels. The body is the skull
+// between the wings, read off a grid crop of frame 0 at gif (128, 125); the
+// mouth is where the spray starts in frame 8, the first frame it is out.
 {
-  const m = meta.spit, a = m.frames[5], b = m.frames[7];
-  let x0 = 1e9, x1 = -1, y0 = 1e9, y1 = -1;
-  for (let i = 0; i < a.length; i += 4) if (b[i + 3] > 30 && a[i + 3] <= 30) {
-    const x = (i / 4) % 256, y = Math.floor(i / 4 / 256);
-    x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+  const m = meta.fly, f = m.frames[8];
+  let x0 = 1e9, y0 = 1e9;
+  for (let i = 0; i < f.length; i += 4) {
+    if (f[i + 3] > 100 && f[i] > 170 && f[i + 1] < 110 && f[i + 2] < 80) {
+      const x = (i / 4) % 256, y = Math.floor(i / 4 / 256);
+      if (x < x0) { x0 = x; y0 = y; }
+    }
   }
-  console.log(`spit mouth (cell px): x ${x0 - m.ox}, y ${Math.round((y0 + y1) / 2) - m.oy}  (spray box x${x0}-${x1} y${y0}-${y1})`);
-  const bx = L.bbox(m.frames[0], 256, 256);
-  console.log(`spit body centre (cell px): x ${Math.round((bx.minX + bx.maxX) / 2) - m.ox}, y ${Math.round((bx.minY + bx.maxY) / 2) - m.oy}`);
-}
-{
-  const m = meta.hover, bx = L.bbox(m.frames[0], 256, 256);
-  console.log(`hover body centre (cell px): x ${Math.round((bx.minX + bx.maxX) / 2) - m.ox}, y ${Math.round((bx.minY + bx.maxY) / 2) - m.oy}, wingspan ${bx.maxX - bx.minX + 1}`);
+  console.log(`fly body centre (cell px): x ${128 - m.ox}, y ${125 - m.oy}`);
+  console.log(`fly mouth (cell px): x ${x0 - m.ox}, y ${y0 - m.oy}`);
 }
 {
   const m = meta.death, bx = L.bbox(m.frames[0], 256, 256);

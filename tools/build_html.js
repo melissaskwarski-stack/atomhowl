@@ -160,8 +160,7 @@ const SCENE_SRC = {
   nightstreet:     ['public/assets/night_street.png'],
   nightstreetdark: ['public/assets/night_street_dark.png'],
   // the flying creature (tools/make_flyer_sheets.js) and the spike it spits
-  flyerhover:   ['public/assets/flyer_hover_sheet.png'],
-  flyerspit:    ['public/assets/flyer_spit_sheet.png'],
+  flyerfly:     ['public/assets/flyer_flyspit_sheet.png'],
   flyerdeath:   ['public/assets/flyer_death_sheet.png'],
   flyerspike:   ['public/assets/flyer_spike.png'],
   twingocar:    ['public/assets/twingo_car.png'],

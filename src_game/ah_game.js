@@ -7547,10 +7547,11 @@ Object.assign(WalkScene.prototype, WalkCombat);
 // ================================================================== //
 //  THE FLYER — the second creature                                    //
 //                                                                     //
-//  It hangs over the street on its wings (front view 2nd creature i), //
-//  turns side on and spits a fan of spikes at whoever is nearest      //
-//  (spit spike). A volley that lands takes three hearts, so one is a  //
-//  warning and the second is the end. The answer is the blade: swing  //
+//  It glides over the street side on, turned to whoever it is after,  //
+//  and spits a fan of spikes at him (better fly and spit: the charge  //
+//  glows in its mouth, then the burst). A volley that lands takes     //
+//  three hearts, so one is a warning and the second is the end. The   //
+//  answer is the blade: swing                                         //
 //  into the spikes as they come and they go back at it, and a spike   //
 //  of its own brings it down out of the air. On the ground it is      //
 //  stunned and open to the sword until it gets up again. Killed, it   //
@@ -7559,10 +7560,12 @@ Object.assign(WalkScene.prototype, WalkCombat);
 // ================================================================== //
 // Sheets cut by tools/make_flyer_sheets.js. cx/cy is the body's centre in a
 // cell; mouth is where the spikes leave it (side on, facing east); foot is the
-// row it stands on in the melt.
-const FLYER_HOVER_SHEET = { key: 'scene_flyerhover', n: 8,  cols: 8, cw: 252, ch: 117, cx: 125, cy: 55 };
-const FLYER_SPIT_SHEET  = { key: 'scene_flyerspit',  n: 16, cols: 8, cw: 232, ch: 190, cx: 95,  cy: 82,
-                            mouth: [142, 110], release: 6 };
+// row it stands on in the melt. Flying and spitting are one clip on one sheet:
+// it glides on 0-4 (played there and back, a slow bob), and the spit runs from
+// 4 — the charge glowing in its mouth — to the spray spreading at 15, the
+// spikes leaving on frame 9.
+const FLYER_SHEET = { key: 'scene_flyerfly', n: 16, cols: 8, cw: 225, ch: 180, cx: 112, cy: 89,
+                      mouth: [126, 92], glide: [0, 1, 2, 3, 4, 3, 2, 1], spitFrom: 4, release: 9 };
 const FLYER_DEATH_SHEET = { key: 'scene_flyerdeath', n: 17, cols: 9, cw: 95,  ch: 192, cx: 47,  foot: 162, standH: 161 };
 const FLYER_SIZE       = 1.0;     // standing, as tall as a brother; its wings twice that
 const FLYER_HP         = 9;       // three cuts once it is down, or nine rounds
@@ -7578,25 +7581,31 @@ const PARRY_MS         = 380;     // a swing sends back what arrives this soon a
 const ANTIACID_MS      = 15000;   // the anti-acid ball: this long walking through acid unburned
 
 function flyerClips(scene) {
-  const hov = sheetFrames(scene, FLYER_HOVER_SHEET, 'fh');
-  if (hov && !scene.anims.exists('flyer-hover'))
-    scene.anims.create({ key: 'flyer-hover', frames: hov, frameRate: 11, repeat: -1 });
-  const spit = sheetFrames(scene, FLYER_SPIT_SHEET, 'fs');
-  if (spit && !scene.anims.exists('flyer-spit'))
-    scene.anims.create({ key: 'flyer-spit', frames: spit, frameRate: 14, repeat: 0 });
+  const fly = sheetFrames(scene, FLYER_SHEET, 'ff');
+  if (fly && !scene.anims.exists('flyer-hover'))
+    scene.anims.create({ key: 'flyer-hover', frames: FLYER_SHEET.glide.map(i => fly[i]), frameRate: 8, repeat: -1 });
+  if (fly && !scene.anims.exists('flyer-spit'))
+    scene.anims.create({ key: 'flyer-spit', frames: fly.slice(FLYER_SHEET.spitFrom), frameRate: 13, repeat: 0 });
   const melt = sheetFrames(scene, FLYER_DEATH_SHEET, 'fd');
   if (melt && !scene.anims.exists('flyer-melt'))
     scene.anims.create({ key: 'flyer-melt', frames: melt, frameRate: 11, repeat: 0 });
-  return !!(hov && spit && melt);
+  return !!(fly && melt);
 }
 
-// The one pose-to-origin rule: hovering and spitting are held by the body's
-// centre, standing (knocked down, melting) by its feet.
+// The one pose-to-origin rule: in the air (gliding, spitting) it is held by
+// the body's centre, standing (knocked down, melting) by its feet.
 function flyerPose(f, pose) {
   f._pose = pose;
-  if (pose === 'hover') f.setOrigin(FLYER_HOVER_SHEET.cx / FLYER_HOVER_SHEET.cw, FLYER_HOVER_SHEET.cy / FLYER_HOVER_SHEET.ch);
-  else if (pose === 'spit') f.setOrigin(FLYER_SPIT_SHEET.cx / FLYER_SPIT_SHEET.cw, FLYER_SPIT_SHEET.cy / FLYER_SPIT_SHEET.ch);
+  if (pose === 'hover' || pose === 'spit') f.setOrigin(FLYER_SHEET.cx / FLYER_SHEET.cw, FLYER_SHEET.cy / FLYER_SHEET.ch);
   else f.setOrigin(FLYER_DEATH_SHEET.cx / FLYER_DEATH_SHEET.cw, (FLYER_DEATH_SHEET.foot + 1) / FLYER_DEATH_SHEET.ch);
+}
+
+// Side on, it has a way it faces: the art faces east, so west is the mirror.
+// A little dead zone overhead, so it does not flap round and round as he
+// walks about under it.
+function flyerFace(f, x, H) {
+  if (x < f.x - 0.25 * H) f.setFlipX(true);
+  else if (x > f.x + 0.25 * H) f.setFlipX(false);
 }
 
 const WalkFlyers = {
@@ -7606,7 +7615,7 @@ const WalkFlyers = {
   spawnFlyer(o) {
     if (!flyerClips(this)) return null;
     const H = this.charH, s = FLYER_SIZE * H / FLYER_DEATH_SHEET.standH;
-    const f = this.add.sprite(o.x, o.y, FLYER_HOVER_SHEET.key, 'fh0').setDepth(12).setScale(s);
+    const f = this.add.sprite(o.x, o.y, FLYER_SHEET.key, 'ff0').setDepth(12).setScale(s);
     flyerPose(f, 'hover');
     f.play('flyer-hover');
     f._s = s;
@@ -7644,12 +7653,14 @@ const WalkFlyers = {
         const tx = f._tx != null ? f._tx : this._flyerAim(f, now)[0];
         const ty = f._ty != null ? f._ty : this._flyerAim(f, now)[1];
         const dx = tx - f.x, dy = ty - f.y, d = Math.hypot(dx, dy), v = 1.7 * H * dt;
+        flyerFace(f, tx, H);
         if (d <= v) { f.setPosition(tx, ty); f._state = 'hover'; f._tx = f._ty = null; }
         else f.setPosition(f.x + dx / d * v, f.y + dy / d * v);
         return;
       }
       if (st === 'hover') {
         const [tx, ty, p] = this._flyerAim(f, now);
+        flyerFace(f, p.x, H);
         const step = (a, b, v) => Math.abs(b - a) <= v ? b : a + Math.sign(b - a) * v;
         f.setPosition(step(f.x, tx, 1.1 * H * dt), step(f.y, ty, 0.9 * H * dt));
         if (!frozen && now >= f._nextSpitAt && Math.abs(p.x - f.x) < 4.5 * H) this._flyerSpit(f, p);
@@ -7685,7 +7696,7 @@ const WalkFlyers = {
     f.play('flyer-spit');
     Sfx.ensure(); Sfx.blip(220, 0.25, 'sawtooth', 0.05, 110);
     const onFrame = (anim, frame) => {
-      if (frame.index - 1 !== FLYER_SPIT_SHEET.release) return;
+      if (frame.index - 1 !== FLYER_SHEET.release - FLYER_SHEET.spitFrom) return;
       f.off('animationupdate', onFrame);
       if (f._alive && f._state === 'spit') this._spikeVolley(f, face);
     };
@@ -7694,7 +7705,6 @@ const WalkFlyers = {
       f.off('animationupdate', onFrame);
       if (!f.active || !f._alive || f._state !== 'spit') return;
       f._state = 'hover';
-      f.setFlipX(false);
       flyerPose(f, 'hover');
       f.play('flyer-hover');
       f._nextSpitAt = this.time.now + Phaser.Math.Between(FLYER_SPIT_GAP[0], FLYER_SPIT_GAP[1]);
@@ -7702,7 +7712,7 @@ const WalkFlyers = {
   },
 
   _spikeVolley(f, face) {
-    const H = this.charH, S = FLYER_SPIT_SHEET, s = f._s;
+    const H = this.charH, S = FLYER_SHEET, s = f._s;
     const mx = f.x + face * (S.mouth[0] - S.cx) * s, my = f.y + (S.mouth[1] - S.cy) * s;
     const p = this._nearestFighter(f.x) || this.player;
     const base = Math.atan2(p.body.center.y - my, p.x - mx);
@@ -7860,9 +7870,9 @@ const WalkFlyers = {
   _flyerDown(f, dir, state) {
     f.off('animationupdate');
     f.anims.stop();
-    f.setFlipX(false);
-    // mid-spit it drops as it is; from the hover pose it keeps that
-    if (f._pose !== 'hover') { flyerPose(f, 'hover'); f.setTexture(FLYER_HOVER_SHEET.key, 'fh0'); }
+    // it falls in its gliding pose, still facing the way it was, and lands so
+    flyerPose(f, 'hover');
+    f.setTexture(FLYER_SHEET.key, 'ff0');
     f._state = state;
     f._vy = -0.6 * this.charH;
     f._spin = dir * 5;
