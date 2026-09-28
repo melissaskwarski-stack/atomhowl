@@ -156,6 +156,14 @@ const SCENE_SRC = {
   // The burnt street's Twingo, in its three states: burning, blowing up, and
   // the wreck left behind. Each drawn at its own scale and position, so the
   // game locks them together on the wheels (TWINGO_ART in ah_game.js).
+  // the night street: the tienda after the fight, lit and with the lights out
+  nightstreet:     ['public/assets/night_street.png'],
+  nightstreetdark: ['public/assets/night_street_dark.png'],
+  // the flying creature (tools/make_flyer_sheets.js) and the spike it spits
+  flyerhover:   ['public/assets/flyer_hover_sheet.png'],
+  flyerspit:    ['public/assets/flyer_spit_sheet.png'],
+  flyerdeath:   ['public/assets/flyer_death_sheet.png'],
+  flyerspike:   ['public/assets/flyer_spike.png'],
   twingocar:    ['public/assets/twingo_car.png'],
   twingoboom:   ['public/assets/twingo_boom.png'],
   twingowreck:  ['public/assets/twingo_wreck.png'],

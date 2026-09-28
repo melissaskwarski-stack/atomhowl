@@ -4375,7 +4375,9 @@ function driveWalker(scene, p, keys, onGround) {
   // the burger out and Eterwolf never played a note, in the entire game. The
   // flourish is most of the character; suppressing it everywhere was throwing
   // out the thing it was written for.
-  const allowLong = !(scene.cfg && scene.cfg.noLongIdle);
+  // No guitar and no burger with something alive coming for them.
+  const allowLong = !(scene.cfg && scene.cfg.noLongIdle) &&
+    !(scene.enemiesAlive && (scene.enemiesAlive() > 0 || (scene.flyersAlive && scene.flyersAlive() > 0)));
   if (hero && hero.longIdleOnce && p._curAnim &&
       p._curAnim.indexOf('-' + hero.longIdle) === 2 && !p.anims.isPlaying) {
     p._longIdleDone = true;
@@ -6809,9 +6811,17 @@ class WalkScene extends Phaser.Scene {
       if (p === this.player) this._swingUntil = p._swingUntil;
     }
     const dir = p._facing || 1;
+    if (this.flyers) this._parry(p, dir);
     // An enemy in reach takes it: the nearest one in front, within an arm and
-    // a blade of him, and at his height.
+    // a blade of him, and at his height. A flyer knocked down onto the street
+    // counts, if it is the nearer.
     const foe = this._foeInReach(dir, p);
+    const fl = this.flyers ? this._flyerInReach(dir, p) : null;
+    if (fl && (!foe || Math.abs(fl.x - p.x) < Math.abs(foe.x - p.x))) {
+      this.hitFlyer(fl, SWORD_DMG_WALK, dir, 'sword');
+      this.cameras.main.shake(70, 0.004);
+      return;
+    }
     if (foe) {
       this.hitEnemy(foe, SWORD_DMG_WALK, dir, true);
       this.cameras.main.shake(70, 0.004);
@@ -6938,6 +6948,13 @@ const WalkCombat = {
     this.enemies = [];
     this.bullets = [];
     this.acids = [];
+    this.flyers = [];
+    this.spikes = [];
+    this.orbs = [];
+    this._wardUntil = 0;
+    this._wardHud = null;
+    this._wardRings = [];
+    this.onFlyerKilled = null;
     this.hearts = null;
     this._combat = false;
     this._dead = false;
@@ -7337,7 +7354,7 @@ const WalkCombat = {
     if (this._dead || this._holdInput) return;
     const p = this.player, pb = p.body;
     const onFloor = pb.blocked.down || pb.touching.down;
-    const inAcid = onFloor && now >= (p._dashUntil || 0) && this.acids.some(a =>
+    const inAcid = onFloor && now >= (p._dashUntil || 0) && !this.wardActive() && this.acids.some(a =>
       now >= a.from && now < a.until &&
       Math.abs(p.x - a.x) < a.half + pb.width * 0.3 &&
       Math.abs(pb.bottom - a.y) < 0.12 * this.charH);
@@ -7432,6 +7449,15 @@ const WalkCombat = {
         this.hitEnemy(z, PISTOL_DMG, b._vx > 0 ? 1 : -1, false);
         return false;
       }
+      for (const f of (this.flyers || [])) {
+        if (!f._alive) continue;
+        let hit = false;
+        for (let k = 0; k <= 4 && !hit; k++) hit = this._flyerHit(f, lo + (hi - lo) * k / 4, b.y);
+        if (!hit) continue;
+        b.destroy();
+        this.hitFlyer(f, PISTOL_DMG, b._vx > 0 ? 1 : -1, 'bullet');
+        return false;
+      }
       return true;
     });
   },
@@ -7510,11 +7536,491 @@ const WalkCombat = {
       this._updateEnemies(now);
       this._enemyContact(now);
     }
+    if (this.flyers.length || this.spikes.length) this._updateFlyers(now, dt);
+    if (this.orbs.length || this._wardHud) this._updateOrbs(now);
     this._updateAcid(now);
     this._updateGunDrop();
   }
 };
 Object.assign(WalkScene.prototype, WalkCombat);
+
+// ================================================================== //
+//  THE FLYER — the second creature                                    //
+//                                                                     //
+//  It hangs over the street on its wings (front view 2nd creature i), //
+//  turns side on and spits a fan of spikes at whoever is nearest      //
+//  (spit spike). A volley that lands takes three hearts, so one is a  //
+//  warning and the second is the end. The answer is the blade: swing  //
+//  into the spikes as they come and they go back at it, and a spike   //
+//  of its own brings it down out of the air. On the ground it is      //
+//  stunned and open to the sword until it gets up again. Killed, it   //
+//  comes down if it is not already, melts (death of enemy 2, the melt //
+//  only), dissolves, and leaves a pool of red on the street.          //
+// ================================================================== //
+// Sheets cut by tools/make_flyer_sheets.js. cx/cy is the body's centre in a
+// cell; mouth is where the spikes leave it (side on, facing east); foot is the
+// row it stands on in the melt.
+const FLYER_HOVER_SHEET = { key: 'scene_flyerhover', n: 8,  cols: 8, cw: 252, ch: 117, cx: 125, cy: 55 };
+const FLYER_SPIT_SHEET  = { key: 'scene_flyerspit',  n: 16, cols: 8, cw: 232, ch: 190, cx: 95,  cy: 82,
+                            mouth: [142, 110], release: 6 };
+const FLYER_DEATH_SHEET = { key: 'scene_flyerdeath', n: 17, cols: 9, cw: 95,  ch: 192, cx: 47,  foot: 162, standH: 161 };
+const FLYER_SIZE       = 1.0;     // standing, as tall as a brother; its wings twice that
+const FLYER_HP         = 9;       // three cuts once it is down, or nine rounds
+const FLYER_SPIKE_DMG  = 3;       // of five hearts: one volley hurts, two kill
+const FLYER_RETURN_DMG = 4;       // its own spike, sent back by the blade
+const FLYER_STUN_MS    = 2600;    // on the ground before it gets back up
+const FLYER_SPIT_GAP   = [2600, 3900];
+const FLYER_ALT        = 2.3;     // hovers this many heights over the street
+const SPIKE_SPEED      = 3.0;     // heights a second
+const SPIKE_LEN        = 0.5;     // of a height
+const SPIKE_FAN        = [-0.15, 0, 0.15];
+const PARRY_MS         = 380;     // a swing sends back what arrives this soon after it
+const ANTIACID_MS      = 15000;   // the anti-acid ball: this long walking through acid unburned
+
+function flyerClips(scene) {
+  const hov = sheetFrames(scene, FLYER_HOVER_SHEET, 'fh');
+  if (hov && !scene.anims.exists('flyer-hover'))
+    scene.anims.create({ key: 'flyer-hover', frames: hov, frameRate: 11, repeat: -1 });
+  const spit = sheetFrames(scene, FLYER_SPIT_SHEET, 'fs');
+  if (spit && !scene.anims.exists('flyer-spit'))
+    scene.anims.create({ key: 'flyer-spit', frames: spit, frameRate: 14, repeat: 0 });
+  const melt = sheetFrames(scene, FLYER_DEATH_SHEET, 'fd');
+  if (melt && !scene.anims.exists('flyer-melt'))
+    scene.anims.create({ key: 'flyer-melt', frames: melt, frameRate: 11, repeat: 0 });
+  return !!(hov && spit && melt);
+}
+
+// The one pose-to-origin rule: hovering and spitting are held by the body's
+// centre, standing (knocked down, melting) by its feet.
+function flyerPose(f, pose) {
+  f._pose = pose;
+  if (pose === 'hover') f.setOrigin(FLYER_HOVER_SHEET.cx / FLYER_HOVER_SHEET.cw, FLYER_HOVER_SHEET.cy / FLYER_HOVER_SHEET.ch);
+  else if (pose === 'spit') f.setOrigin(FLYER_SPIT_SHEET.cx / FLYER_SPIT_SHEET.cw, FLYER_SPIT_SHEET.cy / FLYER_SPIT_SHEET.ch);
+  else f.setOrigin(FLYER_DEATH_SHEET.cx / FLYER_DEATH_SHEET.cw, (FLYER_DEATH_SHEET.foot + 1) / FLYER_DEATH_SHEET.ch);
+}
+
+const WalkFlyers = {
+  flyersAlive() { return (this.flyers || []).filter(f => f.active && f._alive).length; },
+
+  // In from `o.x, o.y` (off the top of the picture) to hang over the street.
+  spawnFlyer(o) {
+    if (!flyerClips(this)) return null;
+    const H = this.charH, s = FLYER_SIZE * H / FLYER_DEATH_SHEET.standH;
+    const f = this.add.sprite(o.x, o.y, FLYER_HOVER_SHEET.key, 'fh0').setDepth(12).setScale(s);
+    flyerPose(f, 'hover');
+    f.play('flyer-hover');
+    f._s = s;
+    f._hp = FLYER_HP;
+    f._alive = true;
+    f._state = 'enter';
+    f._side = o.side || (Math.random() < 0.5 ? -1 : 1);
+    f._sideAt = this.time.now + 5000 + Math.random() * 3000;
+    f._bob = Math.random() * Math.PI * 2;
+    f._nextSpitAt = this.time.now + (o.spitDelay || 2600);
+    f._tx = o.tx; f._ty = o.ty;
+    this.flyers.push(f);
+    this.startCombat();
+    Sfx.ensure(); Sfx.swoop(); Sfx.blip(880, 0.35, 'sawtooth', 0.04, 1320);
+    return f;
+  },
+
+  // Where it wants to be: over the street, beside whoever it is after.
+  _flyerAim(f, now) {
+    const H = this.charH, p = this._nearestFighter(f.x) || this.player;
+    if (now >= f._sideAt) { f._side = -f._side; f._sideAt = now + 5000 + Math.random() * 3000; }
+    const wb = this.physics.world.bounds;
+    const tx = Phaser.Math.Clamp(p.x + f._side * 1.3 * H, wb.x + 0.6 * H, wb.right - 0.6 * H);
+    const ty = Math.max(wb.y + 0.45 * H, this.groundY - FLYER_ALT * H) + Math.sin(now / 520 + f._bob) * 0.12 * H;
+    return [tx, ty, p];
+  },
+
+  _updateFlyers(now, dt) {
+    const H = this.charH;
+    const frozen = this._dead || this._holdInput;
+    this.flyers = this.flyers.filter(f => f.active);
+    this.flyers.forEach(f => {
+      const st = f._state;
+      if (st === 'enter') {
+        const tx = f._tx != null ? f._tx : this._flyerAim(f, now)[0];
+        const ty = f._ty != null ? f._ty : this._flyerAim(f, now)[1];
+        const dx = tx - f.x, dy = ty - f.y, d = Math.hypot(dx, dy), v = 1.7 * H * dt;
+        if (d <= v) { f.setPosition(tx, ty); f._state = 'hover'; f._tx = f._ty = null; }
+        else f.setPosition(f.x + dx / d * v, f.y + dy / d * v);
+        return;
+      }
+      if (st === 'hover') {
+        const [tx, ty, p] = this._flyerAim(f, now);
+        const step = (a, b, v) => Math.abs(b - a) <= v ? b : a + Math.sign(b - a) * v;
+        f.setPosition(step(f.x, tx, 1.1 * H * dt), step(f.y, ty, 0.9 * H * dt));
+        if (!frozen && now >= f._nextSpitAt && Math.abs(p.x - f.x) < 4.5 * H) this._flyerSpit(f, p);
+        return;
+      }
+      if (st === 'fall' || st === 'dying') {
+        f._vy = (f._vy || 0) + this.physics.world.gravity.y * 1.2 * dt;
+        f.y += f._vy * dt;
+        f.rotation += (f._spin || 0) * dt;
+        // the hover pose is held by the body's centre; it lands on its feet
+        if (f.y >= this.groundY - 0.35 * H) this._flyerLand(f, now);
+        return;
+      }
+      if (st === 'stunned') {
+        f.x += Math.sin(now / 35) * 0.4;            // a shiver
+        if (now > f._stunUntil - 700) f.setAlpha(Math.floor(now / 90) % 2 ? 0.55 : 1);
+        if (now >= f._stunUntil && !frozen) this._flyerRise(f);
+        return;
+      }
+      // 'spit' and 'melt' are driven by their clips
+    });
+    if (this.spikes.length) this._updateSpikes(now, dt);
+  },
+
+  // Side on to whoever is nearest, the clip, and the fan of spikes out of its
+  // mouth on the frame the spray leaves it.
+  _flyerSpit(f, p) {
+    f.off('animationupdate');           // one volley per spit, never two
+    f._state = 'spit';
+    const face = p.x >= f.x ? 1 : -1;
+    f.setFlipX(face < 0);
+    flyerPose(f, 'spit');
+    f.play('flyer-spit');
+    Sfx.ensure(); Sfx.blip(220, 0.25, 'sawtooth', 0.05, 110);
+    const onFrame = (anim, frame) => {
+      if (frame.index - 1 !== FLYER_SPIT_SHEET.release) return;
+      f.off('animationupdate', onFrame);
+      if (f._alive && f._state === 'spit') this._spikeVolley(f, face);
+    };
+    f.on('animationupdate', onFrame);
+    f.once('animationcomplete', () => {
+      f.off('animationupdate', onFrame);
+      if (!f.active || !f._alive || f._state !== 'spit') return;
+      f._state = 'hover';
+      f.setFlipX(false);
+      flyerPose(f, 'hover');
+      f.play('flyer-hover');
+      f._nextSpitAt = this.time.now + Phaser.Math.Between(FLYER_SPIT_GAP[0], FLYER_SPIT_GAP[1]);
+    });
+  },
+
+  _spikeVolley(f, face) {
+    const H = this.charH, S = FLYER_SPIT_SHEET, s = f._s;
+    const mx = f.x + face * (S.mouth[0] - S.cx) * s, my = f.y + (S.mouth[1] - S.cy) * s;
+    const p = this._nearestFighter(f.x) || this.player;
+    const base = Math.atan2(p.body.center.y - my, p.x - mx);
+    const k = SPIKE_LEN * H / 300;
+    SPIKE_FAN.forEach(off => {
+      const a = base + off;
+      const sp = this.add.image(mx, my, 'scene_flyerspike').setDepth(13).setOrigin(0.92, 0.5)
+        .setScale(k).setRotation(a);
+      sp._vx = Math.cos(a) * SPIKE_SPEED * H;
+      sp._vy = Math.sin(a) * SPIKE_SPEED * H;
+      sp._from = f;
+      sp._born = this.time.now;
+      this.spikes.push(sp);
+    });
+    // the spit itself: a wet burst at the mouth, flecks thrown after the spikes
+    Sfx.ensure(); Sfx.burst(0.08, 0.35, 900, 1.6); Sfx.swoop();
+    const splat = this.add.ellipse(mx, my, 0.5 * H, 0.22 * H, 0xb0c85a, 0.55).setDepth(13)
+      .setRotation(base).setBlendMode(Phaser.BlendModes.ADD);
+    this.tweens.add({ targets: splat, scaleX: 1.8, scaleY: 1.4, alpha: 0, duration: 260, onComplete: () => splat.destroy() });
+    for (let i = 0; i < 12; i++) {
+      const a = base + (Math.random() - 0.5) * 0.9, v = (0.4 + Math.random() * 0.9) * H;
+      const dot = this.add.circle(mx, my, 1.5 + Math.random() * 3, i % 3 ? 0x9fb84a : 0x6b1a14, 0.9).setDepth(13);
+      this.tweens.add({ targets: dot, x: mx + Math.cos(a) * v, y: my + Math.sin(a) * v + 0.3 * H * Math.random(),
+                        alpha: 0, duration: 380 + Math.random() * 300, ease: 'Quad.easeOut', onComplete: () => dot.destroy() });
+    }
+  },
+
+  // Spikes fly straight; sent back, they chase the one that spat them.
+  _updateSpikes(now, dt) {
+    const H = this.charH, wb = this.physics.world.bounds;
+    this.spikes = this.spikes.filter(sp => {
+      if (!sp.active) return false;
+      if (sp._stuck) return true;
+      if (sp._ret) {
+        const f = sp._to && sp._to.active && sp._to._alive ? sp._to : null;
+        if (f) {
+          const fy = f._pose === 'stand' ? f.y - 0.4 * H : f.y;
+          const a = Math.atan2(fy - sp.y, f.x - sp.x), v = SPIKE_SPEED * 1.6 * H;
+          sp._vx = Math.cos(a) * v; sp._vy = Math.sin(a) * v;
+          sp.setRotation(a);
+        }
+      }
+      const x0 = sp.x, y0 = sp.y;
+      sp.x += sp._vx * dt; sp.y += sp._vy * dt;
+      if (now - sp._born > 4000 || sp.x < wb.x - 80 || sp.x > wb.right + 80 || sp.y < wb.y - 120) { sp.destroy(); return false; }
+      // Everything is tested along the whole step, not at its end: at a slow
+      // frame a spike moves further than a brother is wide.
+      const n = Math.max(1, Math.ceil(Math.hypot(sp.x - x0, sp.y - y0) / 6));
+      const along = test => { for (let i = 1; i <= n; i++) { const t = i / n; if (test(x0 + (sp.x - x0) * t, y0 + (sp.y - y0) * t)) return true; } return false; };
+      if (sp._ret) {
+        for (const f of this.flyers) {
+          if (!f._alive || !along((x, y) => this._flyerHit(f, x, y))) continue;
+          this.hitFlyer(f, FLYER_RETURN_DMG, sp._vx >= 0 ? 1 : -1, 'return');
+          this._spikeBurst(sp.x, sp.y, 0xc0303a);
+          sp.destroy();
+          return false;
+        }
+        return true;
+      }
+      // a brother with his blade out in front of it sends it back
+      for (const p of this._fighters()) {
+        if (now > (p._parryUntil || 0)) continue;
+        const dir = p._parryDir || p._facing || 1, cy = p.body.center.y;
+        if (!along((x, y) => (x - p.x) * dir > -0.2 * H && Math.abs(x - p.x) < 0.95 * H && Math.abs(y - cy) < 0.8 * H)) continue;
+        this._deflect(sp, p);
+        return true;
+      }
+      for (const p of this._fighters()) {
+        const inv = p === this.player ? this._invulnUntil : (p._invulnUntil || 0);
+        if (now < inv || now < (p._dashUntil || 0)) continue;
+        const b = p.body, m = 0.08 * H;
+        if (!along((x, y) => x > b.left - m && x < b.right + m && y > b.top + 4 && y < b.bottom)) continue;
+        this._spikeBurst(sp.x, sp.y, 0xa01818);
+        sp.destroy();
+        this.hurtPlayer(FLYER_SPIKE_DMG, sp._from ? sp._from.x : sp.x - sp._vx, p);
+        return false;
+      }
+      // into the street, where it stands a moment before it rots away
+      if (sp.y >= this.groundY - 2 && sp._vy > 0) {
+        sp.y = this.groundY - 2;
+        sp._stuck = true;
+        this._spikeBurst(sp.x, sp.y, 0x6a5a48);
+        this.tweens.add({ targets: sp, alpha: 0, delay: 1300, duration: 500, onComplete: () => sp.destroy() });
+      }
+      return true;
+    });
+  },
+
+  _deflect(sp, p) {
+    sp._ret = true;
+    const alive = this.flyers.filter(f => f._alive);
+    sp._to = sp._from && sp._from._alive ? sp._from
+           : alive.sort((a, b) => Math.abs(a.x - sp.x) - Math.abs(b.x - sp.x))[0] || null;
+    if (!sp._to) { sp._vx = -sp._vx * 1.4; sp._vy = -Math.abs(sp._vy) * 1.4; }
+    sp.setTint(0xfff0c0);
+    Sfx.ensure(); Sfx.hit(); Sfx.burst(0.06, 0.2, 3200, 2.5);
+    this.cameras.main.shake(80, 0.004);
+    const flash = this.add.star(sp.x, sp.y, 6, 4, 16, 0xfff2cc, 1).setDepth(14).setBlendMode(Phaser.BlendModes.ADD);
+    this.tweens.add({ targets: flash, scale: 2.2, alpha: 0, duration: 220, onComplete: () => flash.destroy() });
+  },
+
+  // A swing opens the window in which it sends spikes back.
+  _parry(p, dir) {
+    p._parryUntil = this.time.now + PARRY_MS;
+    p._parryDir = dir;
+  },
+
+  _spikeBurst(x, y, col) {
+    for (let i = 0; i < 7; i++) {
+      const a = Math.random() * Math.PI * 2, r = 10 + Math.random() * 26;
+      const d = this.add.circle(x, y, 1.5 + Math.random() * 2.5, col, 0.9).setDepth(13);
+      this.tweens.add({ targets: d, x: x + Math.cos(a) * r, y: y + Math.sin(a) * r, alpha: 0,
+                        duration: 260 + Math.random() * 200, onComplete: () => d.destroy() });
+    }
+  },
+
+  // Is (x, y) inside it? In the air it is its body between the wings; on the
+  // ground, a standing figure off its feet.
+  _flyerHit(f, x, y) {
+    const H = this.charH;
+    if (f._pose === 'stand') return Math.abs(x - f.x) < 0.28 * H && y < f.y + 4 && y > f.y - 0.85 * H;
+    return Math.abs(x - f.x) < 0.3 * H && Math.abs(y - f.y) < 0.24 * H;
+  },
+
+  // The nearest one on the ground in front of him and in reach of a swing.
+  _flyerInReach(dir, p) {
+    const reach = 0.62 * this.charH;
+    let best = null, d = Infinity;
+    (this.flyers || []).forEach(f => {
+      if (!f._alive || f._pose !== 'stand') return;
+      const dx = f.x - p.x;
+      if (dx * dir < -0.12 * this.charH || Math.abs(dx) > reach) return;
+      if (Math.abs(dx) < d) { d = Math.abs(dx); best = f; }
+    });
+    return best;
+  },
+
+  hitFlyer(f, dmg, dir, how) {
+    if (!f._alive) return;
+    // Only the first of a returned fan does the damage and brings it down;
+    // the rest catch it on the way down or on the ground, and sting. What
+    // finishes it is the blade once it is down.
+    if (how === 'return' && (f._state === 'fall' || f._state === 'stunned')) dmg = 1;
+    f._hp -= dmg;
+    Sfx.ensure(); Sfx.hit();
+    f.setTintFill(0xffffff);
+    this.time.delayedCall(70, () => { if (f.active) f.clearTint(); });
+    this._spikeBurst(f.x, f._pose === 'stand' ? f.y - 0.4 * this.charH : f.y, 0xb01a1a);
+    if (f._hp <= 0) { this.killFlyer(f, dir); return; }
+    // its own spike brings it out of the air
+    if (how === 'return' && f._state !== 'stunned' && f._state !== 'fall') this._flyerDown(f, dir, 'fall');
+    else if (f._state === 'hover' || f._state === 'enter') f.x += dir * 0.08 * this.charH;
+  },
+
+  _flyerDown(f, dir, state) {
+    f.off('animationupdate');
+    f.anims.stop();
+    f.setFlipX(false);
+    // mid-spit it drops as it is; from the hover pose it keeps that
+    if (f._pose !== 'hover') { flyerPose(f, 'hover'); f.setTexture(FLYER_HOVER_SHEET.key, 'fh0'); }
+    f._state = state;
+    f._vy = -0.6 * this.charH;
+    f._spin = dir * 5;
+    f.setDepth(9);
+    Sfx.ensure(); Sfx.blip(660, 0.3, 'sawtooth', 0.05, 180);
+  },
+
+  // Down on the street: on its feet in the first frame of the melt, which is
+  // the creature standing. Stunned if it is alive; melting if not.
+  _flyerLand(f, now) {
+    f.rotation = 0;
+    f.setTexture(FLYER_DEATH_SHEET.key, 'fd0');
+    flyerPose(f, 'stand');
+    f.setPosition(f.x, this.groundY + 2);
+    this.cameras.main.shake(160, 0.006);
+    Sfx.ensure(); Sfx.land();
+    this._acidSpray(f.x, this.groundY - 4, 6, true);
+    if (f._state === 'dying') { this._flyerMelt(f); return; }
+    f._state = 'stunned';
+    f._stunUntil = now + FLYER_STUN_MS;
+  },
+
+  _flyerRise(f) {
+    f.setAlpha(1);
+    const H = this.charH;
+    f._state = 'rising';
+    flyerPose(f, 'hover');
+    f.play('flyer-hover');
+    f.setDepth(12);
+    f.y = this.groundY - 0.45 * H;
+    Sfx.ensure(); Sfx.swoop();
+    this.tweens.add({ targets: f, y: this.groundY - FLYER_ALT * H, duration: 800, ease: 'Sine.easeOut',
+      onComplete: () => { if (f._alive) { f._state = 'hover'; f._nextSpitAt = this.time.now + 1600; } } });
+  },
+
+  killFlyer(f, dir) {
+    f._alive = false;
+    this.tweens.killTweensOf(f);
+    f.setAlpha(1);
+    Sfx.ensure(); Sfx.squelch(); Sfx.roar();
+    this.cameras.main.shake(160, 0.006);
+    if (f._pose === 'stand') this._flyerMelt(f);
+    else this._flyerDown(f, dir || 1, 'dying');
+    if (this.onFlyerKilled) this.onFlyerKilled(f.x);
+  },
+
+  // The melt, and no more of the clip than that: the body runs to red, then
+  // goes — dissolving down into the pool it leaves on the street.
+  _flyerMelt(f) {
+    f._state = 'melt';
+    const H = this.charH, x = f.x, y = this.groundY + 2;
+    const pool = this.add.graphics().setDepth(8).setPosition(x, y - 2).setScale(0.05, 0.05);
+    const w = 0.95 * H, h = 0.13 * H;
+    pool.fillStyle(0x3a0406, 0.95); pool.fillEllipse(0, 0, w, h);
+    pool.fillStyle(0x7a0b0b, 0.95); pool.fillEllipse(-0.03 * H, -0.006 * H, w * 0.82, h * 0.72);
+    pool.fillStyle(0xb3161a, 0.9);  pool.fillEllipse(-0.06 * H, -0.012 * H, w * 0.5, h * 0.42);
+    pool.fillStyle(0xff6a5a, 0.35); pool.fillEllipse(-0.14 * H, -0.02 * H, w * 0.18, h * 0.16);
+    f.play('flyer-melt');
+    this.time.delayedCall(420, () => this.tweens.add({ targets: pool, scaleX: 1, scaleY: 1, duration: 1100, ease: 'Quad.easeOut' }));
+    f.once('animationcomplete', () => {
+      if (!f.active) return;
+      Sfx.ensure(); Sfx.sizzle();
+      this._acidSpray(x, y - 0.3 * H, 6);
+      this.tweens.add({ targets: f, alpha: 0, scaleY: f._s * 0.35, duration: 700, ease: 'Quad.easeIn',
+                        onComplete: () => f.destroy() });
+    });
+  },
+
+  // ---- the anti-acid ball -----------------------------------------------
+  // It drops out of what is left of one of them. Pick it up and for a while
+  // the acid they leave cannot burn either brother.
+  dropAntiAcid(x) {
+    const H = this.charH;
+    if (!this.textures.exists('antiacid_orb')) {
+      const g = this.make.graphics({ x: 0, y: 0, add: false });
+      [[32, 0x0f3a2a, 1], [28, 0x1f7a52, 1], [24, 0x3fcf8a, 1], [17, 0x9dffd0, 1], [9, 0xeafff4, 1]]
+        .forEach(([r, c, a]) => { g.fillStyle(c, a); g.fillCircle(32, 32, r); });
+      g.fillStyle(0xffffff, 0.8); g.fillCircle(24, 22, 5);
+      g.generateTexture('antiacid_orb', 64, 64);
+      g.destroy();
+    }
+    x = Phaser.Math.Clamp(x, 60, this.worldW - 60);
+    const y = this.groundY - 0.2 * H, k = 0.2 * H / 64;
+    const glow = this.add.image(x, y, 'antiacid_orb').setDepth(10).setScale(k * 2.2).setAlpha(0.35)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    const orb = this.add.image(x, y - 0.5 * H, 'antiacid_orb').setDepth(11).setScale(k);
+    const label = this.add.text(x, y - 0.28 * H, 'ANTI-ACID', { fontFamily: F_UI, fontSize: '13px', fontStyle: '700',
+      color: '#9dffd0', stroke: '#06140d', strokeThickness: 4 }).setOrigin(0.5, 1).setDepth(11).setAlpha(0);
+    this.tweens.add({ targets: orb, y, duration: 520, ease: 'Bounce.easeOut' });
+    this.tweens.add({ targets: label, alpha: 1, delay: 400, duration: 300 });
+    this.tweens.add({ targets: [orb], y: y - 0.06 * H, duration: 700, delay: 600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    this.tweens.add({ targets: glow, scale: k * 2.8, alpha: 0.15, duration: 700, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    Sfx.ensure(); Sfx.blip(990, 0.3, 'sine', 0.05, 1480);
+    this.orbs.push({ orb, glow, label, x, born: this.time.now });
+  },
+
+  _updateOrbs(now) {
+    const H = this.charH;
+    this.orbs = this.orbs.filter(o => {
+      if (now - o.born < 500) return true;
+      const p = this._fighters().find(q => Math.abs(q.x - o.x) < 0.35 * H &&
+                                           Math.abs(q.body.bottom - this.groundY) < 0.35 * H);
+      if (!p) return true;
+      this.tweens.killTweensOf([o.orb, o.glow, o.label]);
+      [o.orb, o.glow, o.label].forEach(g => g.destroy());
+      this._reach(p, o.x);
+      this._wardOn(now);
+      return false;
+    });
+    this._updateWard(now);
+  },
+
+  _wardOn(now) {
+    this._wardUntil = now + ANTIACID_MS;
+    Sfx.ensure(); Sfx.select(); Sfx.mend();
+    this.cameras.main.flash(260, 120, 255, 190);
+    if (!this._wardHud) {
+      // beside the hearts: the row under them is the cast switch
+      const t = this.add.text(190, 30, 'ANTI-ACID', { fontFamily: F_UI, fontSize: '12px', fontStyle: '700',
+        color: '#9dffd0', stroke: '#06140d', strokeThickness: 3 }).setOrigin(0, 0.5).setScrollFactor(0).setDepth(60);
+      const bg = this.add.rectangle(272, 30, 110, 7, 0x06140d, 0.85).setOrigin(0, 0.5).setScrollFactor(0).setDepth(60);
+      const bar = this.add.rectangle(272, 30, 110, 7, 0x3fcf8a, 1).setOrigin(0, 0.5).setScrollFactor(0).setDepth(61);
+      this._wardHud = [t, bg, bar];
+    }
+    this._wardRings = this._wardRings || [];
+    this._fighters().forEach(p => {
+      if (this._wardRings.some(r => r._p === p)) return;
+      const r = this.add.ellipse(p.x, p.y, 0.7 * this.charH, 1.1 * this.charH).setDepth(11)
+        .setStrokeStyle(3, 0x6dffb8, 0.8).setBlendMode(Phaser.BlendModes.ADD);
+      r._p = p;
+      this._wardRings.push(r);
+    });
+    this._showTip('ANTI-ACID — THE ACID CANNOT BURN YOU FOR ' + Math.round(ANTIACID_MS / 1000) + ' SECONDS');
+  },
+
+  _updateWard(now) {
+    if (!this._wardHud) return;
+    const left = (this._wardUntil || 0) - now;
+    if (left <= 0) {
+      this._wardHud.forEach(o => o.destroy()); this._wardHud = null;
+      (this._wardRings || []).forEach(r => r.destroy()); this._wardRings = [];
+      Sfx.ensure(); Sfx.blip(520, 0.25, 'sine', 0.04, 260);
+      return;
+    }
+    const blink = left < 3000 && Math.floor(now / 140) % 2 === 0;
+    this._wardHud[2].width = 110 * left / ANTIACID_MS;
+    this._wardHud.forEach(o => o.setAlpha(blink ? 0.35 : 1));
+    this._wardRings.forEach(r => {
+      const p = r._p;
+      if (!p.active) { r.setVisible(false); return; }
+      r.setVisible(!p._down).setPosition(p.x, p.body.center.y);
+      r.setAlpha((blink ? 0.3 : 0.75) + Math.sin(now / 120) * 0.15);
+    });
+  },
+
+  wardActive() { return this.time.now < (this._wardUntil || 0); }
+};
+Object.assign(WalkScene.prototype, WalkFlyers);
 
 // ================================================================== //
 //  CO-OP                                                              //
@@ -10453,6 +10959,255 @@ class ShopStreetScene extends WalkScene {
 }
 
 // ================================================================== //
+//  THE TIENDA AT NIGHT                                                //
+//                                                                     //
+//  Out of the shop after the fight in it, and it is dark: the same    //
+//  street, night time tienda.png, its lamps on a bad line — the       //
+//  unlit painting laid over it and flicked in and out. One of them    //
+//  stands up on the high ledge and screams; the camera goes to it,    //
+//  and something answers from the sky. Then the whole street in the   //
+//  picture and the horde coming down off that ledge — only that side  //
+//  — with two of the flyers over it. Two of the horde leave an        //
+//  anti-acid ball behind. All of it down is the end of the chapter.   //
+// ================================================================== //
+// Measured off night time tienda.png on grid crops (fractions of it):
+//   the street's surface  0.72-0.75, walked at 0.738
+//   the high ledge        top 0.330, x 0-0.356 (the building on the left)
+//   the middle platform   top 0.526, x 0.308-0.477
+//   the shop's doorway    x 0.838-0.919, y 0.539-0.72; 0.18 of the picture,
+//                         a door a shade over two metres: 90 px/m at 1.6x
+const NIGHT_ZOOM   = 1.6;
+const NIGHT_PXM    = 90;
+const NIGHT_LEDGE  = { x0: 0.000, x1: 0.356, y: 0.330 };
+const NIGHT_DOOR_X = 0.878;
+const NIGHT_HORDE  = 14;        // off the ledge in all, the one that screams included
+const NIGHT_ALIVE  = 4;         // at most this many on the street at once
+const NIGHT_FLYERS = 2;
+const NIGHT_ORB_AT = [3, 9];    // the kills that leave an anti-acid ball
+
+class NightStreetScene extends WalkScene {
+  constructor() { super('NightStreetScene'); }
+
+  create() {
+    this._cardUp = false;
+    this._leavingCard = false;
+    this._stander = null;
+    this._hordeTimer = null;
+    this._nightOn = false;
+    const d = this.sys.settings.data || {};
+    const cleared = !!GameState.seen['night-cleared'];
+    this.cameras.main.fadeIn(d.retry ? 300 : 700, 0, 0, 0);
+    this.buildWalk({
+      bgKey: 'scene_nightstreet',
+      worldW: 'auto', worldH: Math.round(720 * NIGHT_ZOOM), bgZoom: NIGHT_ZOOM,
+      groundFrac: 0.738, startOnFloor: true, startXFrac: NIGHT_DOOR_X,
+      pxPerM: NIGHT_PXM,
+      title: 'THE TIENDA — NIGHT',
+      castSwitch: true, canReset: true,
+      doubleJump: true, dash: true,
+      // Going down in it starts the fight again at the shop door, without
+      // the scream and the flyer's entrance a second time.
+      keep: cleared ? null : { spawnXFrac: NIGHT_DOOR_X, retry: true },
+      ledges: [NIGHT_LEDGE, { x0: 0.308, x1: 0.477, y: 0.526 }],
+      beats: [],
+      exits: [],
+      drawFallback(WW) {
+        const g = this.add.graphics().setDepth(-20);
+        g.fillStyle(0x080a14, 1); g.fillRect(0, 0, WW, 1152);
+        g.fillStyle(0x1c1712, 1); g.fillRect(0, 850, WW, 302);
+      }
+    });
+    const bg = this.bgGeom;
+    this.fx = f => bg.x + f * bg.w;
+    this.fy = f => bg.y + f * bg.h;
+    this._buildFlicker();
+    this._nightDone = cleared;
+    if (cleared) { this.time.delayedCall(1400, () => this._chapterCard()); return; }
+    this._spawned = 0;
+    this._kills = 0;
+    this._flyersSent = 0;
+    this.onEnemyKilled = x => this._nightKill(x);
+    this.onFlyerKilled = () => this._nightCheck();
+    if (d.retry) this.time.delayedCall(500, () => this._nightFight(true));
+    else {
+      this.time.delayedCall(900, () => this._say([['PLAYER', 'Night already. How long were we in there?']]));
+      this.time.delayedCall(3300, () => this._nightIntro());
+    }
+  }
+
+  update(time, delta) {
+    super.update(time, delta);
+    if (this._darkBg && this.time.now >= this._flickerAt) this._flicker(false);
+  }
+
+  _chapterCard() { return ShopStreetScene.prototype._chapterCard.call(this); }
+
+  // ---- the lights ------------------------------------------------------
+  // The unlit painting over the lit one, and its alpha is the fault on the
+  // line: a stutter, now and then a moment out, and back.
+  _buildFlicker() {
+    const bg = this.bgImage;
+    this._darkBg = null;
+    if (!bg || !this.textures.exists('scene_nightstreetdark')) return;
+    this._darkBg = this.add.image(bg.x, bg.y, 'scene_nightstreetdark').setOrigin(0, 0)
+      .setScale(bg.scaleX, bg.scaleY).setDepth(-19.5).setAlpha(0);
+    this._flickerAt = this.time.now + 1800;
+  }
+
+  // `hard` is the scream: they go out, properly, and stutter back.
+  _flicker(hard) {
+    const D = this._darkBg;
+    if (!D) return;
+    const r = Math.random();
+    const seq = hard ? [[1, 70], [0, 50], [1, 60], [0, 40], [1, 1200], [0.5, 60], [1, 140], [0, 0]]
+              : r < 0.6  ? [[1, 50], [0, 90], [1, 40], [0, 0]]
+              : r < 0.85 ? [[1, 80], [0, 60], [1, 500 + Math.random() * 700], [0.4, 50], [1, 70], [0, 0]]
+              :            [[0.6, 120], [0, 80], [0.8, 60], [0, 0]];
+    let t = 0;
+    seq.forEach(([a, ms]) => {
+      this.time.delayedCall(t, () => {
+        if (!D.active) return;
+        if (a >= 0.8 && D.alpha < 0.5) { Sfx.ensure(); Sfx.burst(0.02, 0.05, 4800, 3); }
+        D.setAlpha(a);
+      });
+      t += ms;
+    });
+    this._flickerAt = this.time.now + t + 1800 + Math.random() * 4200;
+  }
+
+  // ---- the scream --------------------------------------------------------
+  // Bars in, the camera up to the ledge and in close: it steps out of the
+  // dark, turns to them and opens its claws, and screams — and the lights go.
+  // Something answers from the sky over it, and the camera goes with that as
+  // it comes over the street. Then the whole street, and the fight.
+  _nightIntro() {
+    if (this._dead || this._transitioning) return;
+    const cam = this.cameras.main, H = this.alienH(), S = ALIEN_FACE_SHEET;
+    this._holdInput = true;
+    this._calmIdle = true;
+    this._invulnUntil = Infinity;
+    cam.stopFollow();
+    const bars = [0, 1].map(i => this.add.rectangle(640, i ? 720 : 0, 1280, 120, 0x000000, 1)
+      .setOrigin(0.5, i ? 0 : 1).setScrollFactor(0).setDepth(92));
+    this.tweens.add({ targets: bars[0], y: 60, duration: 420, ease: 'Sine.easeOut' });
+    this.tweens.add({ targets: bars[1], y: 720 - 60, duration: 420, ease: 'Sine.easeOut' });
+    const lx = this.fx(0.2), ly = this.fy(NIGHT_LEDGE.y);
+    const st = this.anims.exists('alien-face')
+      ? this.add.sprite(lx, ly + 2, S.key, 'ae0').setDepth(9)
+          .setOrigin(S.cx / S.cw, (S.foot + 1) / S.ch).setScale(H / S.standH).setAlpha(0)
+      : null;
+    this._stander = st;
+    cam.pan(lx, ly - 0.35 * H, 900, 'Sine.easeInOut', true);
+    cam.zoomTo(1.35, 900, 'Sine.easeInOut', true);
+    const at = (ms, fn) => this.time.delayedCall(ms, () => { if (!this._dead && this.scene.isActive()) fn(); });
+    at(500, () => { if (st) this.tweens.add({ targets: st, alpha: 1, duration: 500 }); });
+    at(1000, () => { if (st) st.play('alien-face'); });
+    at(1700, () => { Sfx.ensure(); Sfx.roar(); Sfx.roar(); cam.shake(700, 0.008); this._flicker(true); });
+    at(3000, () => {
+      const f = this._sendFlyer(-1, { tx: this.fx(0.55), ty: this.groundY - FLYER_ALT * this.charH });
+      if (f) cam.startFollow(f, false, 0.07, 0.07);
+      cam.zoomTo(1, 1000, 'Sine.easeInOut', true);
+    });
+    at(5400, () => {
+      StoreScene.prototype._hordeView.call(this, 1300);
+      this.tweens.add({ targets: bars[0], y: 0, duration: 420, ease: 'Sine.easeIn' });
+      this.tweens.add({ targets: bars[1], y: 720, duration: 420, ease: 'Sine.easeIn',
+                        onComplete: () => bars.forEach(b => b.destroy()) });
+    });
+    at(6500, () => this._nightFight(false));
+  }
+
+  _nightFight(retry) {
+    if (this._nightOn || this._dead) return;
+    this._nightOn = true;
+    this._holdInput = false;
+    this._calmIdle = false;
+    this._invulnUntil = this.time.now + 400;
+    playTrack('fightMusic');
+    this.startCombat();
+    if (retry) {
+      StoreScene.prototype._hordeView.call(this, 900);
+      this.time.delayedCall(250, () => { Sfx.ensure(); Sfx.roar(); this._flicker(true); });
+      this.time.delayedCall(800, () => this._sendFlyer(-1));
+    }
+    // the one that screamed comes first, straight off the edge
+    this._ledgeLeap(this._stander ? this._stander.x : this.fx(0.2), true);
+    this._hordeTimer = this.time.addEvent({ delay: 1700, loop: true, callback: () => this._ledgeSpawn() });
+    this._say([['PLAYER', 'Off the ledge — here they come!']]);
+    this._showTip('SWING INTO THE SPIKES TO SEND THEM BACK — ITS OWN SPIKE BRINGS IT DOWN');
+  }
+
+  // In from off the top of the picture, on whichever side.
+  _sendFlyer(side, aim) {
+    if (this._flyersSent >= NIGHT_FLYERS || this._nightDone) return null;
+    this._flyersSent++;
+    return this.spawnFlyer(Object.assign({ x: side < 0 ? this.fx(-0.05) : this.fx(1.05), y: this.fy(0.02),
+                                           side: -side, spitDelay: 3200 }, aim || {}));
+  }
+
+  // One off the ledge: stood on its edge, it leaps out toward the brothers
+  // and comes down onto the street on its jump clip.
+  _ledgeLeap(x, first) {
+    if (this._dead || this._transitioning) return null;
+    const H = this.alienH(), s = H / 244;
+    const E = window.ENEMIES && window.ENEMIES.alien;
+    const body = E ? E.body : { w: 43, h: 236, x: 102, y: 6 };
+    const y = this.fy(NIGHT_LEDGE.y) - (body.y + body.h - 123.5) * s - 1;
+    const p = this._nearestFighter(x) || this.player;
+    const dir = p.x >= x ? 1 : -1;
+    const z = this.spawnAlien({ x, y, speed: 0.6 + Math.random() * 0.14, rage: 0.95, calmLunge: true,
+                                lungeDelay: 1400, vx: dir * (0.7 + Math.random() * 0.3) * H, vy: -0.7 * H,
+                                jumpClip: true });
+    this._spawned++;
+    if (first && this._stander) { this._stander.destroy(); this._stander = null; }
+    else { z.setAlpha(0); this.tweens.add({ targets: z, alpha: 1, duration: 260 }); }
+    Sfx.ensure(); Sfx.swoop();
+    return z;
+  }
+
+  _ledgeSpawn() {
+    if (this._dead || this._transitioning || this._holdInput || this._nightDone) return;
+    if (this._spawned >= NIGHT_HORDE) { if (this._hordeTimer) this._hordeTimer.remove(); this._hordeTimer = null; return; }
+    if (this.enemiesAlive() >= NIGHT_ALIVE) return;
+    // every so often one stops on the edge and screams first
+    if (this._spawned % 4 === 3) { Sfx.ensure(); Sfx.roar(); this.cameras.main.shake(220, 0.003); this._flicker(false); }
+    this._ledgeLeap(this.fx(0.05 + Math.random() * 0.26), false);
+  }
+
+  _nightKill(x) {
+    this._kills++;
+    if (NIGHT_ORB_AT.includes(this._kills)) this.time.delayedCall(650, () => { if (!this._dead) this.dropAntiAcid(x); });
+    if (this._kills === 5) this.time.delayedCall(600, () => {
+      if (!this._dead && this._sendFlyer(1)) this._say([['PLAYER', 'Another one — in the air!']]);
+    });
+    this._nightCheck();
+  }
+
+  // The horde all down, both flyers down: it is over.
+  _nightCheck() {
+    if (this._nightDone || this._dead) return;
+    if (this._spawned < NIGHT_HORDE || this.enemiesAlive() > 0) return;
+    if (this._flyersSent < NIGHT_FLYERS) { this._sendFlyer(1); return; }
+    if (this.flyersAlive() > 0) return;
+    this._nightCleared();
+  }
+
+  _nightCleared() {
+    this._nightDone = true;
+    once('night-cleared');
+    this.cfg.keep = null;
+    if (this._hordeTimer) { this._hordeTimer.remove(); this._hordeTimer = null; }
+    stopTrack(3000);
+    this.time.delayedCall(900, () => { if (!this._dead) StoreScene.prototype._followAgain.call(this, 1300); });
+    this.time.delayedCall(1500, () => {
+      if (this._dead) return;
+      this._say([['ETERWOLF', "That's the last of them."], ['WOLFFEL', 'Tonight, maybe.']]);
+    });
+    this.time.delayedCall(6000, () => { if (!this._dead && !this._transitioning) this._chapterCard(); });
+  }
+}
+
+// ================================================================== //
 //  THE STORE — inside the tienda                                     //
 //                                                                    //
 //  The first stage built out of a drawn plan rather than measured    //
@@ -10534,7 +11289,8 @@ class StoreScene extends WalkScene {
           when: () => !this._horde },
         // The way in from the street — the dark opening in the left wall —
         // is the way out once the shop is clear.
-        { xFrac: 0.012, w: 100, target: 'ShopStreetScene', spawnXFrac: 0.86,
+        // It is night by the time they come out: the street at night.
+        { xFrac: 0.012, w: 100, target: 'NightStreetScene', spawnXFrac: NIGHT_DOOR_X,
           auto: true, silent: true, when: () => !!GameState.seen['tienda-cleared'] }
       ],
       drawFallback(WW) {
@@ -12714,7 +13470,7 @@ window.__game = new Phaser.Game({
   physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
   scene: [BootScene, StartScene, MenuScene, CharSelectScene, CoopSelectScene, IntroDialogueScene,
           BunkerScene, ExitScene, JumpScene, BridgeScene, DashScene,
-          ShopStreetScene, StoreScene,
+          ShopStreetScene, StoreScene, NightStreetScene,
           StorageOneScene, StorageTwoScene, EnemyCinematicScene,
           CityScene, ShopFrontScene, ShopScene,
           GameScene, DebugScene]
