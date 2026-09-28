@@ -7330,6 +7330,7 @@ const WalkCombat = {
       z._enraged = true;
       z._nextLungeAt = now + 420;
       Sfx.roar();
+      if (this._screamLines) this._screamLines(z.x, z.y - 0.3 * z._H, 520, 0.75 * z._H / this.charH);
     }
     z._knockUntil = now + 160;
     z._lungeUntil = 0;
@@ -8087,6 +8088,40 @@ const WalkFlyers = {
   },
 
   wardActive() { return this.time.now < (this._wardUntil || 0); }
+,
+  // Scream lines: jagged strokes thrown off its head in pulses, fanned over
+  // the top from one side to the other the way a drawn scream is, with a ring
+  // of the sound going out behind them. (x, y) is the mouth; `size` scales it
+  // against a brother's height.
+  _screamLines(x, y, ms, size) {
+    const H = (size || 1) * this.charH, ADD = Phaser.BlendModes.ADD;
+    const pulses = Math.max(1, Math.round((ms || 1200) / 170));
+    for (let k = 0; k < pulses; k++) this.time.delayedCall(k * 170, () => {
+      if (!this.scene.isActive()) return;
+      const g = this.add.graphics({ x, y }).setDepth(14).setBlendMode(ADD);
+      const n = 11, off = (k % 2) * (Math.PI + 0.7) / (2 * (n - 1));
+      for (let i = 0; i < n; i++) {
+        const a = -Math.PI - 0.35 + (i / (n - 1)) * (Math.PI + 0.7) + off;
+        const c = Math.cos(a), sn = Math.sin(a);
+        const r0 = 0.2 * H, len = (0.13 + 0.07 * ((i + k) % 3)) * H;
+        const j = 0.03 * H * (i % 2 ? 1 : -1);                  // the kink in each
+        g.lineStyle(Math.max(2, 0.017 * H), i % 3 ? 0xf6f2cf : 0xc9f07c, 0.95);
+        g.beginPath();
+        g.moveTo(c * r0, sn * r0);
+        g.lineTo(c * (r0 + len * 0.5) - sn * j, sn * (r0 + len * 0.5) + c * j);
+        g.lineTo(c * (r0 + len), sn * (r0 + len));
+        g.strokePath();
+      }
+      this.tweens.add({ targets: g, scale: 2.1, alpha: 0, duration: 420, ease: 'Quad.easeOut',
+                        onComplete: () => g.destroy() });
+      if (k % 2 === 0) {
+        const ring = this.add.circle(x, y, 0.24 * H).setStrokeStyle(Math.max(2, 0.012 * H), 0xf6f2cf, 0.55)
+          .setDepth(13).setBlendMode(ADD);
+        this.tweens.add({ targets: ring, scale: 3.2, alpha: 0, duration: 520, ease: 'Quad.easeOut',
+                          onComplete: () => ring.destroy() });
+      }
+    });
+  }
 };
 Object.assign(WalkScene.prototype, WalkFlyers);
 
@@ -11155,6 +11190,9 @@ class NightStreetScene extends WalkScene {
     this._calmIdle = true;
     this._invulnUntil = Infinity;
     cam.stopFollow();
+    // The bars and the words are drawn by a camera of their own, or the zoom
+    // in on the ledge pushes the bars off the top and bottom of the screen.
+    this._hudCamOn();
     const bars = [0, 1].map(i => this.add.rectangle(640, i ? 720 : 0, 1280, 120, 0x000000, 1)
       .setOrigin(0.5, i ? 0 : 1).setScrollFactor(0).setDepth(92));
     this.tweens.add({ targets: bars[0], y: 60, duration: 420, ease: 'Sine.easeOut' });
@@ -11170,7 +11208,10 @@ class NightStreetScene extends WalkScene {
     const at = (ms, fn) => this.time.delayedCall(ms, () => { if (!this._dead && this.scene.isActive()) fn(); });
     at(500, () => { if (st) this.tweens.add({ targets: st, alpha: 1, duration: 500 }); });
     at(1000, () => { if (st) st.play('alien-face'); });
-    at(1700, () => { Sfx.ensure(); Sfx.roar(); Sfx.roar(); cam.shake(700, 0.008); this._flicker(true); });
+    at(1700, () => {
+      Sfx.ensure(); Sfx.roar(); Sfx.roar(); cam.shake(700, 0.008); this._flicker(true);
+      if (st) this._screamLines(st.x, st.y - 0.8 * H, 1400, H / this.charH);
+    });
     at(3000, () => {
       const f = this._sendFlyer(-1, { tx: this.fx(0.55), ty: this.groundY - FLYER_ALT * this.charH });
       if (f) cam.startFollow(f, false, 0.07, 0.07);
@@ -11199,7 +11240,10 @@ class NightStreetScene extends WalkScene {
       this.time.delayedCall(800, () => this._sendFlyer(-1));
     }
     // the one that screamed comes first, straight off the edge
-    this._ledgeLeap(this._stander ? this._stander.x : this.fx(0.2), true);
+    const first = this._ledgeLeap(this._stander ? this._stander.x : this.fx(0.2), true);
+    if (retry && first) this.time.delayedCall(250, () => {
+      if (first.active) this._screamLines(first.x, first.y - 0.3 * first._H, 900, first._H / this.charH);
+    });
     this._hordeTimer = this.time.addEvent({ delay: 1700, loop: true, callback: () => this._ledgeSpawn() });
     this._say([['PLAYER', 'Off the ledge — here they come!']]);
     this._showTip('SWING INTO THE SPIKES TO SEND THEM BACK — ITS OWN SPIKE BRINGS IT DOWN');
@@ -11238,8 +11282,10 @@ class NightStreetScene extends WalkScene {
     if (this._spawned >= NIGHT_HORDE) { if (this._hordeTimer) this._hordeTimer.remove(); this._hordeTimer = null; return; }
     if (this.enemiesAlive() >= NIGHT_ALIVE) return;
     // every so often one stops on the edge and screams first
-    if (this._spawned % 4 === 3) { Sfx.ensure(); Sfx.roar(); this.cameras.main.shake(220, 0.003); this._flicker(false); }
-    this._ledgeLeap(this.fx(0.05 + Math.random() * 0.26), false);
+    const loud = this._spawned % 4 === 3;
+    if (loud) { Sfx.ensure(); Sfx.roar(); this.cameras.main.shake(220, 0.003); this._flicker(false); }
+    const z = this._ledgeLeap(this.fx(0.05 + Math.random() * 0.26), false);
+    if (loud && z) this._screamLines(z.x, z.y - 0.3 * z._H, 700, z._H / this.charH);
   }
 
   _nightKill(x) {
