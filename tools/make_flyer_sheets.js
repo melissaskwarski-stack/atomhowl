@@ -8,6 +8,9 @@
 //                            spray spreads (10-15). Flying and spitting are
 //                            one clip, so they are one sheet with one box:
 //                            the body never jumps between the two.
+//   fly side.gif             8 frames, side on, facing east: one whole beat
+//                            of the wings. This is it flying; the glide at
+//                            the head of the spit clip is only its wind-up.
 //   death of enemy 2.gif     25 frames: it melts to red (0-16), then its
 //                            head drops and splashes (17-24). Only the melt
 //                            is kept: the game dissolves the body after it
@@ -25,6 +28,7 @@ const ROOT = path.resolve(__dirname, '..');
 const A = f => path.join(ROOT, 'public/assets', f);
 const CLIPS = [
   { name: 'fly',   src: 'flyer_flyspit.gif', out: 'flyer_flyspit_sheet.png', frames: null, cols: 8 },
+  { name: 'side',  src: 'flyer_side.gif',    out: 'flyer_side_sheet.png',    frames: null, cols: 8 },
   { name: 'death', src: 'flyer_death.gif',   out: 'flyer_death_sheet.png',   frames: [0, 16], cols: 9 },
 ];
 const PAD = 2;
@@ -71,6 +75,12 @@ for (const c of CLIPS) {
   }
   console.log(`fly body centre (cell px): x ${128 - m.ox}, y ${125 - m.oy}`);
   console.log(`fly mouth (cell px): x ${x0 - m.ox}, y ${y0 - m.oy}`);
+}
+// The flight's body: the skull, read off a grid crop of frame 0 beside the
+// spit clip's frame 0 — drawn at the same size and nearly the same place.
+{
+  const m = meta.side;
+  console.log(`side body centre (cell px): x ${130 - m.ox}, y ${128 - m.oy}`);
 }
 {
   const m = meta.death, bx = L.bbox(m.frames[0], 256, 256);

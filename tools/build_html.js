@@ -161,8 +161,15 @@ const SCENE_SRC = {
   nightstreetdark: ['public/assets/night_street_dark.png'],
   // the flying creature (tools/make_flyer_sheets.js) and the spike it spits
   flyerfly:     ['public/assets/flyer_flyspit_sheet.png'],
+  flyerside:    ['public/assets/flyer_side_sheet.png'],
   flyerdeath:   ['public/assets/flyer_death_sheet.png'],
   flyerspike:   ['public/assets/flyer_spike.png'],
+  // the embankment past the tienda: the painting, and its props
+  // (tools/make_puzzle_assets.js)
+  aftertienda:  ['public/assets/after_tienda.png'],
+  grenade:      ['public/assets/grenade.png'],
+  grenadeboom:  ['public/assets/grenade_boom.png'],
+  girderwall:   ['public/assets/girder_wall.png'],
   twingocar:    ['public/assets/twingo_car.png'],
   twingoboom:   ['public/assets/twingo_boom.png'],
   twingowreck:  ['public/assets/twingo_wreck.png'],
