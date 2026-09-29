@@ -53,12 +53,10 @@ const SRC = {
   // through 5-8, and 9 coming back down. Frames 4-9 are the whole move; the
   // rest is a sprint cycle he already has.
   dash:   A('wf_dash_east.gif'),
-  // A real vertical hop at last — 21 frames, and the feet actually leave the
-  // floor: planted through 5, off the ground at 6, rising to an apex at 10-11
-  // (boots 82px up from where they started) and back down by 16. Before this
-  // he had no jump art at all and fell back to the run cycle, which pumped his
-  // legs in mid-air.
-  jump:   A('wf_jump_east.gif'),
+  // wolffel jump.gif, 8 frames: standing (0), the knees going for the push
+  // (1), off the floor tucking (2), rising tucked (3), tucked at the top
+  // (4-5), the legs coming down for the floor (6), down (7).
+  jump:   A('wf_jump2_east.gif'),
   // Running with the pistol held up at roughly 45 degrees, and walking while
   // firing it flat. Both are east-only, mirrored here like the rest of him.
   p45:    A('wf_pistol45_east.gif'),
@@ -349,19 +347,18 @@ if (K.p45) {
 }
 
 // ---- the jump -------------------------------------------------------------
-// Cut by where the boots actually are: planted through 5, off the ground at 6,
-// rising to 7-9, hanging at 10-11, falling 12-16, down and recovering after.
-// The crouch frames are not played — physics leaves the floor the instant the
-// key goes down, so a squat drawn in mid-air reads as a glitch.
+// The push-off (1) is not played on the way up — physics leaves the floor the
+// instant the key goes down, so a squat drawn in mid-air reads as a glitch —
+// it is the squash on landing instead.
 if (K.jump) {
-  add('jump',      [K.jump[6], K.jump[7], K.jump[8], K.jump[9]],      18, 0);
-  add('jumpW',     [K.jumpW[6], K.jumpW[7], K.jumpW[8], K.jumpW[9]],  18, 0);
-  add('jumpapex',  [K.jump[10], K.jump[11]],    10, 0);
-  add('jumpapexW', [K.jumpW[10], K.jumpW[11]],  10, 0);
-  add('jumpfall',  [K.jump[12], K.jump[13], K.jump[14]],     14, 0);
-  add('jumpfallW', [K.jumpW[12], K.jumpW[13], K.jumpW[14]],  14, 0);
-  add('land',      [K.jump[16], K.jump[17], K.jump[18]],     18, 0);
-  add('landW',     [K.jumpW[16], K.jumpW[17], K.jumpW[18]],  18, 0);
+  add('jump',      [K.jump[2], K.jump[3]],    16, 0);
+  add('jumpW',     [K.jumpW[2], K.jumpW[3]],  16, 0);
+  add('jumpapex',  [K.jump[4], K.jump[5]],    10, 0);
+  add('jumpapexW', [K.jumpW[4], K.jumpW[5]],  10, 0);
+  add('jumpfall',  [K.jump[6]],     14, 0);
+  add('jumpfallW', [K.jumpW[6]],    14, 0);
+  add('land',      [K.jump[1], K.jump[0]],    16, 0);
+  add('landW',     [K.jumpW[1], K.jumpW[0]],  16, 0);
 }
 
 // ---- going down, and back up ---------------------------------------------
