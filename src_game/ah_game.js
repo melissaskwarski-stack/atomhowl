@@ -8442,9 +8442,23 @@ const Coop = {
   // on his own spot if neither.
   _besideP1() {
     const p1 = this.player, f = p1._facing || 1, off = 0.4 * this.charH;
-    const ok = x => x > 30 && x < this.worldW - 30 && this._standableAt(x, this._p1Feet());
+    const ok = x => x > 30 && x < this.worldW - 30 && this._standableAt(x, this._p1Feet()) && !this._wallBetween(p1.x, x);
     for (const x of [p1.x - f * off, p1.x + f * off]) if (ok(x)) return x;
     return p1.x;
+  },
+
+  // A wall (something solid at the side, not a ledge you stand on) between
+  // Eterwolf and x, at their height: Wolffel must not come in on the far side
+  // of it, or inside it.
+  _wallBetween(x0, x1) {
+    const feet = this._p1Feet(), hw = 0.12 * this.charH;
+    const lo = Math.min(x0, x1) - hw, hi = Math.max(x0, x1) + hw;
+    return (this.solidsW || []).some(o => {
+      const b = o && o.body;
+      if (!b || !(b.checkCollision.left || b.checkCollision.right)) return false;
+      if ((this.floorsW || []).includes(o)) return false;
+      return b.x < hi && b.x + b.width > lo && b.y < feet - 0.3 * this.charH && b.y + b.height > feet - 4;
+    });
   },
 
   // Something solid at about this height under x.
@@ -11705,6 +11719,8 @@ class EmbankmentScene extends WalkScene {
     this.fy = f => bg.y + f * bg.h;
 
     // what has been done this game stays done through a death or a CONTINUE
+    this._leverBusy = false;
+    this._crankBusy = false;
     this._leverPulled = !!GameState.seen['emb-lever'];
     this._cageOpen = !!GameState.seen['emb-cage'];
     this._wallDown = wallDown;
@@ -11934,20 +11950,20 @@ class EmbankmentScene extends WalkScene {
            Math.abs(p.body.bottom - this.crank.y) < 0.5 * this.pxPerM;
   }
 
+  // The turn opens the cage the moment it is made — stored straight away —
+  // and the bars sliding up are only the look of it: a restart in the middle
+  // of the turn comes back with the cage open, not shut for good.
   _turnCrank(p) {
     if (this._cageOpen || this._crankBusy) return;
     this._crankBusy = true;
+    this._cageOpen = true;
+    once('emb-cage');
+    persistSeen('emb-cage');
     this._reach(p, this.crank.x);
     Sfx.ensure(); Sfx.burst(0.6, 0.14, 700, 1.2);
     this.tweens.add({ targets: this.crank.wheel, angle: 720, duration: 1100, ease: 'Sine.easeInOut' });
     this.tweens.add({ targets: this.cageFront, y: -this.cageH + 8, duration: 1100, delay: 250, ease: 'Sine.easeInOut',
-      onComplete: () => {
-        this._cageOpen = true;
-        this._crankBusy = false;
-        once('emb-cage');
-        persistSeen('emb-cage');
-        Sfx.ensure(); Sfx.land();
-      } });
+      onComplete: () => { this._crankBusy = false; Sfx.ensure(); Sfx.land(); } });
     this.crankLabel.setAlpha(0);
   }
 
@@ -11955,7 +11971,7 @@ class EmbankmentScene extends WalkScene {
   // Three each. It fills up again if they are all gone while the girder
   // stands, so there is never no way on.
   _chestReady() {
-    if (!this._cageOpen || this._wallDown) return false;
+    if (!this._cageOpen || this._crankBusy || this._wallDown) return false;
     if (!this._chestTaken) return true;
     const ps = [this.player, this.player2].filter(q => q && q.active);
     return ps.every(q => this.grenadesOf(q) === 0);
