@@ -4308,7 +4308,9 @@ function driveWalker(scene, p, keys, onGround) {
   // sprinting single jump carries 452px here and a walking double only 416,
   // so with the sprint available there is no gap width that a double jump can
   // cross and a single cannot — the stage would teach nothing.
-  const canDash = !!(scene.cfg && scene.cfg.dash);
+  // The dash is there in every walking stage (Q, or B/RB on a pad); a stage
+  // can still take it away by saying dash: false.
+  const canDash = !(scene.cfg && scene.cfg.dash === false);
   // Everything here is in the stage's own scale: a bigger man takes bigger
   // strides and a bigger leap, so the motion reads the same at any size.
   const k = scene.playScale || 1;
@@ -6416,7 +6418,7 @@ class WalkScene extends Phaser.Scene {
     const cfg = this.cfg || {}, pad = InputMode.p1 === 'pad', sep = '   ·   ';
     const parts = [pad ? 'STICK MOVE' : 'A/D WALK'];
     if (!cfg.noSprint) parts.push(pad ? 'LB RUN' : 'SHIFT RUN');
-    if (cfg.dash) parts.push(pad ? 'B DASH' : 'Q DASH');
+    if (cfg.dash !== false) parts.push(pad ? 'B DASH' : 'Q DASH');
     if (!cfg.noJump) parts.push(pad ? 'A JUMP' : 'W JUMP');
     parts.push(pad ? 'DOWN CROUCH' : 'S CROUCH', pad ? 'Y USE' : 'E USE');
     if (armedWithBlade()) parts.push(pad ? 'X SWORD' : 'F SWORD');
@@ -10762,10 +10764,7 @@ class BridgeScene extends WalkScene {
       fallRestart: true,
       title: 'THE BRIDGE',
       castSwitch: true, canReset: true,
-      // The whole point of the stage, and the reason the sprint is off: a
-      // sprinting single jump outreaches a walking double, so with it there is
-      // no ravine width that needs two jumps and not one.
-      doubleJump: true, noSprint: true,
+      doubleJump: true,
       // No flat floor. The road is humped, and one flat line cannot sit on a
       // hump — at the gap's height he floated 22px over the road at the
       // start, at the ends' height his feet were in the stone at the gap. So
@@ -11322,9 +11321,6 @@ class ShopStreetScene extends WalkScene {
         g.fillStyle(0x3a2a1c, 1); g.fillRect(0, 600, WW, 120);
       }
     });
-    // Out of the shop with the horde behind them: that is the end of the
-    // chapter, and the street says so instead of just stopping.
-    if (GameState.seen['tienda-cleared']) this.time.delayedCall(1400, () => this._chapterCard());
   }
 
   _chapterCard() {
