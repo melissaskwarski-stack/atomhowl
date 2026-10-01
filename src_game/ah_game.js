@@ -1500,13 +1500,17 @@ const GUNS = {
     name: 'PISTOL', tex: 'gun_pistol', sfx: 'pistol',
     cd: 210, dmg: 1, spread: 0.012, speed: 7.2, life: 1100, hold: 900,
     muzzle: [17, -7],
+    // The handle goes DOWN THROUGH the fist (only its butt shows under the
+    // little finger); the slide rides on top of the hand and the barrel
+    // comes out in front of the knuckles. The fist is about 16px across,
+    // centred on the grip point.
     shape: [
-      [[-8, -10], [17, -10], [17, -4], [-8, -4]],               // slide
-      [[-6, -4], [9, -4], [9, -1], [-6, -1]],                   // frame
-      [[1, -1], [8, -1], [7, 3], [1, 3]],                       // trigger guard
-      [[-8, -4], [0, -4], [-3, 9], [-11, 9]],                   // grip, raked back
+      [[-7, -10], [17, -10], [17, -4], [-7, -4]],               // slide
+      [[-5, -4], [9, -4], [9, -1], [-5, -1]],                   // frame
+      [[2, -1], [8, -1], [7, 3], [2, 3]],                       // trigger guard
+      [[-4, -4], [3, -4], [1, 9], [-6, 9]],                     // grip, inside the fist
       [[15, -11.5], [17, -11.5], [17, -10], [15, -10]],         // front sight
-      [[-8, -11], [-6, -11], [-6, -10], [-8, -10]]              // rear sight
+      [[-7, -11], [-5, -11], [-5, -10], [-7, -10]]              // rear sight
     ]
   },
   rifle: {
@@ -1555,18 +1559,27 @@ class AimRig {
     this.showing = false; this.idx = 0; this._gunId = ''; this._tint = '';
     const img = key => scene.add.image(0, 0, pre + key).setOrigin(0, 0);
     this.torso = img(m.torso.key).setPosition(m.torso.at[0], m.torso.at[1]);
-    // the head turns about the neck, so the neck is its origin
+    // The head nods about the top of the neck (its origin); the neck band
+    // under the torso bends half as far and fills whatever the nod uncovers.
     this.head = img(m.head.key);
+    const hp = m.headAt || m.neck;
     this.head.setOrigin(-m.head.at[0] / this.head.width, -m.head.at[1] / this.head.height)
-             .setPosition(m.neck[0], m.neck[1]);
+             .setPosition(hp[0], hp[1]);
+    const layers = [this.torso, this.head];
+    if (m.neckBand) {
+      this.neck = img(m.neckBand.key);
+      this.neck.setOrigin(-m.neckBand.at[0] / this.neck.width, -m.neckBand.at[1] / this.neck.height)
+               .setPosition(m.neck[0], m.neck[1]);
+      layers.unshift(this.neck);
+    }
     this.arm = img(m.arms[0].key);
     this.gun = scene.add.image(0, 0, 'gun_pistol');
-    this.c = scene.add.container(0, 0, [this.torso, this.head, this.gun, this.arm]).setVisible(false);
+    this.c = scene.add.container(0, 0, layers.concat([this.gun, this.arm])).setVisible(false);
     // Just above its own legs and below everything the brothers can stand
     // among: the other brother is 9.5, the first is 10, so P2's rig (9.75)
     // never draws over P1's legs. Set once — a depth change re-sorts the scene.
     this.c.setDepth(p.depth + 0.25);
-    this.parts = [this.torso, this.head, this.gun, this.arm];
+    this.parts = [this.torso, this.head, this.gun, this.arm].concat(this.neck ? [this.neck] : []);
     this.hx = 0; this.hy = 0; this.sx = 1; this.sy = 1; this.face = 1;
     this.X = 0; this.Y = 0;
     // (his brother leaving destroys the sprite and nothing else would)
@@ -1610,6 +1623,7 @@ class AimRig {
     }
     const hp = m.headPitch, pitch = Math.max(hp[1], Math.min(hp[2], hp[0] * a.ang));
     this.head.setRotation(-pitch * D2R);
+    if (this.neck) this.neck.setRotation(-pitch * 0.5 * D2R);
     if (G && this._gunId !== G.tex) {
       this._gunId = G.tex;
       this.gun.setTexture(G.tex).setOrigin(G.pivot[0] / this.gun.width, G.pivot[1] / this.gun.height)
@@ -4581,7 +4595,10 @@ function driveWalker(scene, p, keys, onGround) {
   // he is walking; the stage supplies the input (mouse, stick).
   const aim = scene._aimTick ? scene._aimTick(p, keys, crouch, move) : null;
   if (aim) p._facing = aim.face;
-  const sprint = !crouch && !!(keys.SHIFT && keys.SHIFT.isDown) &&
+  // With a gun up, moving IS running: the aim has three leg states (still,
+  // running, crouched) and the run is the sprint, so it goes at sprint pace
+  // instead of walking pace with the stride slowed to match.
+  const sprint = !crouch && !!((keys.SHIFT && keys.SHIFT.isDown) || aim) &&
                  !(scene.cfg && scene.cfg.noSprint);
   const dt = Math.min(0.05, ((scene.game && scene.game.loop.delta) || 16.7) / 1000);
 
@@ -4772,7 +4789,7 @@ function driveWalker(scene, p, keys, onGround) {
     }
     // The aimed stride is the sprint, slowed to the pace he is moving at.
     const ts = (want === 'aimrun' || want === 'aimrunB')
-      ? Phaser.Math.Clamp(Math.abs(p.body.velocity.x) / (RUN_SPEED * k), 0.5, 1.15) : 1;
+      ? Phaser.Math.Clamp(Math.abs(p.body.velocity.x) / (RUN_SPEED * k), 0.85, 1.15) : 1;
     if (p.anims.timeScale !== ts) p.anims.timeScale = ts;
   } else {
     if (!onGround) p.play('hero-air', true);

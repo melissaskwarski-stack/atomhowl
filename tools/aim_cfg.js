@@ -7,7 +7,8 @@
 //   neck       the base of the neck on the torso frame: the head turns about it
 //   headCut    rows above this, in columns headX, are the torso frame's own head
 //   headFrom   the level head: frame, cut row at the neck (sloping from nape to
-//              throat), its columns, and its neck point
+//              throat), its columns, its neck point, and the pivot it nods
+//              about (the top of the neck, behind the ear)
 //   arms       per sweep frame used: shoulder S, elbow E, fist tip T and grip
 //              (the centre of the fist, where the gun's handle goes)
 //   headPitch  [k, lo, hi]: the head turns k times the aim, within lo..hi
@@ -22,7 +23,7 @@ module.exports = {
     // the torso frame leans back ~17 degrees; turned 10 of them upright, so a
     // hanging arm comes down beside his chest instead of behind it
     base: 8, baseTurn: 10, neck: [106, 50], headCut: 51, headX: [78, 136],
-    headFrom: { frame: 0, cut: 47, slope: 0.5, x: [110, 152], neck: [126, 50] },
+    headFrom: { frame: 0, cut: 47, slope: 0.5, x: [110, 152], neck: [126, 50], pivot: [123, 38] },
     r: 10, fistR: 10, step: 5, headPitch: [0.5, -30, 26],
     arms: [
       { f: 8,  S: [125, 60],     E: [154.5, 39.8], T: [189, 11],  grip: [182.9, 16.1] },
@@ -53,8 +54,8 @@ module.exports = {
   ew: {
     sweep: 'ew_gunsweep_east.gif',
     hip: [128, 108], shoulder: [120, 63], waist: 110, overlap: 8,
-    base: 8, neck: [112, 55], headCut: 55, headX: [76, 125],
-    headFrom: { frame: 0, cut: 54, x: [98, 150], neck: [126, 54] },
+    base: 8, neck: [112, 55], headCut: 55, headX: [76, 125], backFade: 8,
+    headFrom: { frame: 0, cut: 54, x: [98, 150], neck: [126, 54], pivot: [123, 42], band: [14, 30] },
     r: 10, fistR: 9, step: 5, headPitch: [0.45, -24, 22],
     arms: [
       { f: 8,  S: [120, 63], E: [153.7, 46],   T: [185, 21],  grip: [178.7, 26] },

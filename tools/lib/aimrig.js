@@ -238,7 +238,18 @@ function build(sweep, cfg) {
     // behind the nape the cut goes a little lower: the back of a thrown-back
     // head sits below the neckline there
     const lim = x < N0[0] - 6 ? cutY + 2 : cutY - 3;
-    if (y >= lim || x < cfg.headX[0] || x > cfg.headX[1]) continue;
+    if (x < cfg.headX[0] || x > cfg.headX[1]) continue;
+    if (y >= lim) {
+      // Long hair down his back is cut by this line too. Feathered over a few
+      // rows, the neck band's hair behind it shows through instead of a hard
+      // edge across it (cfg.backFade rows, behind the nape only).
+      const fr = cfg.backFade || 0;
+      if (fr && x < N0[0] - 6 && y < lim + fr) {
+        const k = (y * W + x) * 4 + 3;
+        torso.d[k] = Math.round(torso.d[k] * (y - lim + 1) / (fr + 1));
+      }
+      continue;
+    }
     // (the cut is made on the turned torso, so it is a plain row)
     torso.d[(y * W + x) * 4 + 3] = 0;
   }
@@ -255,7 +266,11 @@ function build(sweep, cfg) {
   // the cut in the head's columns, the last rows faded into the collar. The
   // cut can slope (it runs from the nape down to the throat), so the collar at
   // the back of the neck stays with the shirt instead of riding on the head.
-  const hf = cfg.headFrom, fh = frame(hf.frame || 0), FADE = 4;
+  //
+  // It turns about the top of the neck (hf.pivot, by the ear), the way a head
+  // nods — turning it about the base of the neck swung the whole head forward
+  // and back like a pendulum, and its cut-off bottom edge with it.
+  const hf = cfg.headFrom, fh = frame(hf.frame || 0), FADE = 6;
   const cutAt = x => hf.cut + (x - hf.neck[0]) * (hf.slope || 0);
   const head = mk(W, H);
   for (let x = hf.x[0]; x <= hf.x[1]; x++) {
@@ -266,6 +281,24 @@ function build(sweep, cfg) {
       if (y >= c + 2 - FADE) head.d[k + 3] = Math.round(head.d[k + 3] * (c + 2 - y) / (FADE + 1));
     }
   }
+  // The neck: a band of skin and hair across the cut, drawn BEHIND the torso
+  // and the head and turned half as far as the head. Whatever the head's turn
+  // uncovers — the throat when he looks up, the nape when he looks down, the
+  // hair at the back of Eterwolf's head — is neck rather than nothing. Shirt
+  // (neutral black, or Eterwolf's dark green) is left out: the torso has its
+  // own, and this one would only show as a second collar.
+  const neckL = mk(W, H);
+  const keepNeck = (r, g, b) => r >= g && r - b >= 4;
+  const band = hf.band || [14, 12];          // rows above and below the cut
+  for (let x = hf.x[0]; x <= hf.x[1]; x++) {
+    const c = cutAt(x);
+    for (let y = Math.max(0, Math.floor(c - band[0])); y < Math.min(H, c + band[1]); y++) {
+      const k = (y * W + x) * 4; if (fh.d[k + 3] < 128) continue;
+      if (!keepNeck(fh.d[k], fh.d[k + 1], fh.d[k + 2])) continue;
+      neckL.d.set(fh.d.subarray(k, k + 4), k);
+    }
+  }
+  const P = hf.pivot || [hf.neck[0], hf.neck[1] - 12];
 
   // ---- arms, one per step ----
   const src = cfg.arms.map(a => {
@@ -288,7 +321,7 @@ function build(sweep, cfg) {
     const tip = rotPt(best.T, best.S, turn, d);
     arms.push({ ang: A, from: best.f, turn: Math.round(-turn), im: moved, grip, tip });
   }
-  return { torso, head, arms, W, H, S0, N0 };
+  return { torso, head, neckL, arms, W, H, S0, N0, P };
 }
 
 // Everything relative to the hip, cropped, as data URIs.
@@ -301,8 +334,13 @@ function pack(built, cfg, pre) {
   };
   const rel = p => [+(p[0] - hip[0]).toFixed(1), +(p[1] - hip[1]).toFixed(1)];
   meta.torso = { key: pre + 'torso', at: put(pre + 'torso', built.torso, hip) };
-  // the head's texture is placed from its own pivot, which goes on the neck
-  meta.head = { key: pre + 'head', at: put(pre + 'head', built.head, cfg.headFrom.neck) };
+  // The head's texture is placed from its pivot (the top of the neck); the
+  // pivot sits where it does on the standing frame, relative to the neck.
+  const hf = cfg.headFrom, P = built.P;
+  meta.head = { key: pre + 'head', at: put(pre + 'head', built.head, P) };
+  meta.headAt = rel([built.N0[0] + P[0] - hf.neck[0], built.N0[1] + P[1] - hf.neck[1]]);
+  // the neck band turns about the base of the neck
+  meta.neckBand = { key: pre + 'neck', at: put(pre + 'neck', built.neckL, hf.neck) };
   meta.neck = rel(built.N0);
   meta.shoulder = rel(built.S0);
   meta.step = cfg.step || 5;
