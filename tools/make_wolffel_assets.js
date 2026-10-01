@@ -398,6 +398,16 @@ if (K.doorwalk) {
   add('doorwalkW', K.doorwalkW.slice(5, 17), 12);
 }
 
+// ---- free aim --------------------------------------------------------------
+// The upper body in layers off the gun sweep, and the three leg states it
+// stands on (idle, moving, crouched); see tools/lib/aimrig.js. The layers are
+// not in any animation — the game draws them itself — so the prune below
+// leaves anything 'aim_' alone.
+const AIM = require('./lib/aimrig').heroAim(L, clips, require('./aim_cfg').wf,
+  path.join(ROOT, 'public/assets'), CW, CH, cut);
+Object.assign(frames, AIM.frames);
+Object.assign(anims, AIM.anims);
+
 const mod = {
   charH: ih,
   hiRes: true,             // 3D render, not pixel art — scale fractionally
@@ -419,6 +429,7 @@ const mod = {
   body, muzzle, muzzles,
   canvasW: CW, canvasH: CH,
   animShift, strike,
+  aim: AIM.aim,
   pending: ['west art (all mirrored east)',
             'a front-facing finisher', 'a real standing firing clip'],
   frames,
@@ -435,7 +446,7 @@ const mod = {
   Object.values(mod.anims).forEach(a => (a.keys || []).forEach(k => used.add(k)));
   let dropped = 0, bytes = 0;
   for (const k of Object.keys(mod.frames)) {
-    if (used.has(k)) continue;
+    if (used.has(k) || k.startsWith('aim_')) continue;
     bytes += mod.frames[k].length;
     delete mod.frames[k];
     dropped++;

@@ -353,12 +353,22 @@ const GUITAR_OUT = (west) => {
   return out;
 };
 
+// ---- free aim --------------------------------------------------------------
+// The upper body in layers off the gun sweep, and the three leg states it
+// stands on (idle, moving, crouched); see tools/lib/aimrig.js. The layers are
+// not in any animation — the game draws them itself — so the prune below
+// leaves anything 'aim_' alone.
+const AIM = require('./lib/aimrig').heroAim(L, clips, require('./aim_cfg').ew,
+  path.join(ROOT, 'public/assets'), CW, CH, cut);
+Object.assign(frames, AIM.frames);
+
 const mod = {
   charH: ih,
   hiRes: true,             // 3D render, not pixel art — scale fractionally
   directional: true,       // real per-side art — pick the anim, never flipX
   body, muzzle, muzzles,
   canvasW: CW, canvasH: CH,
+  aim: AIM.aim,
   // Standing still he works down this list, one step every idleStepMs: the
   // first breath, then the longer one, then the guitar comes off his back.
   // Having played, he goes back to the SECOND pose — not the first — and does
@@ -537,6 +547,8 @@ const mod = {
   }
 };
 
+Object.assign(mod.anims, AIM.anims);
+
 // ---- the new round ---------------------------------------------------------
 // The combo's third and fourth beats, cut to the swing: wind-up, the arc, and
 // the follow-through into guard, with the standing frames at the head dropped
@@ -593,7 +605,7 @@ if (K.dcrawl) {
   Object.values(mod.anims).forEach(a => (a.keys || []).forEach(k => used.add(k)));
   let dropped = 0, bytes = 0;
   for (const k of Object.keys(mod.frames)) {
-    if (used.has(k)) continue;
+    if (used.has(k) || k.startsWith('aim_')) continue;
     bytes += mod.frames[k].length;
     delete mod.frames[k];
     dropped++;

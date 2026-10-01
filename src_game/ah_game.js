@@ -1374,6 +1374,14 @@ const ACTION_FALLBACK = {
   crouchwalk:  ['crouchwalk', 'crouch', 'walk', 'idle'],
   akshoot:     ['akshoot', 'shoot', 'idle'],
   akrunshoot:  ['akrunshoot', 'runshoot', 'akshoot', 'shoot', 'run', 'idle'],
+  // free aim: legs only (the upper body is the rig's). A character without the
+  // aim art never gets here — heroAim() checks for it — but the chain keeps a
+  // half-built one standing up.
+  aimidle:     ['aimidle', 'idle'],
+  aimrun:      ['aimrun', 'aimidle', 'run', 'idle'],
+  aimrunB:     ['aimrunB', 'aimrun', 'aimidle', 'idle'],
+  aimair:      ['aimair', 'aimrun', 'aimidle', 'idle'],
+  aimcrouch:   ['aimcrouch', 'crouch', 'idle'],
   // the draws, so a character without one simply skips straight to firing
   shootin:     ['shootin', 'shoot', 'idle'],
   akshootin:   ['akshootin', 'shootin', 'akshoot', 'shoot', 'idle'],
@@ -1441,6 +1449,201 @@ function heroScale(hero, targetH, fallback) {
   if (!hero || !hero.art.charH) return fallback;
   const s = targetH / hero.art.charH;
   return hero.art.hiRes ? s : Math.max(1, Math.round(s));
+}
+
+// ================================================================== //
+//  FREE AIM                                                           //
+//                                                                     //
+//  A ranged weapon is pointed wherever the mouse or the right stick    //
+//  says, at any angle from straight down to straight up. There is no   //
+//  pose per angle to run out of: the hero is his legs plus an upper    //
+//  body drawn over them in layers (tools/lib/aimrig.js cuts them out   //
+//  of the gun sweep):                                                  //
+//                                                                     //
+//    legs    an ordinary animation on his own sprite — aimidle,         //
+//            aimrun, aimcrouch. Those are the only three states aiming //
+//            has, and they are the only thing the sprite itself shows.  //
+//    torso   upright, with no arm and no head                          //
+//    head    turned about the neck to follow the arm                    //
+//    gun     the weapon in his hand (a generated black placeholder)     //
+//    arm     one every few degrees, the one nearest the live angle      //
+//                                                                     //
+//  Everything hangs from the hip of whichever legs frame is showing    //
+//  (art.aim.hips), so the torso rides the run instead of sliding over  //
+//  it. It is all drawn facing east; a container with a negative scale  //
+//  turns the whole rig to face west, which mirrors the hip offsets,    //
+//  the head's turn and the gun for free.                               //
+//                                                                     //
+//  The rig only shows while the sprite is on one of those leg frames,  //
+//  so a dash, a sword swing, a fall or a cutscene that plays something //
+//  else takes the gun away by doing nothing at all.                    //
+// ================================================================== //
+const D2R = Math.PI / 180;
+const AIM_SS     = 4;      // gun textures are drawn this many times larger than shown
+const AIM_SLEW   = 1500;   // deg/s the arm can swing: hanging to level in about 60ms
+const AIM_READY  = 9;      // deg: this close to where it is wanted, the gun may fire
+const AIM_DOWN   = -84;    // deg: lower than this the arm is hanging, back to plain idle
+const AIM_STICK  = 0.35;   // right stick radius before it means "aim"
+const AIM_MOUSE_MS = 2500; // the mouse counts as aiming this long after it last moved
+
+// Every ranged weapon is one of these. The rig, the input, the bullets and the
+// pickup only ever read the descriptor, so a new weapon is a new entry (and,
+// when it has art, a texture in place of `shape`).
+//   shape   polygons in hero-canvas px, origin at the grip (the fist's centre),
+//           +x along the barrel, +y down — drawn black until real art lands
+//   muzzle  the end of the barrel in the same space
+//   speed   bullet speed in body heights per second; life in ms
+//   cd/dmg/spread  rate of fire (ms), damage, random spread (radians)
+//   hold    how long it stays up after the last shot
+const GUNS = {
+  pistol: {
+    name: 'PISTOL', tex: 'gun_pistol', sfx: 'pistol',
+    cd: 210, dmg: 1, spread: 0.012, speed: 7.2, life: 1100, hold: 900,
+    muzzle: [17, -7],
+    shape: [
+      [[-8, -10], [17, -10], [17, -4], [-8, -4]],               // slide
+      [[-6, -4], [9, -4], [9, -1], [-6, -1]],                   // frame
+      [[1, -1], [8, -1], [7, 3], [1, 3]],                       // trigger guard
+      [[-8, -4], [0, -4], [-3, 9], [-11, 9]],                   // grip, raked back
+      [[15, -11.5], [17, -11.5], [17, -10], [15, -10]],         // front sight
+      [[-8, -11], [-6, -11], [-6, -10], [-8, -10]]              // rear sight
+    ]
+  },
+  rifle: {
+    name: 'RIFLE', tex: 'gun_rifle', sfx: 'pistol',
+    cd: 110, dmg: 1, spread: 0.05, speed: 8.4, life: 1100, hold: 1200,
+    muzzle: [50, -7],
+    shape: [
+      [[-12, -9], [32, -9], [32, -4], [-12, -4]],               // receiver
+      [[10, -10], [32, -10], [32, -3], [10, -3]],               // handguard
+      [[32, -8], [50, -8], [50, -6], [32, -6]],                 // barrel
+      [[-26, -10], [-12, -9], [-12, -2], [-24, -1]],            // stock
+      [[4, -3], [10, -3], [12, 9], [6, 9]],                     // magazine
+      [[-8, -4], [-2, -4], [-5, 8], [-11, 8]],                  // grip
+      [[46, -10], [48, -10], [48, -8], [46, -8]]                // front sight
+    ]
+  }
+};
+
+// The gun as a texture: a black shape with a hair of lighter edge along the
+// top, so it still reads against a dark street. Supersampled, because it is
+// shown at a fraction of the size of the hero canvas it is measured on.
+function makeGunTexture(scene, id) {
+  const G = GUNS[id];
+  if (!G || scene.textures.exists(G.tex)) return;
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  G.shape.forEach(poly => poly.forEach(pt => {
+    x0 = Math.min(x0, pt[0]); x1 = Math.max(x1, pt[0]); y0 = Math.min(y0, pt[1]); y1 = Math.max(y1, pt[1]);
+  }));
+  const pad = 2, S = AIM_SS, W = Math.ceil(x1 - x0 + pad * 2), H = Math.ceil(y1 - y0 + pad * 2);
+  const g = scene.make.graphics({ add: false });
+  const draw = (col, dy) => {
+    g.fillStyle(col, 1);
+    G.shape.forEach(poly => g.fillPoints(poly.map(pt => ({ x: (pt[0] - x0 + pad) * S, y: (pt[1] - y0 + pad + dy) * S })), true));
+  };
+  draw(0x3b414b, -1);       // the rim, one hero pixel above
+  draw(0x0c0d10, 0);        // the gun
+  g.generateTexture(G.tex, W * S, H * S);
+  g.destroy();
+  G.pivot = [(pad - x0) * S, (pad - y0) * S];        // the grip, in texture px
+}
+
+class AimRig {
+  constructor(scene, p) {
+    const hero = p._hero, m = hero.art.aim, pre = hero.pre + '_';
+    this.scene = scene; this.p = p; this.m = m; this.pre = pre;
+    this.showing = false; this.idx = 0; this._gunId = ''; this._tint = '';
+    const img = key => scene.add.image(0, 0, pre + key).setOrigin(0, 0);
+    this.torso = img(m.torso.key).setPosition(m.torso.at[0], m.torso.at[1]);
+    // the head turns about the neck, so the neck is its origin
+    this.head = img(m.head.key);
+    this.head.setOrigin(-m.head.at[0] / this.head.width, -m.head.at[1] / this.head.height)
+             .setPosition(m.neck[0], m.neck[1]);
+    this.arm = img(m.arms[0].key);
+    this.gun = scene.add.image(0, 0, 'gun_pistol');
+    this.c = scene.add.container(0, 0, [this.torso, this.head, this.gun, this.arm]).setVisible(false);
+    // Just above its own legs and below everything the brothers can stand
+    // among: the other brother is 9.5, the first is 10, so P2's rig (9.75)
+    // never draws over P1's legs. Set once — a depth change re-sorts the scene.
+    this.c.setDepth(p.depth + 0.25);
+    this.parts = [this.torso, this.head, this.gun, this.arm];
+    this.hx = 0; this.hy = 0; this.sx = 1; this.sy = 1; this.face = 1;
+    this.X = 0; this.Y = 0;
+    // (his brother leaving destroys the sprite and nothing else would)
+    p.once(Phaser.GameObjects.Events.DESTROY, () => this.destroy());
+  }
+
+  // The arm frame nearest an angle (degrees, up positive, relative to
+  // facing). A little sticky, so a stick that wobbles across the line between
+  // two frames does not flicker between them.
+  frameAt(ang) {
+    const m = this.m, n = m.arms.length;
+    const i = Math.max(0, Math.min(n - 1, Math.round((ang + 90) / m.step)));
+    const cur = m.arms[this.idx];
+    if (i !== this.idx && cur && Math.abs(ang - cur.ang) < m.step / 2 + 1.5) return this.idx;
+    return i;
+  }
+
+  // Place the whole rig for this frame. `st` is the aim state; returns whether
+  // it is showing. Run after the physics has moved the sprite.
+  update(st, G) {
+    const p = this.p, m = this.m, pre = this.pre, c = this.c;
+    const tk = p.texture && p.texture.key;
+    const k = tk && tk.indexOf(pre + 'aim') === 0 ? tk.slice(pre.length) : '';
+    const hip = k ? m.hips[k] : null;
+    if (!hip || !p.visible || !p.active || !st || !st.active) {
+      if (this.showing) { c.setVisible(false); this.showing = false; }
+      return false;
+    }
+    const west = k.charAt(k.indexOf('_') - 1) === 'W';
+    this.hx = hip[0]; this.hy = hip[1]; this.face = west ? -1 : 1;
+    this.sx = Math.abs(p.scaleX); this.sy = Math.abs(p.scaleY);
+    this.X = p.x + (this.hx - p.displayOriginX) * this.sx;
+    this.Y = p.y + (this.hy - p.displayOriginY) * this.sy;
+    c.setPosition(this.X, this.Y).setScale(this.sx * this.face, this.sy)
+     .setAlpha(p.alpha).setVisible(true);
+    // the arm, the head that follows it, and the gun in its hand
+    const i = this.frameAt(st.cur), a = m.arms[i];
+    if (i !== this.idx || !this._armSet) {
+      this.idx = i; this._armSet = true;
+      this.arm.setTexture(pre + a.key).setPosition(a.at[0], a.at[1]);
+    }
+    const hp = m.headPitch, pitch = Math.max(hp[1], Math.min(hp[2], hp[0] * a.ang));
+    this.head.setRotation(-pitch * D2R);
+    if (G && this._gunId !== G.tex) {
+      this._gunId = G.tex;
+      this.gun.setTexture(G.tex).setOrigin(G.pivot[0] / this.gun.width, G.pivot[1] / this.gun.height)
+              .setScale(1 / AIM_SS);
+    }
+    this.gun.setPosition(a.grip[0], a.grip[1]).setRotation(-a.ang * D2R)
+            .setAlpha(Math.max(0, Math.min(1, (st.cur + 84) / 30)));
+    // whatever the sprite is doing to itself — a hit flash (a flat fill), acid,
+    // the red wash of being down — the layers do too
+    const tint = p.isTinted ? (p.tintFill ? 'f' : 't') + p.tintTopLeft : '';
+    if (tint !== this._tint) {
+      this._tint = tint;
+      this.parts.forEach(o => {
+        if (!tint) o.clearTint();
+        else if (p.tintFill) o.setTintFill(p.tintTopLeft);
+        else o.setTint(p.tintTopLeft);
+      });
+    }
+    this.showing = true;
+    return true;
+  }
+
+  // Where the end of the barrel is in the world RIGHT NOW: the sprite has
+  // moved since the rig was last placed, and the arm is wherever `st` says.
+  muzzle(G, st) {
+    const p = this.p, a = this.m.arms[st ? this.frameAt(st.cur) : this.idx];
+    const r = -a.ang * D2R, cs = Math.cos(r), sn = Math.sin(r);
+    const lx = a.grip[0] + G.muzzle[0] * cs - G.muzzle[1] * sn;
+    const ly = a.grip[1] + G.muzzle[0] * sn + G.muzzle[1] * cs;
+    const X = p.x + (this.hx - p.displayOriginX) * this.sx, Y = p.y + (this.hy - p.displayOriginY) * this.sy;
+    return { x: X + lx * this.sx * this.face, y: Y + ly * this.sy, X, Y };
+  }
+
+  destroy() { if (this.c && this.c.scene) this.c.destroy(); this.showing = false; }
 }
 
 // ------------------------------------------------------------------ //
@@ -1637,6 +1840,9 @@ class BootScene extends Phaser.Scene {
   }
 
   _makeEffectTextures() {
+    // the weapons in his hand — black shapes until they have art
+    Object.keys(GUNS).forEach(id => makeGunTexture(this, id));
+
     // bullet tracer
     let g = this.make.graphics({ add: false });
     g.fillStyle(0xf2b13c, 0.55); g.fillRect(0, 0, 18, 5);
@@ -1699,6 +1905,16 @@ class BootScene extends Phaser.Scene {
     g.fillEllipse(16, 5, 30, 9);
     g.fillStyle(0x9ee63a, 0.9); g.fillEllipse(13, 4, 13, 5);
     g.generateTexture('acid_splat', 32, 10);
+    g.destroy();
+
+    // aiming reticle: a thin ring with a dot
+    g = this.make.graphics({ add: false });
+    g.lineStyle(3, 0xffe9b0, 0.95); g.strokeCircle(24, 24, 15);
+    g.fillStyle(0xffe9b0, 1); g.fillCircle(24, 24, 3);
+    g.lineStyle(3, 0xffe9b0, 0.95);
+    g.lineBetween(24, 2, 24, 9); g.lineBetween(24, 39, 24, 46);
+    g.lineBetween(2, 24, 9, 24); g.lineBetween(39, 24, 46, 24);
+    g.generateTexture('reticle', 48, 48);
     g.destroy();
 
     // muzzle flash (two sizes)
@@ -3740,6 +3956,7 @@ function playOnce(p, action, facing) {
   const intro = ACTION_INTRO[action];
   const introKey = heroHas(hero, intro) ? heroAnim(hero, intro, f) : null;
   if (p.anims.nextAnimsQueue) p.anims.nextAnimsQueue.length = 0;
+  p.anims.timeScale = 1;          // (the aimed stride slows itself; nothing else should inherit that)
   let ms = 0;
   if (introKey && p.scene.anims.exists(introKey)) {
     p.play(introKey); p.chain(key);
@@ -3757,6 +3974,7 @@ function playAction(p, hero, action, facing) {
   const key = heroAnim(hero, act, facing);
   const intro = ACTION_INTRO[act];
   const introKey = heroHas(hero, intro) ? heroAnim(hero, intro, facing) : null;
+  p.anims.timeScale = 1;
   if (introKey && p._curAction !== act && p.scene.anims.exists(introKey)) {
     p.play(introKey);
     p.chain(key);
@@ -3852,11 +4070,26 @@ const PAD_AIM = 0.5;
 // and a repeating Y would cycle weapons while you held it.
 const PAD_REPEAT_DELAY = 400, PAD_REPEAT_EVERY = 120;
 
+// The right stick as a direction and how far it is pushed. Inside the drift
+// zone it is nothing at all, so a stick that does not quite centre never points
+// the gun.
+function stickVec(out, rx, ry) {
+  const m = Math.hypot(rx, ry);
+  if (m < 0.2) { out.x = 0; out.y = 0; out.mag = 0; out.on = false; out._on = false; return out; }
+  out.x = rx / m; out.y = ry / m; out.mag = Math.min(1, m);
+  // "aiming" latches on at AIM_STICK and off a little lower, so a thumb resting
+  // on the line does not chatter
+  out._on = out._on ? m > AIM_STICK - 0.1 : m > AIM_STICK;
+  out.on = out._on;
+  return out;
+}
+
 const Pad = {
   connected: false,
   id: '',
   mapping: '',
-  rsUp: false,          // right stick pushed up — the 45-degree shot
+  rsUp: false,          // right stick pushed up — the 45-degree shot (the sandbox)
+  aim: { x: 0, y: 0, mag: 0, on: false, _on: false },   // the right stick as a direction (y down), how far, and whether it means aim
   axes: [0, 0, 0, 0],
   buttons: [],
   _held: {},            // key name -> true while the pad is holding it
@@ -3894,6 +4127,7 @@ const Pad = {
     this._held = {};
     this._repeatAt = {};
     this.rsUp = false;
+    stickVec(this.aim, 0, 0);
   },
 
   update(now) {
@@ -3930,7 +4164,12 @@ const Pad = {
 
     // Right stick is the one thing that cannot be a key: it has to stay analog
     // so it can be gated to the pistol downstream.
-    this.rsUp = ax(3) < -PAD_AIM && Math.hypot(ax(2), ax(3)) > PAD_AIM;
+    // Only a standard-mapping pad has its right stick on axes 2 and 3; on
+    // others axis 2 is often a trigger resting at -1, which would read as a
+    // hard-left aim forever.
+    const std = gp.mapping === 'standard';
+    this.rsUp = std && ax(3) < -PAD_AIM && Math.hypot(ax(2), ax(3)) > PAD_AIM;
+    stickVec(this.aim, std ? ax(2) : 0, std ? ax(3) : 0);
 
     for (const k in want) {
       if (!this._held[k]) {
@@ -3966,9 +4205,16 @@ function padWake() {
 // ---- what player 1 is holding ----------------------------------------------
 // A real key press is the keyboard; the pad types synthetic ones, which are
 // not isTrusted. Prompts show keys or buttons to match.
-const InputMode = { p1: 'kb' };
+const InputMode = { p1: 'kb', mouseAt: -1e9 };
 if (typeof window !== 'undefined') {
   window.addEventListener('keydown', e => { InputMode.p1 = e.isTrusted ? 'kb' : 'pad'; }, true);
+  // When the mouse last did something (performance.now clock), for aiming: a
+  // keyboard player's mouse aims for good; a pad player's only for a moment
+  // after they touch it. A twitch of the wrist does not count.
+  window.addEventListener('mousemove', e => {
+    if (e.isTrusted && Math.abs(e.movementX) + Math.abs(e.movementY) >= 2) InputMode.mouseAt = performance.now();
+  }, { capture: true, passive: true });
+  window.addEventListener('mousedown', () => { InputMode.mouseAt = performance.now(); }, { capture: true, passive: true });
 }
 
 // A button prompt in ATOMHOWL's colours. On a keyboard: the key's name in an
@@ -4040,6 +4286,7 @@ const P2_MAP = {
 const P2_KEYS = ['W', 'A', 'S', 'D', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'SPACE', 'SHIFT', 'Q', 'E', 'K', 'F', 'G', 'BACK'];
 const P2Pad = {
   connected: false, keys: {}, joinReq: false, leaveReq: false, _lostAt: 0,
+  aim: { x: 0, y: 0, mag: 0, on: false, _on: false },   // his right stick, as Pad.aim is player 1's
   // Which pad is player 2's, once the game has decided (the co-op select
   // screen, and co-op play). With one controller the keyboard is player 1 and
   // the controller is player 2; with two or more, controller 1 is player 1 and
@@ -4083,6 +4330,7 @@ const P2Pad = {
         this.connected = false;
         this._lostAt = now;
         P2_KEYS.forEach(n => { const k = this.keys[n]; k.isDown = false; k.isUp = true; });
+        stickVec(this.aim, 0, 0);
       }
       return;
     }
@@ -4093,6 +4341,8 @@ const P2Pad = {
       if (b && (b.pressed || b.value > 0.5)) want[P2_MAP[i]] = true;
     }
     const ax = i => gp.axes[i] || 0;
+    const std = gp.mapping === 'standard';
+    stickVec(this.aim, std ? ax(2) : 0, std ? ax(3) : 0);
     const lat = (v, n) => (this.keys[n].isDown ? v > PAD_RELEASE : v > PAD_LATCH);
     if (lat(-ax(0), 'LEFT'))  want.LEFT = true;
     if (lat( ax(0), 'RIGHT')) want.RIGHT = true;
@@ -4111,6 +4361,7 @@ const P2Pad = {
   }
 };
 window.P2Pad = P2Pad;
+window.GUNS = GUNS;               // (the tests hold a gun up by lengthening its hold)
 
 const PadHUD = {
   on: false, scene: null, box: null, txt: null, _hideAt: 0,
@@ -4187,7 +4438,7 @@ const PadHUD = {
       L.push('L stick ' + f(Pad.axes[0] || 0) + ' , ' + f(Pad.axes[1] || 0) +
              '   -> move / crouch');
       L.push('R stick ' + f(Pad.axes[2] || 0) + ' , ' + f(Pad.axes[3] || 0) +
-             '   -> 45' + String.fromCharCode(176) + ' aim ' + (Pad.rsUp ? '** ON **' : '(push up)'));
+             '   -> aim ' + (Pad.aim.mag > AIM_STICK ? '** ON **' : '(push it)'));
       L.push('');
       L.push('holding: ' + (Object.keys(Pad._held).join(' ') || '-'));
     }
@@ -4326,6 +4577,10 @@ function driveWalker(scene, p, keys, onGround) {
                  !!(p._real && hero0 && heroHas(hero0, 'crouch'));
   if (crouch !== !!p._crouching) setWalkerCrouch(p, crouch);
   if (crouch) move = 0;
+  // Free aim: a raised gun turns him to the side it points at, whichever way
+  // he is walking; the stage supplies the input (mouse, stick).
+  const aim = scene._aimTick ? scene._aimTick(p, keys, crouch, move) : null;
+  if (aim) p._facing = aim.face;
   const sprint = !crouch && !!(keys.SHIFT && keys.SHIFT.isDown) &&
                  !(scene.cfg && scene.cfg.noSprint);
   const dt = Math.min(0.05, ((scene.game && scene.game.loop.delta) || 16.7) / 1000);
@@ -4337,6 +4592,7 @@ function driveWalker(scene, p, keys, onGround) {
   if (canDash && !crouch && keys.Q && Phaser.Input.Keyboard.JustDown(keys.Q) &&
       now >= (p._dashReadyAt || 0) && (onGround || !p._airDashUsed)) {
     p._dashDir = move || p._facing || 1;
+    p._facing = p._dashDir;            // the dash art faces the way he goes, whichever way he was aiming
     p._dashUntil = now + WDASH_MS;
     p._dashReadyAt = now + WDASH_MS + WDASH_COOL;
     p._dashGhostAt = 0;
@@ -4448,7 +4704,7 @@ function driveWalker(scene, p, keys, onGround) {
   // Left standing long enough he finds something to do with his hands —
   // Eterwolf the guitar off his back, Wolffel a burger out of his side pocket.
   // Each character names its own and how long it takes to get bored.
-  if (moving || !onGround) {
+  if (moving || !onGround || aim) {
     p._restSince = 0; p._longIdleDone = false; p._idleLooped = false;
   }
   else if (!p._restSince) p._restSince = now;
@@ -4487,6 +4743,10 @@ function driveWalker(scene, p, keys, onGround) {
     // up for a moment after the last shot rather than dropping his arm at once.
     const gunUp = now < (p._gunUntil || 0);
     const want = dashing ? 'dash'
+               : aim ? (p._crouching ? 'aimcrouch'
+                        : airborne ? 'aimair'
+                        : moving ? (p.body.velocity.x * p._facing < 0 ? 'aimrunB' : 'aimrun')
+                        : 'aimidle')
                : p._crouching ? 'crouch'
                : airborne ? airAction(hero, p.body.velocity.y, p)
                : now < (p._landUntil || 0) ? 'land'
@@ -4495,7 +4755,25 @@ function driveWalker(scene, p, keys, onGround) {
                : idlePose(hero, p._restSince, now, p._longIdleDone, allowLong,
                            p._idleLooped);
     const key = heroAnim(hero, want, p._facing);
-    if (p._curAnim !== key) { playAction(p, hero, want, p._facing); p._curAnim = key; }
+    if (p._curAnim !== key) {
+      // Turning round mid-stride (or backing away) swaps E for W, or forwards
+      // for backwards, and would restart the run at its first frame: keep the
+      // stride where it was.
+      const was = p.anims.currentAnim, fr = p.anims.currentFrame;
+      const stride = want.indexOf('aimrun') === 0 && /-aimrun/.test(String(p._curAnim)) && was && fr;
+      let at = 0;
+      if (stride) {
+        const i = fr.index - 1, n = was.frames.length;
+        at = (/aimrunB/.test(p._curAnim)) !== (want === 'aimrunB') ? n - 1 - i : i;
+      }
+      playAction(p, hero, want, p._facing);
+      if (at) p.anims.setCurrentFrame(p.anims.currentAnim.frames[at]);
+      p._curAnim = key;
+    }
+    // The aimed stride is the sprint, slowed to the pace he is moving at.
+    const ts = (want === 'aimrun' || want === 'aimrunB')
+      ? Phaser.Math.Clamp(Math.abs(p.body.velocity.x) / (RUN_SPEED * k), 0.5, 1.15) : 1;
+    if (p.anims.timeScale !== ts) p.anims.timeScale = ts;
   } else {
     if (!onGround) p.play('hero-air', true);
     else if (moving) p.play('hero-run', true);
@@ -5774,10 +6052,16 @@ class WalkScene extends Phaser.Scene {
 
   buildWalk(cfg) {
     this.cfg = cfg;
-    if (!this._shiftHooked) {
-      this._shiftHooked = true;
-      this.events.on('postupdate', () => { heroShift(this.player); heroShift(this.player2); });
+    // Arcade puts the sprites where their bodies are on POST_UPDATE, and
+    // re-registers that on every scene start; scene listeners survive a
+    // restart. So this is taken off and put back on every build, to run
+    // AFTER the physics has moved everyone — or the aim rig, which hangs off
+    // the sprite's position, trails its legs by a step on every re-entry.
+    if (!this._postHook) {
+      this._postHook = () => { heroShift(this.player); heroShift(this.player2); this._aimSync(); };
     }
+    this.events.off('postupdate', this._postHook);
+    this.events.on('postupdate', this._postHook);
     // Scenes are reused, so a hold left on by the last run (a restart during
     // a scripted beat) would start this one with the player frozen.
     this._holdInput = false;
@@ -6422,7 +6706,7 @@ class WalkScene extends Phaser.Scene {
     if (!cfg.noJump) parts.push(pad ? 'A JUMP' : 'W JUMP');
     parts.push(pad ? 'DOWN CROUCH' : 'S CROUCH', pad ? 'Y USE' : 'E USE');
     if (armedWithBlade()) parts.push(pad ? 'X SWORD' : 'F SWORD');
-    if (GameState.hasPistol) parts.push(pad ? 'RT SHOOT' : 'LMB / K SHOOT');
+    if (GameState.hasPistol) parts.push(pad ? 'R STICK AIM   RT SHOOT' : 'MOUSE AIM   LMB / K SHOOT');
     if (this.grenadesOf && this.player && this.grenadesOf(this.player) > 0) parts.push(pad ? 'LT GRENADE' : 'G GRENADE');
     if (!pad) parts.push('N MUTE');
     return parts.join(sep);
@@ -7129,8 +7413,19 @@ const WalkCombat = {
     // A left click is a shot only if it did not land on a button — SKIP, the
     // cast switch — which would otherwise fire as well as press.
     this._ptrFire = false;
-    this.input.on('pointerdown', (ptr, over) => { this._ptrFire = ptr.button === 0 && !over.length; });
-    this.input.on('pointerup', () => { this._ptrFire = false; });
+    // Only the LEFT button fires — and only the left button's going down or up
+    // changes that, so a sword swing on the right button in the middle of a
+    // burst does not let go of the trigger.
+    this.input.on('pointerdown', (ptr, over) => {
+      if (ptr.button !== 0) return;
+      this._ptrFire = !over.length;
+      // a click shorter than a frame still fires once
+      this._ptrLatch = this._ptrFire ? this.time.now + 90 : 0;
+    });
+    this.input.on('pointerup', ptr => { if (ptr.button === 0) this._ptrFire = false; });
+    this._ptrLatch = 0;
+    this._cursorHidden = false;
+    this._reticle = null;
     this.onPistol = null;
     alienClips(this);
   },
@@ -7545,27 +7840,79 @@ const WalkCombat = {
 
   // ---- the pistol ------------------------------------------------------
   // LMB or K, once it is yours, in any walking stage — the same as the blades.
+  // Both brothers fire through _gunTry; only the input differs.
   _updateGun(now) {
-    if (!GameState.hasPistol || this._dead || this._holdInput || this._transitioning ||
-        this._inConversation || this._editorMode || this.player._down || this.player._crouching) return;
+    const p = this.player;
+    if (!this._gunCan(p)) return;
     const ptr = this.input.activePointer;
-    const mouse = ptr.isDown && ptr.button === 0 && this._ptrFire;
+    const mouse = this._mouseFiring();
     const firing = mouse || (this.keys.K && this.keys.K.isDown);
     if (!firing) return;
-    const p = this.player;
-    // standing still, the mouse says which way he points it
-    if (mouse && Math.abs(p.body.velocity.x) < 20) {
-      const wx = ptr.positionToCamera(this.cameras.main).x;
-      p._facing = wx >= p.x ? 1 : -1;
+    // Art without the aim rig keeps the old flat shot: never while crouched,
+    // and the mouse says which way he stands to it.
+    if (!this._aimCapable(p)) {
+      if (p._crouching) return;
+      if (mouse && Math.abs(p.body.velocity.x) < 20) {
+        const wx = ptr.positionToCamera(this.cameras.main).x;
+        p._facing = wx >= p.x ? 1 : -1;
+      }
+      p._gunUntil = now + 520;
     }
-    p._gunUntil = now + 520;
-    if (now < this._nextFireAt || now < (p._swingUntil || 0)) return;
-    this._nextFireAt = now + PISTOL_CD;
-    this.fireBullet(now);
+    this._gunTry(p, now);
+  },
+
+  // The left button is held (or was, a moment ago: a click can be shorter
+  // than a frame, and it still has to fire).
+  _mouseFiring() {
+    const ptr = this.input.activePointer;
+    return !!((this._ptrFire && (ptr.buttons & 1) !== 0) || this.time.now < (this._ptrLatch || 0));
+  },
+
+  // Fire if the gun is up and on its mark and its cooldown is over.
+  _gunTry(p, now) {
+    if (now < (p._nextFireAt || 0) || now < (p._swingUntil || 0)) return;
+    const G = this._gunOf(p);
+    if (this._aimCapable(p)) {
+      const st = p._aim;
+      // Only with the gun actually in his hand and on the mark: the arm may
+      // still be swinging up, or something else (a reach, a dash, a hit) may
+      // own the sprite for the moment — and then nothing leaves the barrel.
+      if (!st || !st.active || !st.ready || !this._rigLive(p)) return;
+      p._nextFireAt = now + G.cd;
+    } else p._nextFireAt = now + PISTOL_CD;
+    this.fireBullet(now, p);
   },
 
   fireBullet(now, who) {
     const p = who || this.player, hero = p._hero, face = p._facing || 1;
+    const G = this._gunOf(p) || GUNS.pistol;
+    const rig = p._aimRig, st = p._aim;
+    // ---- aimed: out of the end of the barrel, along the angle it is at ----
+    if (this._aimCapable(p)) {
+      if (!(rig && rig.showing && st && st.active)) return;
+      const mz = rig.muzzle(G, st);
+      const a = st.cur * D2R + (Math.random() - 0.5) * G.spread;
+      const f = rig.face, dx = f * Math.cos(a), dy = -Math.sin(a);
+      const k = this.charH / 146;
+      const rot = Math.atan2(dy, dx);
+      Sfx.ensure(); Sfx[G.sfx || 'pistol']();
+      const b = this.add.image(mz.x, mz.y, 'bullet').setDepth(11).setScale(k).setRotation(rot)
+        .setBlendMode(Phaser.BlendModes.ADD);
+      b._vx = dx * G.speed * this.charH; b._vy = dy * G.speed * this.charH;
+      b._born = now; b._life = G.life; b._dmg = G.dmg;
+      // The first step is tested from his shoulder, not from the muzzle, or an
+      // alien already on top of him sits between the two and every round misses.
+      b._x0 = mz.X + f * rig.m.shoulder[0] * rig.sx; b._y0 = mz.Y + rig.m.shoulder[1] * rig.sy;
+      this.bullets.push(b);
+      const fl = this.add.image(mz.x, mz.y, 'flash_0').setDepth(12).setScale(0.7 * k).setRotation(rot)
+        .setBlendMode(Phaser.BlendModes.ADD);
+      this.tweens.add({ targets: fl, alpha: 0, scale: 0.4 * k, duration: 60,
+                        onComplete: () => fl.destroy() });
+      this.cameras.main.shake(28, 0.0009);
+      this._sortNew();
+      return;
+    }
+    // ---- art without the aim rig: the old flat shot ----
     const sx = Math.abs(p.scaleX), sy = Math.abs(p.scaleY);
     let mx = p.x + face * 0.25 * this.charH, my = p.y - 0.15 * this.charH;
     const art = hero && hero.art;
@@ -7581,11 +7928,9 @@ const WalkCombat = {
     const k = this.charH / 146;          // the combat scene's tracer, at this scale
     const b = this.add.image(mx, my, 'bullet').setDepth(11).setScale(k)
       .setBlendMode(Phaser.BlendModes.ADD).setFlipX(face < 0);
-    b._vx = face * 7.2 * this.charH;
-    b._born = now;
-    // The first step is tested from him, not from the muzzle, or an alien
-    // already on top of him sits between the two and every round misses it.
-    b._x0 = p.x;
+    b._vx = face * 7.2 * this.charH; b._vy = 0;
+    b._born = now; b._life = 1100; b._dmg = PISTOL_DMG;
+    b._x0 = p.x; b._y0 = my;
     this.bullets.push(b);
     const fl = this.add.image(mx, my, 'flash_0').setDepth(12).setScale(k)
       .setBlendMode(Phaser.BlendModes.ADD);
@@ -7594,46 +7939,88 @@ const WalkCombat = {
     this.cameras.main.shake(28, 0.0009);
   },
 
-  // Moved by hand and tested along the whole step, so a round fired at a
-  // slow frame rate cannot jump clean over something thin.
+  // Anything just added to a scene with a second (HUD) camera draws on both
+  // until it has been sorted onto one.
+  _sortNew() { if (this.hudCam) this._sortCams(); },
+
+  // Moved by hand and tested along the whole step — a segment, since a round
+  // can leave at any angle — against the level, the aliens and the flyers,
+  // taking whichever it reaches first. A round at a slow frame rate cannot
+  // jump clean over something thin, and one fired down at an alien hits the
+  // alien before the floor under it.
   _updateBullets(now, dt) {
+    const solids = this.solidsW || [], top = (this.bgGeom ? this.bgGeom.y : 0) - 40;
+    const wh = (this.cfg && this.cfg.worldH) || 720;
     this.bullets = this.bullets.filter(b => {
       if (!b.active) return false;
-      const px = b._x0 != null ? b._x0 : b.x;
-      b._x0 = null;
-      b.x += b._vx * dt;
-      if (now - b._born > 1100 || b.x < -40 || b.x > this.worldW + 40) { b.destroy(); return false; }
-      const lo = Math.min(px, b.x), hi = Math.max(px, b.x);
+      const px = b._x0 != null ? b._x0 : b.x, py = b._y0 != null ? b._y0 : b.y;
+      b._x0 = null; b._y0 = null;
+      b.x += b._vx * dt; b.y += (b._vy || 0) * dt;
+      if (now - b._born > (b._life || 1100) || b.x < -40 || b.x > this.worldW + 40 ||
+          b.y < top || b.y > wh + 60) { b.destroy(); return false; }
+      const dx = b.x - px, dy = b.y - py;
+      let best = null;
+      const take = (t, kind, o) => { if (!best || t < best.t) best = { t, kind, o }; };
+      // the level: a round stops on a face that is solid from the way it comes
+      // (a ledge you can jump up through is not a wall to a bullet from below)
+      for (const o of solids) {
+        const bd = o.body;
+        if (!bd || !bd.enable) continue;
+        const h = segBox(px, py, dx, dy, bd.x, bd.y, bd.x + bd.width, bd.y + bd.height);
+        // Starting inside it: that is a one-way ledge he stands under (they
+        // run 420px deep), which a bullet leaves rather than hits.
+        if (!h || h.axis < 0) continue;
+        const c = bd.checkCollision || { up: true, down: true, left: true, right: true };
+        const solid = h.axis === 0 ? (dx > 0 ? c.left : c.right) : (dy > 0 ? c.up : c.down);
+        if (solid) take(h.t, 'solid', o);
+      }
       for (const z of this.enemies) {
         if (!z.active || !z._alive) continue;
-        const zb = z.body;
-        if (hi < zb.left || lo > zb.right || b.y < zb.top || b.y > zb.bottom) continue;
-        b.destroy();
-        this.hitEnemy(z, PISTOL_DMG, b._vx > 0 ? 1 : -1, false);
-        return false;
+        const zb = z.body, h = segBox(px, py, dx, dy, zb.left, zb.top, zb.right, zb.bottom);
+        if (h) take(h.t, 'enemy', z);
       }
+      const len = Math.hypot(dx, dy), N = Math.max(2, Math.ceil(len / 6));
       for (const f of (this.flyers || [])) {
         if (!f._alive) continue;
-        let hit = false;
-        for (let k = 0; k <= 4 && !hit; k++) hit = this._flyerHit(f, lo + (hi - lo) * k / 4, b.y);
-        if (!hit) continue;
-        b.destroy();
-        this.hitFlyer(f, PISTOL_DMG, b._vx > 0 ? 1 : -1, 'bullet');
-        return false;
+        for (let k = 0; k <= N; k++) {
+          if (this._flyerHit(f, px + dx * k / N, py + dy * k / N)) { take(k / N, 'flyer', f); break; }
+        }
       }
-      return true;
+      if (!best) return true;
+      const dmg = b._dmg || PISTOL_DMG, dir = b._vx >= 0 ? 1 : -1;
+      const hx = px + dx * best.t, hy = py + dy * best.t;
+      b.destroy();
+      if (best.kind === 'enemy') this.hitEnemy(best.o, dmg, dir, false);
+      else if (best.kind === 'flyer') this.hitFlyer(best.o, dmg, dir, 'bullet');
+      else {
+        this._bulletSpark(hx, hy);
+        if (this.onBulletHitSolid) this.onBulletHitSolid(b, best.o);
+      }
+      return false;
     });
   },
 
+  _bulletSpark(x, y) {
+    const k = this.charH / 146;
+    const fl = this.add.image(x, y, 'flash_1').setDepth(12).setScale(0.8 * k)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    this.tweens.add({ targets: fl, alpha: 0, scale: 0.3 * k, duration: 90,
+                      onComplete: () => fl.destroy() });
+    this._sortNew();
+  },
+
   // ---- the pistol it drops -------------------------------------------
-  // pistol on floor.png, lying where it landed — a pistol's size, not a
-  // pickup's: about a hand and a half long next to him.
+  // pistol sprite.png — the side view — lying where it landed: a pistol's
+  // size, not a pickup's, about a hand and a half long next to him. (It was
+  // the three-quarter view, pistol on floor.png, which is not what he then
+  // picks up and holds.)
   dropPistol(x) {
-    const key = this.textures.exists('scene_pistolfloor') ? 'scene_pistolfloor' : 'gun_pickup';
+    const key = this.textures.exists('scene_pistolsprite') ? 'scene_pistolsprite'
+              : this.textures.exists('scene_pistolfloor') ? 'scene_pistolfloor' : 'gun_pickup';
     x = Phaser.Math.Clamp(x, 60, this.worldW - 60);
     const y = this.groundY;
     const gun = this.add.image(x, y - 0.5 * this.charH, key).setDepth(9);
-    const art = key === 'scene_pistolfloor' ? paintedBox(this, key) : null;
+    const art = key.indexOf('scene_') === 0 ? paintedBox(this, key) : null;
     const want = 0.24 * (this.pxPerM || 144);
     if (art) {
       gun.setOrigin((art.x0 + art.pw / 2) / art.w, (art.y1 + 1) / art.h);
@@ -7660,6 +8047,7 @@ const WalkCombat = {
     this.tweens.killTweensOf([g.gun, g.glint]);
     g.gun.destroy(); g.glint.destroy();
     GameState.hasPistol = true;
+    this._refreshHint();
     this._reach(p, g.x);
     Sfx.ensure(); Sfx.select();
     this.cameras.main.flash(240, 255, 226, 170);
@@ -7682,7 +8070,7 @@ const WalkCombat = {
       fontFamily: 'Courier New, monospace', fontSize: '24px', color: '#f2b13c',
       stroke: '#0d0a08', strokeThickness: 5
     }).setOrigin(0.5).setScrollFactor(0).setDepth(91));
-    grp.push(this.add.text(640, 424, 'LMB  or  K  to fire', {
+    grp.push(this.add.text(640, 424, 'AIM  MOUSE / RIGHT STICK   ·   FIRE  LMB / K / RT', {
       fontFamily: 'Courier New, monospace', fontSize: '15px', color: '#d9c7a8'
     }).setOrigin(0.5).setScrollFactor(0).setDepth(91));
     grp.forEach(o => o.setAlpha(0));
@@ -7706,6 +8094,235 @@ const WalkCombat = {
   }
 };
 Object.assign(WalkScene.prototype, WalkCombat);
+
+// Where the segment (x0,y0)+(dx,dy)*t, t in 0..1, first meets the rectangle:
+// { t, axis } with axis 0 for a vertical face (x), 1 for a horizontal one (y),
+// -1 if it starts inside. Null if it never does. (Liang-Barsky.)
+function segBox(x0, y0, dx, dy, l, t, r, b) {
+  let t0 = 0, t1 = 1, axis = -1;
+  if (dx === 0) { if (x0 < l || x0 > r) return null; }
+  else {
+    let a = (l - x0) / dx, c = (r - x0) / dx;
+    if (a > c) { const q = a; a = c; c = q; }
+    if (a > t0) { t0 = a; axis = 0; }
+    if (c < t1) t1 = c;
+    if (t0 > t1) return null;
+  }
+  if (dy === 0) { if (y0 < t || y0 > b) return null; }
+  else {
+    let a = (t - y0) / dy, c = (b - y0) / dy;
+    if (a > c) { const q = a; a = c; c = q; }
+    if (a > t0) { t0 = a; axis = 1; }
+    if (c < t1) t1 = c;
+    if (t0 > t1) return null;
+  }
+  return { t: t0, axis };
+}
+
+// ---- free aim: the walking stages' side of it ----------------------------
+// What the brothers point, how fast the arm follows, and the rig that draws it
+// (see AimRig, above). Both brothers go through the same code; only where the
+// aim comes from differs — the mouse or the right stick for player 1, the
+// second pad's right stick for player 2.
+const WalkAim = {
+  // The weapon he is carrying. Only the pistol is found in the walking stages,
+  // but everything downstream reads this descriptor and nothing else.
+  _gunOf(p) { return GameState.hasPistol ? (GUNS[p._gun || 'pistol'] || GUNS.pistol) : null; },
+
+  // Does this hero have the aim art at all? One without keeps the old flat shot.
+  _aimCapable(p) {
+    const h = p && p._hero;
+    return !!(h && p._real && h.art.aim && heroHas(h, 'aimidle') && this.textures.exists('gun_pistol'));
+  },
+
+  _aimSt(p) {
+    return p._aim || (p._aim = { cur: -90, tgt: 0, face: p._facing || 1, up: false, active: false,
+                                 ready: false, until: 0, wasUp: false, src: 'key' });
+  },
+  _aimOff(st) {
+    if (!st) return;
+    st.active = false; st.up = false; st.ready = false; st.wasUp = false;
+    st.cur = -90; st.until = 0;
+  },
+
+  // May he have a gun up at all right now? The same gates the trigger has, so
+  // a cutscene, a conversation or a fall takes it away.
+  _gunCan(p) {
+    return !!(p && p.active && p._real && !p._down && GameState.hasPistol &&
+              !this._dead && !this._holdInput && !this._transitioning &&
+              !this._inConversation && !this._editorMode);
+  },
+
+  // Is the sprite on one of the aim legs frames — the only frames the rig is
+  // drawn over? Anything else (a swing, a dash, a reach) owns him.
+  _onAimLegs(p) {
+    const h = p._hero, tk = p.texture && p.texture.key;
+    return !!(tk && h && h.art.aim && h.art.aim.hips[tk.slice(h.pre.length + 1)]);
+  },
+  // The gun is in his hand and nothing else has the sprite: it may fire.
+  _rigLive(p) {
+    const now = this.time.now;
+    return this._gunCan(p) && this._onAimLegs(p) && now >= (p._downUntil || 0) &&
+           now >= (p._swingUntil || 0) && now >= (p._dashUntil || 0) && now >= (p._knockUntil || 0);
+  },
+
+  // Is the mouse what aims? A keyboard player's always is, once it has moved;
+  // a pad player's only for a moment after they touch it. A pushed stick wins.
+  _mouseAimLive() {
+    const ptr = this.input.activePointer;
+    return ptr.moveTime > 0 && !(Pad.connected && Pad.aim.on) &&
+           (InputMode.p1 === 'kb' || performance.now() - InputMode.mouseAt < AIM_MOUSE_MS);
+  },
+
+  // The hip of the standing aim legs, in the world: where the rig hangs from
+  // before it has a frame of its own to hang from. Facing picks the side.
+  _aimHipAt(p, face) {
+    const m = p._hero.art.aim, sx = Math.abs(p.scaleX), sy = Math.abs(p.scaleY);
+    const hip = m.hips[face > 0 ? 'aimidle_0' : 'aimidleW_0'];
+    return { x: p.x + (hip[0] - p.displayOriginX) * sx, y: p.y + (hip[1] - p.displayOriginY) * sy, sx, sy };
+  },
+  // Where the end of the barrel would be for an arm at `ang`.
+  _aimMuzzleAt(p, face, ang, G) {
+    const m = p._hero.art.aim, H = this._aimHipAt(p, face);
+    const i = Math.max(0, Math.min(m.arms.length - 1, Math.round((ang + 90) / m.step))), a = m.arms[i];
+    const r = -a.ang * D2R, cs = Math.cos(r), sn = Math.sin(r);
+    const lx = a.grip[0] + G.muzzle[0] * cs - G.muzzle[1] * sn;
+    const ly = a.grip[1] + G.muzzle[0] * sn + G.muzzle[1] * cs;
+    return { x: H.x + face * lx * H.sx, y: H.y + ly * H.sy };
+  },
+
+  // Aim at a point in the world (the mouse). Sets which side he faces and the
+  // angle of the gun, worked out so the BARREL points at it rather than the
+  // shoulder — otherwise a round always passes to one side of the cursor.
+  _aimAtPoint(p, st, wx, wy, G) {
+    const m = p._hero.art.aim;
+    const H0 = this._aimHipAt(p, st.face || 1);
+    // a dead band over his body, or a cursor passing through him turns him
+    // round (and the camera, which leans the way he faces) every frame
+    if (Math.abs(wx - H0.x) > 0.1 * this.charH) st.face = wx > H0.x ? 1 : -1;
+    const face = st.face || 1, H = this._aimHipAt(p, face);
+    const sx = H.x + face * m.shoulder[0] * H.sx, sy = H.y + m.shoulder[1] * H.sy;
+    let a = Math.atan2(-(wy - sy), Math.max(0, (wx - sx) * face)) / D2R;
+    for (let i = 0; i < 2; i++) {
+      const mz = this._aimMuzzleAt(p, face, a, G);
+      const dx = (wx - mz.x) * face, dy = wy - mz.y;
+      if (Math.hypot(dx, dy) < 28 * H.sx) break;                    // too close to be worth it
+      a = Math.atan2(-dy, Math.max(0, dx)) / D2R;
+    }
+    st.tgt = Phaser.Math.Clamp(a, -90, 90);
+  },
+
+  // Called by driveWalker each frame, before it decides which way he faces and
+  // which animation plays. Returns the aim state while a gun is up (or still
+  // coming down), otherwise null.
+  _aimTick(p, keys, crouch, move) {
+    const G = this._gunOf(p), st = this._aimSt(p);
+    if (!G || !this._aimCapable(p) || !this._gunCan(p)) { this._aimOff(st); return null; }
+    const now = this.time.now;
+    // The sprite belongs to something else for the moment — a reach for a
+    // lever, a dash, a sword swing — and the gun waits.
+    if (now < (p._downUntil || 0) || now < (p._swingUntil || 0) ||
+        now < (p._dashUntil || 0) || now < (p._knockUntil || 0)) { this._aimOff(st); return null; }
+    const dt = Math.min(0.05, ((this.game && this.game.loop.delta) || 16.7) / 1000);
+    const isP1 = p === this.player;
+    const mouseDown = isP1 && this._mouseFiring();
+    const fire = mouseDown || !!(keys.K && keys.K.isDown);
+    const stk = isP1 ? Pad.aim : P2Pad.aim;
+    const stick = stk.on && (isP1 ? Pad.connected : P2Pad.connected);
+    const mouse = isP1 && !stick && (mouseDown || this._mouseAimLive());
+    if (fire || stick) st.until = now + G.hold;
+    st.up = now < st.until;
+    // ---- where it is being pointed ----
+    if (stick) {
+      // turning round takes a real push the other way, not a thumb wobbling
+      // across straight up
+      const sgn = stk.x >= 0 ? 1 : -1;
+      if (!st.face || (sgn !== st.face && Math.abs(stk.x) > 0.3)) st.face = sgn;
+      const raw = Math.atan2(-stk.y, Math.abs(stk.x)) / D2R;
+      st.tgt = st.src === 'stick' ? st.tgt + (raw - st.tgt) * (1 - Math.exp(-dt / 0.03)) : raw;
+      st.src = 'stick';
+    } else if (mouse) {
+      const w = this.input.activePointer.positionToCamera(this.cameras.main, this._pv || (this._pv = new Phaser.Math.Vector2()));
+      this._aimAtPoint(p, st, w.x, w.y, G);
+      st.src = 'mouse';
+    } else if (!st.wasUp) {
+      st.face = p._facing || st.face || 1; st.tgt = 0; st.src = 'key';       // straight ahead
+    } else if (move) st.face = p._facing || st.face;                      // K held, he turns with the keys
+    // ---- the arm follows ----
+    const goal = st.up ? (crouch ? 0 : st.tgt) : -90;      // crouched: level, and nothing else
+    const step = AIM_SLEW * dt;
+    st.cur += Math.max(-step, Math.min(step, goal - st.cur));
+    st.active = st.up || st.cur > AIM_DOWN;
+    st.ready = st.up && Math.abs(st.cur - goal) <= AIM_READY;
+    if (!st.active) { this._aimOff(st); return null; }
+    st.wasUp = st.up;
+    return st;
+  },
+
+  // Run after the scene has moved everyone and heroShift has run: hang the
+  // upper body on the legs frame that is showing.
+  _aimSync() {
+    [this.player, this.player2].forEach(p => {
+      if (!p || !p.active) return;
+      const hero = p._hero, art = hero && hero.art;
+      if (!art || !art.aim || !p._real) return;
+      const st = p._aim, G = this._gunOf(p);
+      const on = !!(st && st.active && G && this._gunCan(p));
+      let rig = p._aimRig;
+      if (on) {
+        if (!rig || !rig.c || !rig.c.scene) { rig = p._aimRig = new AimRig(this, p); this._sortNew(); }
+        if (rig.update(st, G)) return;
+      } else if (rig && rig.showing) rig.update(null);
+      // Legs with no body over them are not a pose: if the gun went away
+      // (a cutscene took over, a door) and nothing else set an animation, he
+      // goes back to standing.
+      if (p.visible && this._onAimLegs(p)) {
+        this._aimOff(st);
+        const f = p._facing || 1;
+        playAction(p, hero, 'idle', f);
+        p._curAnim = heroAnim(hero, 'idle', f);
+      }
+    });
+    this._aimReticle();
+  },
+
+  // What to aim with. The mouse gets a small ring where it points, on the
+  // screen rather than in the world so it stays its size and never lags the
+  // camera, and the arrow steps aside for it; a pushed stick gets a dot out
+  // along the barrel.
+  _aimReticle() {
+    const p = this.player, ptr = this.input.activePointer;
+    const canAim = !!(p && p.active && this._aimCapable(p) && this._gunCan(p));
+    const mouseOn = canAim && this._mouseAimLive();
+    const show = mouseOn && this.input.hitTestPointer(ptr).length === 0;   // not over SKIP or the cast switch
+    if (show) {
+      if (!this._reticle || !this._reticle.scene) {
+        this._reticle = this.add.image(0, 0, 'reticle').setScrollFactor(0).setDepth(62)
+          .setBlendMode(Phaser.BlendModes.ADD).setScale(0.75).setAlpha(0);
+        this._sortNew();
+      }
+      this._reticle.setPosition(ptr.x, ptr.y).setVisible(true).setAlpha(0.9);
+    } else if (this._reticle && this._reticle.visible) this._reticle.setVisible(false);
+    if (show !== this._cursorHidden) {
+      this._cursorHidden = show;
+      if (this.game.canvas) this.game.canvas.style.cursor = show ? 'none' : '';
+    }
+    const zoom = this.cameras.main.zoom || 1;
+    [this.player, this.player2].forEach(q => {
+      const s = q && q._aim, r = q && q._aimRig;
+      const on = !!(s && s.active && s.up && s.src === 'stick' && r && r.showing);
+      if (!on) { if (q && q._aimDot) q._aimDot.setVisible(false); return; }
+      if (!q._aimDot || !q._aimDot.scene) {
+        q._aimDot = this.add.image(0, 0, 'reticle').setDepth(60).setBlendMode(Phaser.BlendModes.ADD).setAlpha(0.75);
+        this._sortNew();
+      }
+      const a = s.cur * D2R, d = 2.2 * this.charH;
+      q._aimDot.setPosition(r.X + r.face * Math.cos(a) * d, r.Y - Math.sin(a) * d)
+        .setScale(0.6 / zoom).setVisible(true);
+    });
+  }
+};
+Object.assign(WalkScene.prototype, WalkAim);
 
 // ================================================================== //
 //  THE FLYER — the second creature                                    //
@@ -8610,12 +9227,10 @@ const Coop = {
     driveWalker(this, p2, k, b.blocked.down || b.touching.down);
     if (Phaser.Input.Keyboard.JustDown(k.F)) this.swingBlade(p2);
     if (Phaser.Input.Keyboard.JustDown(k.G)) this.throwGrenade(p2);
-    if (GameState.hasPistol && k.K.isDown && !this._inConversation && !p2._crouching) {
-      p2._gunUntil = now + 520;
-      if (now >= (p2._nextFireAt || 0) && now >= (p2._swingUntil || 0)) {
-        p2._nextFireAt = now + PISTOL_CD;
-        this.fireBullet(now, p2);
-      }
+    if (GameState.hasPistol && k.K.isDown && !this._inConversation &&
+        (this._aimCapable(p2) || !p2._crouching)) {
+      if (!this._aimCapable(p2)) p2._gunUntil = now + 520;
+      this._gunTry(p2, now);
     }
   },
 
@@ -8627,6 +9242,7 @@ const Coop = {
     this.tweens.killTweensOf(p);
     p.setAlpha(1); p.clearTint(); p.setVelocityX(0);
     p._gunUntil = 0; p._swingUntil = 0;
+    this._aimOff(p._aim);
     const hero = p._hero;
     // On the floor: his own fall, which ends lying down and holds there. He
     // stays where he fell until his player moves him (see _crawl). A
@@ -11775,6 +12391,10 @@ class EmbankmentScene extends WalkScene {
       r.fillStyle(0x6e6862, 1); r.fillRect(x + dx * m - s * m / 2, y - s * m * 0.8, s * m, 3);
     });
   }
+
+  // A round that stops on the girder (the level sweep in _updateBullets calls
+  // this for any solid it stops on) gets the girder's sparks and its line.
+  onBulletHitSolid(b, o) { if (o === this.girderBox) this._sparkGirder(); }
 
   // A blade or a round on it: sparks, and nothing else.
   _sparkGirder() {
