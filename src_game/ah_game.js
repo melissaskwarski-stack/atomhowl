@@ -1552,6 +1552,19 @@ function makeGunTexture(scene, id) {
   G.pivot = [(pad - x0) * S, (pad - y0) * S];        // the grip, in texture px
 }
 
+// The chest's key: an old brass one, ring, shaft and bit, drawn rather than
+// painted (64x26).
+function makeKeyTexture(scene) {
+  if (scene.textures.exists('emb_key')) return;
+  const g = scene.make.graphics({ add: false });
+  g.fillStyle(0x3a2608, 1); g.fillCircle(13, 13, 12); g.fillRect(20, 10, 40, 7); g.fillRect(44, 16, 5, 9); g.fillRect(53, 16, 6, 7);
+  g.fillStyle(0xc8962e, 1); g.fillCircle(13, 13, 10); g.fillRect(21, 11, 38, 5); g.fillRect(45, 16, 3, 8); g.fillRect(54, 16, 4, 6);
+  g.fillStyle(0x3a2608, 1); g.fillCircle(13, 13, 5);
+  g.fillStyle(0xfff0b0, 0.9); g.fillRect(9, 5, 5, 2); g.fillRect(24, 11, 22, 1);
+  g.generateTexture('emb_key', 64, 26);
+  g.destroy();
+}
+
 class AimRig {
   constructor(scene, p) {
     const hero = p._hero, m = hero.art.aim, pre = hero.pre + '_';
@@ -7417,7 +7430,10 @@ const WalkCombat = {
     this._wardUntil = 0;
     this._wardHud = null;
     this._wardRings = [];
+    this._furyUntil = 0;
+    this._furyHud = null;
     this.onFlyerKilled = null;
+    this.onFlyerHurt = null;
     this.hearts = null;
     this._combat = false;
     this._dead = false;
@@ -7895,7 +7911,7 @@ const WalkCombat = {
       // still be swinging up, or something else (a reach, a dash, a hit) may
       // own the sprite for the moment — and then nothing leaves the barrel.
       if (!st || !st.active || !st.ready || !this._rigLive(p)) return;
-      p._nextFireAt = now + G.cd;
+      p._nextFireAt = now + G.cd * (this.furyActive && this.furyActive() ? 0.5 : 1);
     } else p._nextFireAt = now + PISTOL_CD;
     this.fireBullet(now, p);
   },
@@ -7916,7 +7932,9 @@ const WalkCombat = {
       const b = this.add.image(mz.x, mz.y, 'bullet').setDepth(11).setScale(k).setRotation(rot)
         .setBlendMode(Phaser.BlendModes.ADD);
       b._vx = dx * G.speed * this.charH; b._vy = dy * G.speed * this.charH;
-      b._born = now; b._life = G.life; b._dmg = G.dmg;
+      b._born = now; b._life = G.life;
+      b._dmg = G.dmg * (this.furyActive && this.furyActive() ? 2 : 1);
+      if (b._dmg > G.dmg) b.setTint(0xffb040).setScale(k * 1.3);
       // The first step is tested from his shoulder, not from the muzzle, or an
       // alien already on top of him sits between the two and every round misses.
       b._x0 = mz.X + f * rig.m.shoulder[0] * rig.sx; b._y0 = mz.Y + rig.m.shoulder[1] * rig.sy;
@@ -8379,7 +8397,17 @@ const SPIKE_SPEED      = 3.0;     // heights a second
 const SPIKE_LEN        = 0.5;     // of a height
 const SPIKE_FAN        = [-0.15, 0, 0.15];
 const PARRY_MS         = 380;     // a swing sends back what arrives this soon after it
-const ANTIACID_MS      = 15000;   // the anti-acid ball: this long walking through acid unburned
+const ANTIACID_MS      = 15000;
+const FURY_MS          = 8000;    // the fury ball: this long at double rate and damage
+// The balls that drop out of a horde: colours (outside in), the label, what it does.
+const ORB_TYPES = {
+  antiacid: { label: 'ANTI-ACID', text: '#9dffd0',
+              rings: [[32, 0x0f3a2a], [28, 0x1f7a52], [24, 0x3fcf8a], [17, 0x9dffd0], [9, 0xeafff4]] },
+  mend:     { label: 'MEND', text: '#ff9a9a',
+              rings: [[32, 0x3a0c0c], [28, 0x8a1c1c], [24, 0xd23c3c], [17, 0xff8a8a], [9, 0xffe0e0]] },
+  fury:     { label: 'FURY', text: '#ffd36a',
+              rings: [[32, 0x3a2400], [28, 0x8a5a10], [24, 0xd8962a], [17, 0xffcf6a], [9, 0xfff2cc]] }
+};   // the anti-acid ball: this long walking through acid unburned
 
 function flyerClips(scene) {
   const fly = sheetFrames(scene, FLYER_SHEET, 'ff');
@@ -8417,12 +8445,24 @@ const WalkFlyers = {
   // In from `o.x, o.y` (off the top of the picture) to hang over the street.
   spawnFlyer(o) {
     if (!flyerClips(this)) return null;
-    const H = this.charH, s = FLYER_SIZE * H / FLYER_DEATH_SHEET.standH;
+    // `o` can make a bigger, tougher one (the embankment's key carrier):
+    // size, hp, alt (how high it hangs), fan (spike angles), returnDmg (what
+    // its own spike does sent back), stunMs, spitGap, range (heights).
+    const size = o.size || FLYER_SIZE;
+    const H = this.charH, s = size * H / FLYER_DEATH_SHEET.standH;
     const f = this.add.sprite(o.x, o.y, FLYER_SIDE_SHEET.key, 'fv0').setDepth(12).setScale(s);
     flyerPose(f, 'hover');
     f.play('flyer-hover');
     f._s = s;
-    f._hp = FLYER_HP;
+    f._k = size / FLYER_SIZE;
+    f._hp = f._hpMax = o.hp || FLYER_HP;
+    f._alt = o.alt || FLYER_ALT;
+    f._fan = o.fan || SPIKE_FAN;
+    f._retDmg = o.returnDmg || FLYER_RETURN_DMG;
+    f._stunMs = o.stunMs || FLYER_STUN_MS;
+    f._spitGap = o.spitGap || FLYER_SPIT_GAP;
+    f._range = o.range || 4.5;
+    f._boss = !!o.boss;
     f._alive = true;
     f._state = 'enter';
     f._side = o.side || (Math.random() < 0.5 ? -1 : 1);
@@ -8441,8 +8481,9 @@ const WalkFlyers = {
     const H = this.charH, p = this._nearestFighter(f.x) || this.player;
     if (now >= f._sideAt) { f._side = -f._side; f._sideAt = now + 5000 + Math.random() * 3000; }
     const wb = this.physics.world.bounds;
-    const tx = Phaser.Math.Clamp(p.x + f._side * 1.3 * H, wb.x + 0.6 * H, wb.right - 0.6 * H);
-    const ty = Math.max(wb.y + 0.45 * H, this.groundY - FLYER_ALT * H) + Math.sin(now / 520 + f._bob) * 0.12 * H;
+    const k = f._k || 1;
+    const tx = Phaser.Math.Clamp(p.x + f._side * 1.3 * H * k, wb.x + 0.6 * H * k, wb.right - 0.6 * H * k);
+    const ty = Math.max(wb.y + 0.45 * H * k, this.groundY - (f._alt || FLYER_ALT) * H) + Math.sin(now / 520 + f._bob) * 0.12 * H;
     return [tx, ty, p];
   },
 
@@ -8466,7 +8507,7 @@ const WalkFlyers = {
         flyerFace(f, p.x, H);
         const step = (a, b, v) => Math.abs(b - a) <= v ? b : a + Math.sign(b - a) * v;
         f.setPosition(step(f.x, tx, 1.1 * H * dt), step(f.y, ty, 0.9 * H * dt));
-        if (!frozen && now >= f._nextSpitAt && Math.abs(p.x - f.x) < 4.5 * H) this._flyerSpit(f, p);
+        if (!frozen && now >= f._nextSpitAt && Math.abs(p.x - f.x) < (f._range || 4.5) * H) this._flyerSpit(f, p);
         return;
       }
       if (st === 'fall' || st === 'dying') {
@@ -8474,7 +8515,7 @@ const WalkFlyers = {
         f.y += f._vy * dt;
         f.rotation += (f._spin || 0) * dt;
         // the hover pose is held by the body's centre; it lands on its feet
-        if (f.y >= this.groundY - 0.35 * H) this._flyerLand(f, now);
+        if (f.y >= this.groundY - 0.35 * H * (f._k || 1)) this._flyerLand(f, now);
         return;
       }
       if (st === 'stunned') {
@@ -8510,7 +8551,7 @@ const WalkFlyers = {
       f._state = 'hover';
       flyerPose(f, 'hover');
       f.play('flyer-hover');
-      f._nextSpitAt = this.time.now + Phaser.Math.Between(FLYER_SPIT_GAP[0], FLYER_SPIT_GAP[1]);
+      f._nextSpitAt = this.time.now + Phaser.Math.Between((f._spitGap || FLYER_SPIT_GAP)[0], (f._spitGap || FLYER_SPIT_GAP)[1]);
     });
   },
 
@@ -8520,7 +8561,7 @@ const WalkFlyers = {
     const p = this._nearestFighter(f.x) || this.player;
     const base = Math.atan2(p.body.center.y - my, p.x - mx);
     const k = SPIKE_LEN * H / 300;
-    SPIKE_FAN.forEach(off => {
+    (f._fan || SPIKE_FAN).forEach(off => {
       const a = base + off;
       const sp = this.add.image(mx, my, 'scene_flyerspike').setDepth(13).setOrigin(0.92, 0.5)
         .setScale(k).setRotation(a);
@@ -8635,7 +8676,7 @@ const WalkFlyers = {
   // Is (x, y) inside it? In the air it is its body between the wings; on the
   // ground, a standing figure off its feet.
   _flyerHit(f, x, y) {
-    const H = this.charH;
+    const H = this.charH * (f._k || 1);
     if (f._pose === 'stand') return Math.abs(x - f.x) < 0.28 * H && y < f.y + 4 && y > f.y - 0.85 * H;
     return Math.abs(x - f.x) < 0.3 * H && Math.abs(y - f.y) < 0.24 * H;
   },
@@ -8646,8 +8687,8 @@ const WalkFlyers = {
     let best = null, d = Infinity;
     (this.flyers || []).forEach(f => {
       if (!f._alive || f._pose !== 'stand') return;
-      const dx = f.x - p.x;
-      if (dx * dir < -0.12 * this.charH || Math.abs(dx) > reach) return;
+      const dx = f.x - p.x, r = reach + 0.3 * this.charH * ((f._k || 1) - 1);
+      if (dx * dir < -0.12 * this.charH || Math.abs(dx) > r) return;
       if (Math.abs(dx) < d) { d = Math.abs(dx); best = f; }
     });
     return best;
@@ -8658,12 +8699,13 @@ const WalkFlyers = {
     // Only the first of a returned fan does the damage and brings it down;
     // the rest catch it on the way down or on the ground, and sting. What
     // finishes it is the blade once it is down.
-    if (how === 'return' && (f._state === 'fall' || f._state === 'stunned')) dmg = 1;
+    if (how === 'return') dmg = (f._state === 'fall' || f._state === 'stunned') ? 1 : (f._retDmg || dmg);
     f._hp -= dmg;
+    if (this.onFlyerHurt) this.onFlyerHurt(f, dmg, how);
     Sfx.ensure(); Sfx.hit();
     f.setTintFill(0xffffff);
     this.time.delayedCall(70, () => { if (f.active) f.clearTint(); });
-    this._spikeBurst(f.x, f._pose === 'stand' ? f.y - 0.4 * this.charH : f.y, 0xb01a1a);
+    this._spikeBurst(f.x, f._pose === 'stand' ? f.y - 0.4 * this.charH * (f._k || 1) : f.y, 0xb01a1a);
     if (f._hp <= 0) { this.killFlyer(f, dir); return; }
     // its own spike brings it out of the air
     if (how === 'return' && f._state !== 'stunned' && f._state !== 'fall') this._flyerDown(f, dir, 'fall');
@@ -8697,7 +8739,7 @@ const WalkFlyers = {
     this._acidSpray(f.x, this.groundY - 4, 6, true);
     if (f._state === 'dying') { this._flyerMelt(f); return; }
     f._state = 'stunned';
-    f._stunUntil = now + FLYER_STUN_MS;
+    f._stunUntil = now + (f._stunMs || FLYER_STUN_MS);
   },
 
   _flyerRise(f) {
@@ -8708,9 +8750,9 @@ const WalkFlyers = {
     flyerPose(f, 'hover');
     f.play('flyer-hover');
     f.setDepth(12);
-    f.y = this.groundY - 0.45 * H;
+    f.y = this.groundY - 0.45 * H * (f._k || 1);
     Sfx.ensure(); Sfx.swoop();
-    this.tweens.add({ targets: f, y: this.groundY - FLYER_ALT * H, duration: 800, ease: 'Sine.easeOut',
+    this.tweens.add({ targets: f, y: this.groundY - (f._alt || FLYER_ALT) * H, duration: 800, ease: 'Sine.easeOut',
       onComplete: () => { if (f._alive && f._state === 'rising') { f._state = 'hover'; f._nextSpitAt = this.time.now + 1600; } } });
   },
 
@@ -8722,7 +8764,7 @@ const WalkFlyers = {
     this.cameras.main.shake(160, 0.006);
     if (f._pose === 'stand') this._flyerMelt(f);
     else this._flyerDown(f, dir || 1, 'dying');
-    if (this.onFlyerKilled) this.onFlyerKilled(f.x);
+    if (this.onFlyerKilled) this.onFlyerKilled(f.x, f);
   },
 
   // The melt, and no more of the clip than that: the body runs to red, then
@@ -8750,29 +8792,35 @@ const WalkFlyers = {
   // ---- the anti-acid ball -----------------------------------------------
   // It drops out of what is left of one of them. Pick it up and for a while
   // the acid they leave cannot burn either brother.
-  dropAntiAcid(x) {
-    const H = this.charH;
-    if (!this.textures.exists('antiacid_orb')) {
+  dropAntiAcid(x) { return this.dropOrb(x, 'antiacid'); },
+
+  // A power out of what is left of one of them, on the street where it fell:
+  // walk over it to take it. ORB_TYPES says what each one is and does.
+  dropOrb(x, type) {
+    const T = ORB_TYPES[type] || ORB_TYPES.antiacid, H = this.charH, key = 'orb_' + type;
+    if (!this.textures.exists(key)) {
       const g = this.make.graphics({ x: 0, y: 0, add: false });
-      [[32, 0x0f3a2a, 1], [28, 0x1f7a52, 1], [24, 0x3fcf8a, 1], [17, 0x9dffd0, 1], [9, 0xeafff4, 1]]
-        .forEach(([r, c, a]) => { g.fillStyle(c, a); g.fillCircle(32, 32, r); });
+      T.rings.forEach(([r, c]) => { g.fillStyle(c, 1); g.fillCircle(32, 32, r); });
       g.fillStyle(0xffffff, 0.8); g.fillCircle(24, 22, 5);
-      g.generateTexture('antiacid_orb', 64, 64);
+      if (type === 'mend') { g.fillStyle(0xffffff, 0.95); g.fillRect(28, 18, 8, 28); g.fillRect(18, 28, 28, 8); }
+      if (type === 'fury') { g.fillStyle(0x3a1d00, 0.9); g.fillTriangle(36, 12, 22, 36, 32, 36); g.fillTriangle(32, 30, 42, 30, 28, 54); }
+      g.generateTexture(key, 64, 64);
       g.destroy();
     }
     x = Phaser.Math.Clamp(x, 60, this.worldW - 60);
     const y = this.groundY - 0.2 * H, k = 0.2 * H / 64;
-    const glow = this.add.image(x, y, 'antiacid_orb').setDepth(10).setScale(k * 2.2).setAlpha(0.35)
+    const glow = this.add.image(x, y, key).setDepth(10).setScale(k * 2.2).setAlpha(0.35)
       .setBlendMode(Phaser.BlendModes.ADD);
-    const orb = this.add.image(x, y - 0.5 * H, 'antiacid_orb').setDepth(11).setScale(k);
-    const label = this.add.text(x, y - 0.28 * H, 'ANTI-ACID', { fontFamily: F_UI, fontSize: '13px', fontStyle: '700',
-      color: '#9dffd0', stroke: '#06140d', strokeThickness: 4 }).setOrigin(0.5, 1).setDepth(11).setAlpha(0);
+    const orb = this.add.image(x, y - 0.5 * H, key).setDepth(11).setScale(k);
+    const label = this.add.text(x, y - 0.28 * H, T.label, { fontFamily: F_UI, fontSize: '13px', fontStyle: '700',
+      color: T.text, stroke: '#06140d', strokeThickness: 4 }).setOrigin(0.5, 1).setDepth(11).setAlpha(0);
     this.tweens.add({ targets: orb, y, duration: 520, ease: 'Bounce.easeOut' });
     this.tweens.add({ targets: label, alpha: 1, delay: 400, duration: 300 });
     this.tweens.add({ targets: [orb], y: y - 0.06 * H, duration: 700, delay: 600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
     this.tweens.add({ targets: glow, scale: k * 2.8, alpha: 0.15, duration: 700, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
     Sfx.ensure(); Sfx.blip(990, 0.3, 'sine', 0.05, 1480);
-    this.orbs.push({ orb, glow, label, x, born: this.time.now });
+    this.orbs.push({ orb, glow, label, x, type, born: this.time.now });
+    if (this._sortNew) this._sortNew();
   },
 
   _updateOrbs(now) {
@@ -8785,10 +8833,49 @@ const WalkFlyers = {
       this.tweens.killTweensOf([o.orb, o.glow, o.label]);
       [o.orb, o.glow, o.label].forEach(g => g.destroy());
       this._reach(p, o.x);
-      this._wardOn(now);
+      const t = o.type || 'antiacid';
+      if (t === 'mend') this._mendOn(p);
+      else if (t === 'fury') this._furyOn(now);
+      else this._wardOn(now);
       return false;
     });
     this._updateWard(now);
+    this._updateFury(now);
+  },
+
+  // Two hearts back, for both of them.
+  _mendOn(p) {
+    const back = 2;
+    this.hp = Math.min(this.maxHp || WALK_HP, (this.hp || 0) + back);
+    const p2 = this.player2;
+    if (p2 && p2.active && !p2._down) p2.hp = Math.min(WALK_HP, (p2.hp || 0) + back);
+    this._paintHearts();
+    Sfx.ensure(); Sfx.mend(); Sfx.select();
+    this.cameras.main.flash(220, 255, 120, 120);
+    this._showTip('MEND  —  TWO HEARTS BACK');
+  },
+
+  // A while of the pistol at twice the rate and twice the bite.
+  furyActive() { return this.time.now < (this._furyUntil || 0); },
+  _furyOn(now) {
+    this._furyUntil = now + FURY_MS;
+    Sfx.ensure(); Sfx.select(); Sfx.roar();
+    this.cameras.main.flash(220, 255, 200, 90);
+    if (!this._furyHud) {
+      const t = this.add.text(190, 48, 'FURY', { fontFamily: F_UI, fontSize: '12px', fontStyle: '700',
+        color: '#ffd36a', stroke: '#1a0e00', strokeThickness: 3 }).setOrigin(0, 0.5).setScrollFactor(0).setDepth(60);
+      const bg = this.add.rectangle(272, 48, 110, 7, 0x1a0e00, 0.85).setOrigin(0, 0.5).setScrollFactor(0).setDepth(60);
+      const bar = this.add.rectangle(272, 48, 110, 7, 0xf2b13c, 1).setOrigin(0, 0.5).setScrollFactor(0).setDepth(61);
+      this._furyHud = [t, bg, bar];
+      if (this._sortNew) this._sortNew();
+    }
+    this._showTip('FURY  —  THE PISTOL FIRES TWICE AS FAST AND HITS TWICE AS HARD');
+  },
+  _updateFury(now) {
+    if (!this._furyHud) return;
+    const left = (this._furyUntil || 0) - now;
+    if (left <= 0) { this._furyHud.forEach(o => o.destroy()); this._furyHud = null; return; }
+    this._furyHud[2].width = 110 * left / FURY_MS;
   },
 
   _wardOn(now) {
@@ -8967,6 +9054,7 @@ const WalkGrenades = {
     if (GameState.hasPistol) out.push('pistol');
     const n = this.grenadesOf(p);
     if (n > 0 || this._grenadeStage) out.push('grenade:' + n);
+    if (this._hasKey && !this._keyUsed) out.push('key');
     return out;
   },
 
@@ -9024,6 +9112,9 @@ const WalkGrenades = {
           }
           add(this.add.text(cx + 8, cy + 20, '×' + n, { fontFamily: F_UI, fontSize: '15px', fontStyle: '700',
             color: n > 0 ? '#f0e6d4' : '#6e6258', stroke: '#070605', strokeThickness: 3 }).setOrigin(0, 1));
+        } else if (it === 'key') {
+          makeKeyTexture(this);
+          add(this.add.image(cx, cy, 'emb_key').setScale(46 / 64).setAngle(-30));
         }
       });
       if (right) p2Top = y0;
@@ -12295,23 +12386,44 @@ class NightStreetScene extends WalkScene {
 //   the roof             top 0.276, x 0.200-0.277 (left of the pillar)
 //   the pillar           top 0.266, x 0.277-0.299
 //   the lift's shaft     x 0.300-0.346, from the walkway up to the pillar top
-//   the lever            on the pillar face at x 0.675, chest height
+//   the broken slab      in the big window on the right: top 0.443,
+//                        x 0.712-0.879 (the girder stands across it at 0.800)
+//   the dark doorway     in the middle building, x 0.634-0.660
+//   the collapsed bank   where the walkway has fallen into the canal, x 0.59+
 //   the girder           stood on the walkway at x 0.800, in front of the
 //                        dark hall under the big window
 // The door in the left building is 0.106 of the picture for about 2.1m: at
-// 2.2x that is 80 px/m, the size the brothers are on the other stages.
-const EMB_ZOOM    = 2.2;
-const EMB_PXM     = 80;
+// 1.5x that is 55 px/m. It was 2.2x and 80 px/m, the brothers' size on the
+// other stages — pulled back here so a horde has room to come at them.
+const EMB_ZOOM    = 1.5;
+const EMB_PXM     = 55;
 const EMB_GROUND  = 0.653;
 // The roof (0.276) and the pillar top beside it (0.266) are one surface to
 // stand on, between the two: a 0.2m step only catches from above, so walking
 // back from the roof onto the pillar dropped you through it to the walkway.
 const EMB_ROOF    = { x0: 0.200, x1: 0.299, y: 0.271 };
 const EMB_LIFT    = { x0: 0.300, x1: 0.346 };
-const EMB_LEVER   = { x0: 0.667, x1: 0.683, y0: 0.575, y1: 0.628 };
+// The slab in the window, up to the girder; the chest stands on it, by the wall.
+const EMB_SLAB    = { x0: 0.712, x1: 0.790, y: 0.443 };
+// The stone that rides up to it on its own, like the tienda's (no switch).
+const EMB_RISER   = { x0: 0.668, x1: 0.709 };
 const EMB_GIRDER  = { x: 0.800, hM: 4.6, wM: 0.55 };
-const EMB_CHEST_X = 0.2215;
-const EMB_CRANK_X = 0.262;         // on the roof, right beside the cage
+const EMB_CHEST_X = 0.762;
+// Where the horde comes from: out of the canal over the fallen bank, out of
+// the dark doorway, off the left roof, and along the road behind them. Never
+// from behind the girder — nothing would stop them walking through it.
+const EMB_CANAL   = [0.555, 0.625];
+const EMB_DOOR_X  = 0.647;
+const EMB_ROOFJ   = [0.205, 0.285];
+const EMB_ALIVE   = 5;          // at once (one more with a brother)
+// The one with the key: bigger than the others, harder to bring down, and it
+// calls the horde when it is left alone.
+const EMB_CARRIER = { size: 1.7, hp: 40, alt: 3.1, returnDmg: 6, stunMs: 2200, range: 7,
+                      spitGap: [1800, 2800], fan: [-0.3, -0.15, 0, 0.15, 0.3] };
+const EMB_CALL_IDLE  = 7000;    // not hurt for this long, it screams for help
+const EMB_CALL_EVERY = 18000;   // and every so often anyway
+// what drops, by how many have been killed
+const EMB_DROPS = { 3: 'antiacid', 6: 'mend', 9: 'fury', 12: 'antiacid', 15: 'mend', 19: 'fury', 24: 'mend' };
 
 class EmbankmentScene extends WalkScene {
   constructor() { super('EmbankmentScene'); }
@@ -12322,7 +12434,15 @@ class EmbankmentScene extends WalkScene {
     this._grenadeStage = true;
     this.cameras.main.fadeIn(420, 0, 0, 0);
     loadSample('sfxBoom');
-    const wallDown = !!GameState.seen['emb-wall'];
+    const seen = GameState.seen;
+    const wallDown = !!seen['emb-wall'];
+    // what has been done this game stays done through a death or a CONTINUE
+    this._wallDown = wallDown;
+    this._carrierDead = !!seen['emb-carrier'];
+    this._hasKey = !!seen['emb-key'];
+    this._chestTaken = !!seen['emb-lockbox'];
+    this._keyUsed = this._chestTaken;
+    const fight = !wallDown && !this._carrierDead;
     this.buildWalk({
       bgKey: 'scene_aftertienda',
       worldW: 'auto', worldH: Math.round(720 * EMB_ZOOM), bgZoom: EMB_ZOOM,
@@ -12331,9 +12451,9 @@ class EmbankmentScene extends WalkScene {
       title: 'THE EMBANKMENT',
       castSwitch: true, canReset: true,
       doubleJump: true, dash: true,
-      ledges: [EMB_ROOF],
+      ledges: [EMB_ROOF, EMB_SLAB],
       beats: wallDown ? [] : [
-        { at: 0.02, say: [['PLAYER', 'The canal road. It should take us out of town.']] },
+        ...(fight ? [] : [{ at: 0.02, say: [['PLAYER', 'The canal road. It should take us out of town.']] }]),
         { at: 0.62, say: [['PLAYER', "Blocked. That girder isn't going anywhere."]] }
       ],
       exits: [
@@ -12343,34 +12463,35 @@ class EmbankmentScene extends WalkScene {
       ],
       drawFallback(WW) {
         const g = this.add.graphics().setDepth(-20);
-        g.fillStyle(0x0b0e16, 1); g.fillRect(0, 0, WW, 1584);
-        g.fillStyle(0x2a2a30, 1); g.fillRect(0, 1034, WW, 550);
+        g.fillStyle(0x0b0e16, 1); g.fillRect(0, 0, WW, 1080);
+        g.fillStyle(0x2a2a30, 1); g.fillRect(0, 705, WW, 375);
       }
     });
     const bg = this.bgGeom;
     this.fx = f => bg.x + f * bg.w;
     this.fy = f => bg.y + f * bg.h;
 
-    // what has been done this game stays done through a death or a CONTINUE
-    this._leverBusy = false;
-    this._crankBusy = false;
-    this._leverPulled = !!GameState.seen['emb-lever'];
-    this._cageOpen = !!GameState.seen['emb-cage'];
-    this._wallDown = wallDown;
-
     this._buildGirder();
-    StoreScene.prototype._buildLever.call(this, EMB_LEVER);
-    if (this._leverPulled && this.leverOn) { this.leverOff.setAlpha(0); this.leverOn.setAlpha(1); }
     this._buildLift();
-    StoreScene.prototype._buildChest.call(this, EMB_CHEST_X, EMB_ROOF.y);
-    if (this.chestLabel) this.chestLabel.setText('E  —  TAKE THE GRENADES');
-    this._chestTaken = !!GameState.seen['emb-chest'];
+    StoreScene.prototype._buildChest.call(this, EMB_CHEST_X, EMB_SLAB.y);
     if (this._chestTaken && this.chestAnim) { this.chest.setVisible(false); this.chestAnim.setVisible(true).setFrame('co11'); }
-    this._buildCage();
-    this._buildCrank();
+    else this._buildPadlock();
+    this._keyItem = null;
+    this._carrier = null;
+    this._kills = 0;
+    this._fightOn = false;
+    this._calledFlyer = false;
+    // killed, but the key never picked up (a death in between): it is still
+    // lying on the walkway
+    if (this._carrierDead && !this._hasKey && !wallDown) this._dropKey(this.fx(0.55), true);
 
     this.onBlast = (x, y, R) => this._blast(x, y, R);
     this.input.keyboard.on('keydown-E', () => this._useE(this.player));
+    if (fight) {
+      // the first time it arrives on camera; after a death it is just there
+      if (firstCinematic('emb-carrier')) this.time.delayedCall(700, () => this._carrierIntro());
+      else this.time.delayedCall(500, () => this._startFight());
+    }
   }
 
   // ---- the girder ------------------------------------------------------
@@ -12379,6 +12500,7 @@ class EmbankmentScene extends WalkScene {
     const h = EMB_GIRDER.hM * m, w = EMB_GIRDER.wM * m;
     this.girder = null;
     this.girderBox = null;
+    this.girderCap = null;
     if (this._wallDown) { this._girderRubble(x, y); return; }
     if (this.textures.exists('scene_girderwall')) {
       this.girder = this.add.image(x, y + 4, 'scene_girderwall').setOrigin(0.5, 1).setDepth(8);
@@ -12391,6 +12513,13 @@ class EmbankmentScene extends WalkScene {
     this.physics.add.collider(this.player, box);
     this.girderBox = box;
     this._girderSparked = 0;
+    // From the slab beside it a jump would clear its top: the wall of the
+    // building goes on up behind it, so they do not. (Not a solid to bullets.)
+    const top = this.fy(0.18), bh = (y - h) - top;
+    const cap = this.add.rectangle(x, top + bh / 2, w, bh, 0x000000, 0).setDepth(-1);
+    this.physics.add.existing(cap, true);
+    this.physics.add.collider(this.player, cap);
+    this.girderCap = cap;
   }
 
   // What a blast leaves: the girder itself, down on its side along the
@@ -12438,6 +12567,7 @@ class EmbankmentScene extends WalkScene {
     once('emb-wall');
     persistSeen('emb-wall');
     b.destroy();
+    if (this.girderCap) { this.girderCap.destroy(); this.girderCap = null; }
     this.solidsW = this.solidsW.filter(o => o !== b);
     this.girderBox = null;
     const gx = this.fx(EMB_GIRDER.x), gy = this.groundY;
@@ -12459,27 +12589,20 @@ class EmbankmentScene extends WalkScene {
     });
   }
 
-  // ---- the lift --------------------------------------------------------
+  // ---- the lift and the riser ---------------------------------------
   // The store's travelling ledge, stood on its end: a stone slab on two
-  // chains up the building face. Parked up at the rooftop until the lever
-  // brings it down; after that it rides up and down.
+  // chains up the building face to the left roof. It runs by itself now, as
+  // does the second one by the window that carries them up to the chest.
   _buildLift() {
     const m = StoreScene.prototype._mover.call(this, {
-      x0: EMB_LIFT.x0, x1: EMB_LIFT.x1, y: EMB_GROUND, yTo: EMB_ROOF.y, ms: 3200, pause: 1800, live: false });
+      x0: EMB_LIFT.x0, x1: EMB_LIFT.x1, y: EMB_GROUND, yTo: EMB_ROOF.y, ms: 3200, pause: 1800, live: true });
     this.lift = m;
-    this.movers = [m];
-    if (!this._leverPulled) this._placeMover(m, 1);           // parked at the top
+    const r = StoreScene.prototype._mover.call(this, {
+      x0: EMB_RISER.x0, x1: EMB_RISER.x1, y: EMB_GROUND, yTo: EMB_SLAB.y, ms: 2400, pause: 1400, live: true });
+    this.riser = r;
+    this.movers = [m, r];
     this.liftChains = this.add.graphics().setDepth(3.5);
     this._drawChains();
-    if (this._leverPulled) m.live = true;
-  }
-
-  _placeMover(m, t) {
-    m.t = t; m.dir = t >= 1 ? -1 : 1;
-    const e = 0.5 - Math.cos(Math.PI * t) / 2;
-    const y = m.yFrom + (m.yTo - m.yFrom) * e;
-    m.y = y; m.im.y = y; m.box.y = y + 30;
-    m.box.body.updateFromGameObject();
   }
 
   _drawChains() {
@@ -12494,121 +12617,23 @@ class EmbankmentScene extends WalkScene {
     });
   }
 
-  // ---- the lever -------------------------------------------------------
-  _atLever(p) {
-    return !!this.leverOff && !!p && Math.abs(p.x - this.leverX) < 90 && Math.abs(p.y - this.leverY) < 210;
-  }
-
-  _pullLever(p) {
-    if (this._leverPulled || this._leverBusy) return;
-    this._leverBusy = true;
-    this._reach(p, this.leverX);
-    this._leverPulled = true;
-    once('emb-lever');
-    persistSeen('emb-lever');
-    Sfx.ensure(); Sfx.select();
-    const a = this.leverOff, b = this.leverOn;
-    if (b) {
-      this.tweens.add({ targets: [a, b], scaleY: a.scaleY * 0.93, duration: 70, yoyo: true });
-      this.tweens.add({ targets: a, alpha: 0, duration: 110 });
-      this.tweens.add({ targets: b, alpha: 1, duration: 110 });
-    }
-    this.leverLabel.setAlpha(0);
-    // far back along the road, a rattle of chain and the lift starts down
-    this.time.delayedCall(350, () => {
-      Sfx.ensure(); Sfx.burst(0.5, 0.18, 380, 0.8); Sfx.blip(90, 0.6, 'sawtooth', 0.06, 60);
-      this.lift.live = true;
-      this._leverBusy = false;
-      // the first time, the picture goes back to show what it did (once a game)
-      if (firstCinematic('emb-lift')) this._showLift();
-      else this._showTip('SOMETHING MOVED  —  BACK ALONG THE ROAD');
-    });
-  }
-
-  // A look back along the road at the lift coming down, then back to him.
-  _showLift() {
-    const cam = this.cameras.main, p = this.player;
-    this._holdInput = true;
-    this._calmIdle = true;
-    cam.stopFollow();
-    cam.pan(this.lift.im.x, this.fy(0.45), 1000, 'Sine.easeInOut', true);
-    this.time.delayedCall(2900, () => {
-      if (!p.active) return;
-      cam.pan(p.x, p.y, 900, 'Sine.easeInOut', true, (c, t) => {
-        if (t < 1 || !p.active) return;
-        cam.startFollow(p, false, 0.1, 0.1);
-        this._look = 0;
-        this._holdInput = false;
-        this._calmIdle = false;
-        this._showTip('THE LIFT IS RUNNING  —  RIDE IT UP TO THE ROOF');
-      });
-    });
-  }
-
-  // ---- the cage and its crank -----------------------------------------
-  // Drawn: an iron cage round the chest, shut on top, so the chest cannot be
-  // reached over it. Its front slides up when the crank is turned.
-  _buildCage() {
-    const m = this.pxPerM, cx = this.fx(EMB_CHEST_X), floor = this.fy(EMB_ROOF.y);
-    const w = 1.3 * m, h = 1.35 * m;
-    this.cage = { x0: cx - w / 2, x1: cx + w / 2, top: floor - h, floor };
-    const back = this.add.graphics().setDepth(5.5);
-    const bars = (g, x0, x1, col) => {
-      for (let x = x0; x <= x1 + 0.5; x += w / 9) { g.fillStyle(col, 1); g.fillRect(x - 2, floor - h, 4, h); }
-    };
-    back.lineStyle(4, 0x2a2420, 1); back.strokeRect(cx - w / 2, floor - h, w, h);
-    bars(back, cx - w / 2, cx + w / 2, 0x2a2420);
-    back.fillStyle(0x3a302a, 1); back.fillRect(cx - w / 2 - 3, floor - h - 5, w + 6, 8);      // the lid
-    const front = this.add.graphics().setDepth(7);
-    bars(front, cx - w / 2, cx + w / 2, 0x4a3c32);
-    front.fillStyle(0x5a4a3c, 1); front.fillRect(cx - w / 2, floor - h * 0.55, w, 5);
-    front.fillStyle(0x6b3a1c, 1); front.fillRect(cx - 7, floor - h * 0.6, 14, 16);          // the lock plate
-    this.cageFront = front;
-    this.cageH = h;
-    if (this._cageOpen) front.setY(-h + 8);
-  }
-
-  _buildCrank() {
-    const m = this.pxPerM, x = this.fx(EMB_CRANK_X), floor = this.fy(EMB_ROOF.y);
-    const post = this.add.graphics().setDepth(6);
-    post.fillStyle(0x3a302a, 1); post.fillRect(x - 4, floor - 0.95 * m, 8, 0.95 * m);
-    const wheel = this.add.graphics({ x, y: floor - 0.95 * m }).setDepth(6.5);
-    wheel.lineStyle(4, 0x6b4a33, 1); wheel.strokeCircle(0, 0, 0.26 * m);
-    for (let i = 0; i < 4; i++) { const a = i * Math.PI / 2; wheel.lineBetween(0, 0, Math.cos(a) * 0.26 * m, Math.sin(a) * 0.26 * m); }
-    wheel.fillStyle(0x8a6a3a, 1); wheel.fillCircle(0.26 * m, 0, 5);
-    this.crank = { x, y: floor, wheel };
-    this.crankLabel = this.add.text(x, floor - 1.35 * m, 'E  —  TURN THE CRANK', {
-      fontFamily: 'Courier New, monospace', fontSize: '15px', color: '#d9c7a8', stroke: '#0d0a08', strokeThickness: 4
-    }).setOrigin(0.5, 1).setDepth(8).setAlpha(0);
-  }
-
-  _atCrank(p) {
-    return !!this.crank && !!p && Math.abs(p.x - this.crank.x) < 0.9 * this.pxPerM &&
-           Math.abs(p.body.bottom - this.crank.y) < 0.5 * this.pxPerM;
-  }
-
-  // The turn opens the cage the moment it is made — stored straight away —
-  // and the bars sliding up are only the look of it: a restart in the middle
-  // of the turn comes back with the cage open, not shut for good.
-  _turnCrank(p) {
-    if (this._cageOpen || this._crankBusy) return;
-    this._crankBusy = true;
-    this._cageOpen = true;
-    once('emb-cage');
-    persistSeen('emb-cage');
-    this._reach(p, this.crank.x);
-    Sfx.ensure(); Sfx.burst(0.6, 0.14, 700, 1.2);
-    this.tweens.add({ targets: this.crank.wheel, angle: 720, duration: 1100, ease: 'Sine.easeInOut' });
-    this.tweens.add({ targets: this.cageFront, y: -this.cageH + 8, duration: 1100, delay: 250, ease: 'Sine.easeInOut',
-      onComplete: () => { this._crankBusy = false; Sfx.ensure(); Sfx.land(); } });
-    this.crankLabel.setAlpha(0);
-  }
-
   // ---- the chest -------------------------------------------------------
-  // Three each. It fills up again if they are all gone while the girder
-  // stands, so there is never no way on.
+  // On the slab by the girder, padlocked: the grenades are in it, and the
+  // big one has the key. Three each; it fills again if they are all gone
+  // while the girder stands, so there is never no way on.
+  _buildPadlock() {
+    if (!this.chest) return;
+    const c = this.chest, m = this.pxPerM, x = this.chestX, y = this.chestY - c.displayHeight * 0.42;
+    const g = this.add.graphics().setDepth(6.5);
+    g.lineStyle(Math.max(2, 0.05 * m), 0x8a8478, 1); g.strokeCircle(x, y - 0.07 * m, 0.08 * m);
+    g.fillStyle(0x2a2420, 1); g.fillRoundedRect(x - 0.12 * m, y - 0.04 * m, 0.24 * m, 0.2 * m, 3);
+    g.fillStyle(0xb08a3a, 1); g.fillRoundedRect(x - 0.1 * m, y - 0.02 * m, 0.2 * m, 0.16 * m, 3);
+    g.fillStyle(0x2a2420, 1); g.fillCircle(x, y + 0.04 * m, 0.025 * m); g.fillRect(x - 0.01 * m, y + 0.04 * m, 0.02 * m, 0.06 * m);
+    this.padlock = g;
+  }
+
   _chestReady() {
-    if (!this._cageOpen || this._crankBusy || this._wallDown) return false;
+    if (this._wallDown || !this._hasKey || !this.chest) return false;
     if (!this._chestTaken) return true;
     const ps = [this.player, this.player2].filter(q => q && q.active);
     return ps.every(q => this.grenadesOf(q) === 0);
@@ -12623,7 +12648,9 @@ class EmbankmentScene extends WalkScene {
     if (!this._chestReady()) return;
     const first = !this._chestTaken;
     this._chestTaken = true;
-    once('emb-chest');
+    this._keyUsed = true;
+    once('emb-lockbox');
+    persistSeen('emb-lockbox');
     this._reach(p, this.chestX);
     if (!GameState.grenades) GameState.grenades = { eterwolf: 0, wolffel: 0 };
     GameState.grenades.eterwolf = Math.max(GameState.grenades.eterwolf || 0, 3);
@@ -12631,7 +12658,15 @@ class EmbankmentScene extends WalkScene {
     this._paintInventory(true);
     this._refreshHint();
     Sfx.ensure(); Sfx.land();
-    if (first && this.chestAnim) { this.chest.setVisible(false); this.chestAnim.setVisible(true).play('chest-open'); }
+    if (first) {
+      Sfx.blip(1200, 0.12, 'square', 0.05, 600);          // the lock giving
+      if (this.padlock) {
+        const pl = this.padlock; this.padlock = null;
+        this.tweens.add({ targets: pl, y: pl.y + 0.6 * this.pxPerM, alpha: 0, duration: 420, ease: 'Quad.easeIn',
+                          onComplete: () => pl.destroy() });
+      }
+      if (this.chestAnim) { this.chest.setVisible(false); this.chestAnim.setVisible(true).play('chest-open'); }
+    }
     if (this.chestLabel) this.chestLabel.setAlpha(0);
     if (first) this.time.delayedCall(820, () => this._grenadeCard());
     else this._showTip('THREE EACH AGAIN  —  THROW THEM AT THE GIRDER');
@@ -12653,15 +12688,295 @@ class EmbankmentScene extends WalkScene {
     this.tweens.add({ targets: grp, alpha: 1, duration: 250 });
     this.time.delayedCall(3400, () => this.tweens.add({ targets: grp, alpha: 0, duration: 450,
       onComplete: () => grp.forEach(o => o.destroy()) }));
-    this.time.delayedCall(3900, () => this._showTip('BACK DOWN, AND THROW ONE AT THE GIRDER'));
+    this.time.delayedCall(3900, () => this._showTip('THROW ONE AT THE GIRDER  —  STAND WELL BACK'));
+  }
+
+  // ---- the key carrier -----------------------------------------------
+  _carrierOpts(x, y, tx, ty) {
+    return Object.assign({ x, y, tx, ty, side: -1, spitDelay: 2600, boss: true }, EMB_CARRIER);
+  }
+
+  // Its arrival, the first time this game: the picture goes to the window,
+  // it drops in with the key in its claws and screams, and back to them.
+  _carrierIntro() {
+    if (this._dead || this._transitioning) return;
+    const cam = this.cameras.main, p = this.player, H = this.charH;
+    this._holdInput = true;
+    this._calmIdle = true;
+    cam.stopFollow();
+    cam.pan(this.fx(0.62), this.fy(0.42), 1100, 'Sine.easeInOut', true);
+    const tx = this.fx(0.72), ty = this.groundY - EMB_CARRIER.alt * H;
+    this.time.delayedCall(700, () => {
+      this._carrier = this.spawnFlyer(this._carrierOpts(this.fx(1.06), this.fy(0.02), tx, ty));
+      this._keyOnCarrier();
+    });
+    this.time.delayedCall(2500, () => {
+      const f = this._carrier;
+      if (!f || !f.active) return;
+      Sfx.ensure(); Sfx.roar(); Sfx.roar(); cam.shake(600, 0.007);
+      this._screamLines(f.x, f.y, 1300, f._k);
+    });
+    this.time.delayedCall(3500, () => this._say([['PLAYER', "That one's got a key in its claws."]]));
+    this.time.delayedCall(4700, () => {
+      if (!p.active) return;
+      cam.pan(p.x, p.y, 900, 'Sine.easeInOut', true, (c, t) => {
+        if (t < 1 || !p.active) return;
+        cam.startFollow(p, false, 0.1, 0.1);
+        this._look = 0;
+        this._holdInput = false;
+        this._calmIdle = false;
+        this._startFight();
+      });
+    });
+  }
+
+  _startFight() {
+    if (this._fightOn || this._dead || this._carrierDead) return;
+    this._fightOn = true;
+    const H = this.charH;
+    if (!this._carrier || !this._carrier.active) {
+      this._carrier = this.spawnFlyer(this._carrierOpts(this.fx(1.06), this.fy(0.02),
+                                                        this.fx(0.72), this.groundY - EMB_CARRIER.alt * H));
+      this._keyOnCarrier();
+    }
+    if (!this._carrier) { this._fightOn = false; return; }
+    playTrack('fightMusic');
+    this.startCombat();
+    this._buildBossBar();
+    const now = this.time.now;
+    this._lastHurtAt = now;
+    this._lastCallAt = now;
+    this.onEnemyKilled = x => this._embKill(x);
+    this.onFlyerKilled = (x, f) => this._embFlyerDown(x, f);
+    this.onFlyerHurt = (f) => { if (f === this._carrier) { this._lastHurtAt = this.time.now; this._paintBossBar(); this._halfCall(); } };
+    this._callTimer = this.time.addEvent({ delay: 500, loop: true, callback: () => this._carrierTick() });
+    // two of them to begin with, out of the doorway and the canal
+    this.time.delayedCall(900, () => this._embSpawn('door'));
+    this.time.delayedCall(1700, () => this._embSpawn('canal'));
+    this._showTip('IT HAS THE KEY  —  SHOOT IT, OR SWING INTO ITS SPIKES TO SEND THEM BACK');
+  }
+
+  // The key, hanging from its claws, glinting.
+  _keyOnCarrier() {
+    makeKeyTexture(this);
+    const f = this._carrier;
+    if (!f) return;
+    this._carrierKey = this.add.image(f.x, f.y, 'emb_key').setDepth(12.5)
+      .setScale(0.32 * this.charH * (f._k || 1) / 64);
+  }
+
+  _syncCarrierKey() {
+    const k = this._carrierKey, f = this._carrier;
+    if (!k) return;
+    if (!f || !f.active || f._state === 'melt') { k.destroy(); this._carrierKey = null; return; }
+    const H = this.charH * (f._k || 1), face = f.flipX ? -1 : 1, t = this.time.now;
+    if (f._pose === 'stand') k.setPosition(f.x + face * 0.12 * H, f.y - 0.25 * H).setAngle(60);
+    else k.setPosition(f.x - face * 0.05 * H, f.y + 0.3 * H).setAngle(80 + Math.sin(t / 260) * 12);
+    k.setAlpha(f.alpha);
+  }
+
+  // The blood meter: how much it has left, across the top of the screen.
+  _buildBossBar() {
+    (this._bossBar || []).forEach(o => o.destroy());
+    const W = 420, x = 640 - W / 2, y = 96;      // under the stage's title
+    const lab = this.add.text(640, y - 12, 'THE CARRIER', { fontFamily: F_UI, fontSize: '13px', fontStyle: '700',
+      color: '#ff8a7a', stroke: '#140404', strokeThickness: 4 }).setOrigin(0.5, 1);
+    const bg = this.add.rectangle(x - 3, y, W + 6, 14, 0x140404, 0.9).setOrigin(0, 0.5).setStrokeStyle(2, 0x5a1010, 1);
+    const lag = this.add.rectangle(x, y, W, 8, 0xf2d0a0, 0.9).setOrigin(0, 0.5);
+    const bar = this.add.rectangle(x, y, W, 8, 0xc01818, 1).setOrigin(0, 0.5);
+    this._bossBar = [lab, bg, lag, bar];
+    this._bossW = W;
+    this._bossBar.forEach(o => o.setScrollFactor(0).setDepth(60).setAlpha(0));
+    this.tweens.add({ targets: this._bossBar, alpha: 1, duration: 400 });
+    this._sortNew();
+  }
+
+  _paintBossBar() {
+    const f = this._carrier, b = this._bossBar;
+    if (!f || !b) return;
+    const w = this._bossW * Math.max(0, f._hp) / f._hpMax;
+    b[3].width = w;
+    this.tweens.killTweensOf(b[2]);
+    this.tweens.add({ targets: b[2], width: w, duration: 500, delay: 250 });
+  }
+
+  // Half gone, it calls another flyer down, once.
+  _halfCall() {
+    const f = this._carrier;
+    if (this._calledFlyer || !f || !f._alive || f._hp > f._hpMax / 2) return;
+    this._calledFlyer = true;
+    this._carrierScream(f);
+    this.time.delayedCall(900, () => {
+      if (this._dead || this._carrierDead) return;
+      this.spawnFlyer({ x: this.fx(-0.04), y: this.fy(0.04), side: 1, spitDelay: 3200 });
+      this._say([['PLAYER', "It called another down!"]]);
+    });
+  }
+
+  _carrierScream(f) {
+    Sfx.ensure(); Sfx.roar(); this.cameras.main.shake(260, 0.004);
+    this._screamLines(f.x, f.y, 800, f._k);
+    const b = this._bossBar;
+    if (b) { b[3].setFillStyle(0xffffff); this.time.delayedCall(140, () => b[3].active && b[3].setFillStyle(0xc01818)); }
+  }
+
+  // Left alone it screams for the horde; it does now and then anyway.
+  _carrierTick() {
+    const f = this._carrier, now = this.time.now;
+    if (!f || !f._alive || this._dead || this._holdInput || this._transitioning) return;
+    if (f._state !== 'hover') return;
+    const idle = now - this._lastHurtAt > EMB_CALL_IDLE && now - this._lastCallAt > EMB_CALL_IDLE;
+    const due = now - this._lastCallAt > EMB_CALL_EVERY;
+    if (!idle && !due) return;
+    this._lastCallAt = now;
+    this._carrierScream(f);
+    const n = idle ? 3 : 2;
+    for (let i = 0; i < n; i++) this.time.delayedCall(500 + i * 450, () => this._embSpawn());
+    if (idle && once('emb-calls')) this.time.delayedCall(800, () =>
+      this._showTip('LEFT ALONE, IT CALLS THEM  —  KEEP HURTING IT'));
+  }
+
+  // One of the horde, out of one of the places they come from. Not the one
+  // the brothers are standing at.
+  _embSpawn(where) {
+    if (this._dead || this._transitioning || this._holdInput) return null;
+    const cap = EMB_ALIVE + (this.player2 && this.player2.active ? 1 : 0);
+    if (this.enemiesAlive() >= cap) return null;
+    const W = this.bgGeom.w;
+    const spots = {
+      canal: () => this.fx(EMB_CANAL[0] + Math.random() * (EMB_CANAL[1] - EMB_CANAL[0])),
+      door:  () => this.fx(EMB_DOOR_X),
+      roof:  () => this.fx(EMB_ROOFJ[0] + Math.random() * (EMB_ROOFJ[1] - EMB_ROOFJ[0])),
+      road:  () => this.fx(0.012)
+    };
+    if (!where) {
+      const far = Object.keys(spots).filter(k => {
+        const x = spots[k](), p = this._nearestFighter(x);
+        return !p || Math.abs(p.x - x) > 0.16 * W;
+      });
+      const pool = far.length ? far : Object.keys(spots);
+      where = pool[Math.floor(Math.random() * pool.length)];
+    }
+    const x = spots[where](), H = this.alienH(), p = this._nearestFighter(x) || this.player;
+    const dir = p.x >= x ? 1 : -1;
+    let z;
+    if (where === 'roof') {
+      const E = window.ENEMIES && window.ENEMIES.alien, s = H / 244;
+      const body = E ? E.body : { w: 43, h: 236, x: 102, y: 6 };
+      const y = this.fy(EMB_ROOF.y) - (body.y + body.h - 123.5) * s - 1;
+      z = this.spawnAlien({ x, y, speed: 0.6, rage: 0.95, calmLunge: true, lungeDelay: 1400,
+                            vx: dir * (0.7 + Math.random() * 0.3) * H, vy: -0.7 * H, jumpClip: true });
+      Sfx.ensure(); Sfx.swoop();
+    } else if (where === 'canal') {
+      // hauled up over the broken edge, streaming water
+      z = this.spawnAlien({ x, speed: 0.55, rage: 0.9, calmLunge: true, lungeDelay: 1300,
+                            vx: dir * 0.25 * H, vy: -0.75 * H, jumpClip: true });
+      this._splash(x);
+    } else {
+      z = this.spawnAlien({ x, speed: 0.5 + Math.random() * 0.12, rage: 0.9, calmLunge: true, lungeDelay: 1500 });
+      if (where === 'door') { z.setTint(0x202020); this.time.delayedCall(700, () => z.active && z._alive && z.clearTint()); }
+    }
+    z.setAlpha(0);
+    this.tweens.add({ targets: z, alpha: 1, duration: where === 'door' ? 700 : 300 });
+    return z;
+  }
+
+  _splash(x) {
+    const y = this.groundY, H = this.charH;
+    Sfx.ensure(); Sfx.burst(0.25, 0.22, 900, 1.1);
+    for (let i = 0; i < 14; i++) {
+      const d = this.add.circle(x + (Math.random() - 0.5) * 0.4 * H, y + 0.1 * H, 1.5 + Math.random() * 3,
+                                i % 3 ? 0x8fb4d8 : 0xdfeeff, 0.9).setDepth(10);
+      this.tweens.add({ targets: d, y: y - (0.3 + Math.random() * 0.6) * H, x: d.x + (Math.random() - 0.5) * 0.5 * H,
+                        alpha: 0, duration: 420 + Math.random() * 300, ease: 'Quad.easeOut', onComplete: () => d.destroy() });
+    }
+  }
+
+  _embKill(x) {
+    this._kills++;
+    const drop = EMB_DROPS[this._kills];
+    if (drop) this.time.delayedCall(650, () => { if (!this._dead) this.dropOrb(x, drop); });
+    this._embCheck();
+  }
+
+  _embFlyerDown(x, f) {
+    if (f !== this._carrier) { this._embCheck(); return; }
+    this._carrierDead = true;
+    once('emb-carrier');
+    persistSeen('emb-carrier');
+    if (this._callTimer) { this._callTimer.remove(); this._callTimer = null; }
+    if (this._bossBar) {
+      const b = this._bossBar; this._bossBar = null;
+      b[3].width = 0;
+      this.tweens.add({ targets: b, alpha: 0, duration: 900, delay: 600, onComplete: () => b.forEach(o => o.destroy()) });
+    }
+    // the key comes away when it hits the walkway
+    const wait = () => {
+      if (this._dead) return;
+      if (f.active && f._state !== 'melt') { this.time.delayedCall(120, wait); return; }
+      this._dropKey(f.x, false);
+    };
+    wait();
+    this._embCheck();
+  }
+
+  _embCheck() {
+    if (!this._carrierDead || this.enemiesAlive() > 0 || this.flyersAlive() > 0 || !this._fightOn) return;
+    this._fightOn = false;
+    stopTrack(3000);
+    this.time.delayedCall(1200, () => {
+      if (this._dead) return;
+      this._say([['ETERWOLF', 'Quiet again.'], ['WOLFFEL', 'Get that chest open.']]);
+    });
+  }
+
+  // ---- the key -----------------------------------------------------------
+  _dropKey(x, quiet) {
+    if (this._keyItem || this._hasKey) return;
+    makeKeyTexture(this);
+    x = Phaser.Math.Clamp(x, this.fx(0.03), this.fx(0.78));
+    const H = this.charH, y = this.groundY - 0.08 * H;
+    const im = this.add.image(x, quiet ? y : y - 0.8 * H, 'emb_key').setDepth(10).setScale(0.3 * H / 64).setAngle(-20);
+    if (!quiet) this.tweens.add({ targets: im, y, angle: 10, duration: 600, ease: 'Bounce.easeOut' });
+    const glint = this.add.star(x + 0.1 * H, y - 0.06 * H, 4, 2, 7, 0xfff2cc, 0.9)
+      .setDepth(11).setBlendMode(Phaser.BlendModes.ADD).setAlpha(0);
+    this.tweens.add({ targets: glint, alpha: 0.95, scale: 1.5, duration: 260, yoyo: true, repeat: -1, repeatDelay: 700, delay: 500 });
+    const label = this.add.text(x, y - 0.3 * H, 'THE KEY', { fontFamily: F_UI, fontSize: '13px', fontStyle: '700',
+      color: '#f2c86a', stroke: '#140c02', strokeThickness: 4 }).setOrigin(0.5, 1).setDepth(11).setAlpha(0);
+    this.tweens.add({ targets: label, alpha: 1, duration: 300, delay: 500 });
+    this._keyItem = { im, glint, label, x, born: this.time.now };
+    if (!quiet) { Sfx.ensure(); Sfx.blip(1320, 0.25, 'triangle', 0.05, 1760); }
+  }
+
+  _updateKey() {
+    const k = this._keyItem;
+    if (!k || this._dead || this.time.now - k.born < 600) return;
+    const H = this.charH;
+    const p = this._fighters().find(q => Math.abs(q.x - k.x) < 0.4 * H && Math.abs(q.body.bottom - this.groundY) < 0.4 * H);
+    if (!p) return;
+    this._keyItem = null;
+    this.tweens.killTweensOf([k.im, k.glint, k.label]);
+    [k.im, k.glint, k.label].forEach(o => o.destroy());
+    this._hasKey = true;
+    once('emb-key');
+    persistSeen('emb-key');
+    this._reach(p, k.x);
+    Sfx.ensure(); Sfx.select();
+    this.cameras.main.flash(200, 255, 226, 150);
+    this._paintInventory(true);
+    this._showTip('THE KEY  —  THE LOCKED CHEST ON THE SLAB BY THE GIRDER');
   }
 
   // ---- E -----------------------------------------------------------------
   _useE(p) {
     if (!p || this._holdInput || this._inConversation || this._transitioning || this._dead) return;
-    if (this._atLever(p) && !this._leverPulled) this._pullLever(p);
-    else if (this._atCrank(p) && !this._cageOpen) this._turnCrank(p);
-    else if (this._atChestP(p) && this._chestReady()) this._takeGrenades(p);
+    if (!this._atChestP(p)) return;
+    if (this._chestReady()) this._takeGrenades(p);
+    else if (!this._hasKey && !this._chestTaken) {
+      Sfx.ensure(); Sfx.blip(180, 0.15, 'square', 0.05, 140);
+      this._showTip(this._carrierDead ? 'LOCKED  —  THE KEY IS SOMEWHERE ON THE WALKWAY'
+                                      : 'LOCKED  —  THE BIG ONE HAS THE KEY');
+    }
   }
 
   // The end of what is built: the chapter card.
@@ -12681,7 +12996,7 @@ class EmbankmentScene extends WalkScene {
     // Wolffel's E (his pad's Y) works the same things
     const p2 = this.player2;
     if (p2 && p2.active && Phaser.Input.Keyboard.JustDown(P2Pad.key('E'))) this._useE(p2);
-    // a blade or a round on the girder only sparks
+    // a blade on the girder only sparks (rounds: onBulletHitSolid)
     if (this.girderBox) {
       const b = this.girderBox;
       [this.player, p2].forEach(q => {
@@ -12689,40 +13004,40 @@ class EmbankmentScene extends WalkScene {
         const f = q._facing || 1, reach = 0.7 * this.charH;
         if ((b.x - q.x) * f > 0 && Math.abs(b.x - q.x) - b.width / 2 < reach) this._sparkGirder();
       });
-      (this.bullets || []).forEach(bl => {
-        if (bl.active && Math.abs(bl.x - b.x) < b.width / 2 + 8 && bl.y > b.y - b.height / 2) { bl.destroy(); this._sparkGirder(); }
-      });
     }
-    // the lift, and whoever is on it
     this._carryLift(delta);
-    // the prompts
-    const near = q => q && q.active;
-    const who = [this.player, p2].filter(near);
-    if (this.leverLabel) this.leverLabel.setAlpha(!this._leverPulled && who.some(q => this._atLever(q)) ? 1 : 0);
-    if (this.crankLabel) this.crankLabel.setAlpha(!this._cageOpen && !this._crankBusy && who.some(q => this._atCrank(q)) ? 1 : 0);
-    if (this.chestLabel) this.chestLabel.setAlpha(this._chestReady() && who.some(q => this._atChestP(q)) ? 1 : 0);
+    this._syncCarrierKey();
+    this._updateKey();
+    // the prompt over the chest
+    if (this.chestLabel) {
+      const near = [this.player, p2].some(q => q && q.active && this._atChestP(q));
+      const locked = !this._hasKey && !this._chestTaken;
+      this.chestLabel.setText(locked ? 'LOCKED' : this._chestTaken ? 'E  —  TAKE THE GRENADES' : 'E  —  UNLOCK THE CHEST');
+      this.chestLabel.setAlpha(near && (locked || this._chestReady()) ? 1 : 0);
+    }
   }
 
+  // Both travelling stones, and whoever is standing on them.
   _carryLift(delta) {
-    const m = this.lift;
-    if (!m) return;
     const d = Math.min(48, delta || 16), now = this.time.now;
     const brothers = [this.player, this.player2].filter(p => p && p.active && p.body);
-    const top0 = m.box.y - m.box.height / 2;
-    const riders = brothers.filter(p => { const b = p.body;
-      return b.velocity.y >= -1 && Math.abs(b.bottom - top0) <= 12 &&
-             b.right >= m.box.x - m.w / 2 && b.left <= m.box.x + m.w / 2; });
-    if (!m.live || now < m.waitUntil) return;
-    m.t += (d / m.ms) * m.dir;
-    if (m.t >= 1) { m.t = 1; m.dir = -1; m.waitUntil = now + m.pause; }
-    if (m.t <= 0) { m.t = 0; m.dir = 1; m.waitUntil = now + m.pause; }
-    const e = 0.5 - Math.cos(Math.PI * m.t) / 2;
-    const wantY = m.yFrom + (m.yTo - m.yFrom) * e;
-    const dy = wantY - m.y;
-    m.y = wantY; m.im.y = wantY;
-    m.box.y = wantY + 30;
-    m.box.body.updateFromGameObject();
-    riders.forEach(p => { p.y += dy + (dy ? (top0 - p.body.bottom) : 0); if (dy) p.setVelocityY(0); });
+    (this.movers || []).forEach(m => {
+      const top0 = m.box.y - m.box.height / 2;
+      const riders = brothers.filter(p => { const b = p.body;
+        return b.velocity.y >= -1 && Math.abs(b.bottom - top0) <= 12 &&
+               b.right >= m.box.x - m.w / 2 && b.left <= m.box.x + m.w / 2; });
+      if (!m.live || now < m.waitUntil) return;
+      m.t += (d / m.ms) * m.dir;
+      if (m.t >= 1) { m.t = 1; m.dir = -1; m.waitUntil = now + m.pause; }
+      if (m.t <= 0) { m.t = 0; m.dir = 1; m.waitUntil = now + m.pause; }
+      const e = 0.5 - Math.cos(Math.PI * m.t) / 2;
+      const wantY = m.yFrom + (m.yTo - m.yFrom) * e;
+      const dy = wantY - m.y;
+      m.y = wantY; m.im.y = wantY;
+      m.box.y = wantY + 30;
+      m.box.body.updateFromGameObject();
+      riders.forEach(p => { p.y += dy + (dy ? (top0 - p.body.bottom) : 0); if (dy) p.setVelocityY(0); });
+    });
     this._drawChains();
   }
 }
