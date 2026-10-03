@@ -4734,8 +4734,13 @@ function driveWalker(scene, p, keys, onGround) {
 
   // A press is remembered briefly, so one made just before landing (or in the
   // last moment of a dash) still jumps instead of being lost.
+  // On a controller only A jumps: the left stick folds into the arrow keys
+  // (the menus need its up), and a thumb drifting up on the stick while
+  // running was making him jump. The arrow key itself still jumps.
+  const padUp = keys === P2Pad.keys || !!Pad._held.UP;
+  const upJust = Phaser.Input.Keyboard.JustDown(keys.UP) && !padUp;
   if (Phaser.Input.Keyboard.JustDown(keys.W) || Phaser.Input.Keyboard.JustDown(keys.SPACE) ||
-      Phaser.Input.Keyboard.JustDown(keys.UP)) p._jumpPressedAt = now;
+      upJust) p._jumpPressedAt = now;
   const wantJump = !dashing && !crouch && now - (p._jumpPressedAt || -1e9) < JUMP_BUFFER_MS;
   // Touching down clears the count, so the second jump is only ever available
   // once he has left the floor. Walking off an edge gives a moment's grace
@@ -4765,7 +4770,7 @@ function driveWalker(scene, p, keys, onGround) {
   // the full jump. Only his own jumps — a blast or a hit that throws him is
   // not his to cut.
   if (p._rising) {
-    const held = keys.SPACE.isDown || keys.W.isDown || keys.UP.isDown;
+    const held = keys.SPACE.isDown || keys.W.isDown || (keys.UP.isDown && !padUp);
     if (p.body.velocity.y >= 0) p._rising = false;
     else if (!held && p.body.velocity.y < -JUMP_CUT_V * k) { p.setVelocityY(-JUMP_CUT_V * k); p._rising = false; }
   }
@@ -10085,7 +10090,7 @@ const Coop = {
       playOnce(helper, 'grieve', helper._facing);
       helper._downUntil = this.time.now + 1e7;
       const eter = helper._hero && helper._hero.id === 'eterwolf';
-      this._say([eter ? ['ETERWOLF', 'Feli...? No. No, no, no...'] : ['WOLFFEL', 'Eter...? Hermano. Get up.']]);
+      this._say([eter ? ['ETERWOLF', 'Feli...? No. No, no, no...'] : ['WOLFFEL', 'Lui...? Hermano. Get up.']]);
     }
     const shade = this.add.rectangle(640, 360, 1280, 720, 0x000000, 0).setScrollFactor(0).setDepth(80);
     this.tweens.add({ targets: shade, fillAlpha: 0.45, duration: 2600 });
@@ -11004,8 +11009,7 @@ class ExitScene extends WalkScene {
       beats: [
         ...(GameState.seen['exit-intro'] ? [{ at: 0, tip: 'HOLD  A  OR  D  TO WALK' }] : []),
         { at: 0.30, tip: 'HOLD  SHIFT  WHILE WALKING TO RUN — it is much faster' },
-        { at: 0.70, say: [['PLAYER', 'Road keeps going. Come on.']],
-                    tip: 'KEEP GOING RIGHT' }
+        { at: 0.70, tip: 'KEEP GOING RIGHT' }
       ],
       exits: [
         // The end of the stage is just the end of the road: no caret, no label,
@@ -11138,17 +11142,13 @@ const EXIT_FIRES = [
   [1438, 406, 0.5], [1528, 420, 0.32]
 ];
 
-// Out of the bunker, the first thing they see. Short: it is the pause before
-// the walk, not a scene of its own.
+// Out of the bunker, the first thing they see: the town burning, and the
+// joke. Feli calls his brother Lui.
 const EXIT_LINES = [
-  { who: 'WOLFFEL',  text: 'Eter... the whole town is burning.' },
-  { who: 'ETERWOLF', text: 'How long were we down there?' },
-  { who: 'WOLFFEL',  text: 'Long enough to miss the end of the world, looks like.' },
   { who: 'ETERWOLF', text: 'Feli... be honest. Was this you?' },
-  { who: 'WOLFFEL',  text: 'Me?!' },
+  { who: 'WOLFFEL',  text: 'Me?! Lui!' },
   { who: 'ETERWOLF', text: 'Last time somebody ate your arepa, half the street went up.' },
-  { who: 'WOLFFEL',  text: "That was ONE time. And he had it coming." },
-  { who: 'ETERWOLF', text: 'The Plaza, then. Stay close, Feli.' }
+  { who: 'WOLFFEL',  text: "That was ONE time, Lui. And he had it coming." }
 ];
 
 // Where it lies (a fraction of the road) and what it says. Short, like a page
