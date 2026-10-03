@@ -12935,11 +12935,10 @@ class NightStreetScene extends WalkScene {
       this.time.delayedCall(250, () => { Sfx.ensure(); Sfx.roar(); this._flicker(true); });
       this.time.delayedCall(800, () => this._sendFlyer(-1));
     }
-    // the one that screamed comes first, straight off the edge
-    const first = this._ledgeLeap(this._stander ? this._stander.x : this.fx(0.2), true);
-    if (retry && first) this.time.delayedCall(250, () => {
-      if (first.active) this._screamLines(first.x, first.y - 0.3 * first._H, 900, first._H / this.charH);
-    });
+    // the one that screamed comes first, straight off the edge; on a retry
+    // it screams again first (and the lines only ever go with the scream)
+    if (retry && !this._stander) this._screamThenLeap(this.fx(0.2), true);
+    else this._ledgeLeap(this._stander ? this._stander.x : this.fx(0.2), true);
     this._hordeTimer = this.time.addEvent({ delay: 1700, loop: true, callback: () => this._ledgeSpawn() });
     this._say([['PLAYER', 'Off the ledge! Here they come!']]);
     this._showTip('SWING INTO THE SPIKES TO SEND THEM BACK — ITS OWN SPIKE BRINGS IT DOWN');
@@ -12978,10 +12977,37 @@ class NightStreetScene extends WalkScene {
     if (this._spawned >= NIGHT_HORDE) { if (this._hordeTimer) this._hordeTimer.remove(); this._hordeTimer = null; return; }
     if (this.enemiesAlive() >= NIGHT_ALIVE) return;
     // every so often one stops on the edge and screams first
-    const loud = this._spawned % 4 === 3;
-    if (loud) { Sfx.ensure(); Sfx.roar(); this.cameras.main.shake(220, 0.003); this._flicker(false); }
-    const z = this._ledgeLeap(this.fx(0.05 + Math.random() * 0.26), false);
-    if (loud && z) this._screamLines(z.x, z.y - 0.3 * z._H, 700, z._H / this.charH);
+    const x = this.fx(0.05 + Math.random() * 0.26);
+    if (this._spawned % 4 === 3) this._screamThenLeap(x, false);
+    else this._ledgeLeap(x, false);
+  }
+
+  // The scream lines go with a scream and nothing else: it steps out onto the
+  // edge, opens up (its face clip) and screams, and only then leaps. The lines
+  // come out of its mouth while it is doing it, not off one in mid-air.
+  _screamThenLeap(x, retry) {
+    const H = this.alienH(), S = ALIEN_FACE_SHEET;
+    if (!this.anims.exists('alien-face') || this._stander) { this._ledgeLeap(x, !!this._stander); return; }
+    const ly = this.fy(NIGHT_LEDGE.y);
+    const st = this.add.sprite(x, ly + 2, S.key, 'ae0').setDepth(9)
+      .setOrigin(S.cx / S.cw, (S.foot + 1) / S.ch).setScale(H / S.standH).setAlpha(0);
+    this._stander = st;
+    this._sortNew();
+    this.tweens.add({ targets: st, alpha: 1, duration: 250 });
+    st.play('alien-face');
+    const live = () => !this._dead && !this._transitioning && this.scene.isActive() && st.active;
+    this.time.delayedCall(700, () => {
+      if (!live()) return;
+      Sfx.ensure(); Sfx.roar(); if (retry) Sfx.roar();
+      this.cameras.main.shake(retry ? 400 : 220, retry ? 0.006 : 0.003);
+      this._flicker(!!retry);
+      this._screamLines(st.x, st.y - 0.8 * H, 800, H / this.charH);
+    });
+    this.time.delayedCall(1550, () => {
+      if (!live()) { if (st.active) st.destroy(); if (this._stander === st) this._stander = null; return; }
+      this._ledgeLeap(st.x, true);          // the leap takes over from it
+      if (this._stander === st) { st.destroy(); this._stander = null; }
+    });
   }
 
   _nightKill(x) {
