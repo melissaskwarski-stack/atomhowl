@@ -4075,7 +4075,8 @@ const WALK_SPEED   = 300;
 // Run is nearly twice the walk. At 430 against a 300 walk the two read as the
 // same pace with a different cycle on top, which is not what holding a key
 // should feel like.
-const RUN_SPEED    = 560;
+const RUN_SPEED    = 620;
+const RUN_ART_SPEED = 560;     // the pace the run clips were drawn to: faster than it, they play faster
 const BACK_SPEED   = 230;      // backing off with the gun up, pointed the other way
 // Combat runs by default (X drops it to the walk); the exploration sprint is
 // faster still because there is nothing there to run into.
@@ -4870,8 +4871,9 @@ function driveWalker(scene, p, keys, onGround) {
     }
     // The aimed stride is the sprint, slowed to the pace he is moving at:
     // a little either way going forwards, a lot backing off.
-    const ts = want === 'aimrun' ? Phaser.Math.Clamp(Math.abs(p.body.velocity.x) / (RUN_SPEED * k), 0.85, 1.15)
-             : want === 'aimrunB' ? Phaser.Math.Clamp(Math.abs(p.body.velocity.x) / (RUN_SPEED * k), 0.4, 1) : 1;
+    const ts = want === 'aimrun' ? Phaser.Math.Clamp(Math.abs(p.body.velocity.x) / (RUN_ART_SPEED * k), 0.85, 1.15)
+             : want === 'aimrunB' ? Phaser.Math.Clamp(Math.abs(p.body.velocity.x) / (RUN_ART_SPEED * k), 0.4, 1)
+             : want === 'run' ? RUN_SPEED / RUN_ART_SPEED : 1;
     if (p.anims.timeScale !== ts) p.anims.timeScale = ts;
   } else {
     if (!onGround) p.play('hero-air', true);
@@ -8598,7 +8600,7 @@ const WalkCombat = {
     g.gun.destroy(); g.glint.destroy();
     GameState.hasPistol = true;
     this._refreshHint();
-    this._reach(p, g.x);
+    // (no bend-down: that is only for opening boxes, the crate and the chests)
     Sfx.ensure(); Sfx.select();
     this.cameras.main.flash(240, 255, 226, 170);
     this._pistolCard();
@@ -9349,7 +9351,7 @@ const WalkFlyers = {
       if (!p) return true;
       this.tweens.killTweensOf([o.orb, o.glow, o.label]);
       [o.orb, o.glow, o.label].forEach(g => g.destroy());
-      this._reach(p, o.x);
+      // walked through and taken: no bend-down, that is only for opening boxes
       const t = o.type || 'antiacid';
       if (t === 'mend') this._mendOn(p);
       else if (t === 'fury') this._furyOn(now);
@@ -10184,13 +10186,8 @@ const Inspect = {
         if (this._inConversation || this._holdInput || this._transitioning || this._dead) return;
         const it = this._inspects.find(i => i.live && this._nearInspect(i));
         if (!it || this._reachBusy) return;
-        // something on the floor — a letter, his scarf — he bends down for
-        // first; something on a wall he just looks at
-        const low = it.floorY != null && Math.abs(it.floorY - it.y) < 0.35 * this.charH;
-        if (!low) { it.onUse.call(this, it); return; }
-        this._reachBusy = true;
-        const ms = this._reach(this.player, it.x);
-        this.time.delayedCall(Math.min(420, ms || 0), () => { this._reachBusy = false; if (it.live) it.onUse.call(this, it); });
+        // read where it lies: the bend-down is only for opening boxes
+        it.onUse.call(this, it);
       });
     }
     const it = Object.assign({ reach: 0.55 * this.charH, live: true }, o);
@@ -13640,7 +13637,6 @@ class EmbankmentScene extends WalkScene {
     this._hasKey = true;
     once('emb-key');
     persistSeen('emb-key');
-    this._reach(p, k.x);
     Sfx.ensure(); Sfx.select();
     this.cameras.main.flash(200, 255, 226, 150);
     this._paintInventory(true);
@@ -14443,7 +14439,6 @@ class StoreScene extends WalkScene {
   _throwLever() {
     if (this._leverBusy) return;
     this._leverBusy = true;
-    this._reach(this.player, this.leverX);
     this.leverOnState = !this.leverOnState;
     Sfx.ensure(); Sfx.select();
     const a = this.leverOnState ? this.leverOff : this.leverOn;
@@ -15609,7 +15604,6 @@ class StorageTwoScene extends WalkScene {
 
   _throwSwitch() {
     if (this.roomLit || this._staged) return;
-    this._reach(this.player, this.swX != null ? this.swX : null);
     if (this.creature) this.time.delayedCall(620, () => this.creature.clearTint());
     // the stop beyond the switch goes with the dark
     if (this.darkWall) {
