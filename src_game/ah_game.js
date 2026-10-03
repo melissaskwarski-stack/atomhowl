@@ -520,6 +520,13 @@ const RadioSong = {
   reset() { if (this.playing) this.fadeOut(600); this.started = false; this.out = null; this._duck = 1; }
 };
 
+// The song, clean (not through the radio): started once, as they leave the
+// bunker; after that only its level moves.
+function startAcecho(vol, ms) {
+  if (!RadioSong.started) { RadioSong.start(0.0001, 10); RadioSong.clean(vol, ms); }
+  else if (RadioSong.playing) RadioSong.clean(vol, ms);
+}
+
 if (typeof window !== 'undefined') window.__samples = { loadSample, playSample, RadioSong };   // for tests
 
 function pickAudio(list) {
@@ -1482,7 +1489,12 @@ const D2R = Math.PI / 180;
 const AIM_SS     = 4;      // gun textures are drawn this many times larger than shown
 const AIM_SLEW   = 1500;   // deg/s the arm can swing: hanging to level in about 60ms
 const AIM_READY  = 9;      // deg: this close to where it is wanted, the gun may fire
-const AIM_DOWN   = -84;    // deg: lower than this the arm is hanging, back to plain idle
+// How far the arm goes. Lower than this the drawn arm is hanging at his side
+// and stops reading as aiming; higher, it crosses his face and the hand goes
+// out of the top of the picture. The gun points anywhere between.
+const AIM_MIN    = -50;
+const AIM_MAX    = 62;
+const AIM_DOWN   = AIM_MIN + 0.5;    // lowered past this, the arm is away: plain idle
 const AIM_STICK  = 0.35;   // right stick radius before it means "aim"
 const AIM_MOUSE_MS = 2500; // the mouse counts as aiming this long after it last moved
 
@@ -1643,7 +1655,7 @@ class AimRig {
               .setScale(1 / AIM_SS);
     }
     this.gun.setPosition(a.grip[0], a.grip[1]).setRotation(-a.ang * D2R)
-            .setAlpha(Math.max(0, Math.min(1, (st.cur + 84) / 30)));
+            .setAlpha(Math.max(0, Math.min(1, (st.cur - AIM_MIN) / 12)));
     // whatever the sprite is doing to itself — a hit flash (a flat fill), acid,
     // the red wash of being down — the layers do too
     const tint = p.isTinted ? (p.tintFill ? 'f' : 't') + p.tintTopLeft : '';
@@ -6939,6 +6951,16 @@ class WalkScene extends Phaser.Scene {
 
   _say(lines) { this._sayQueue.push.apply(this._sayQueue, lines); }
 
+  // Both brothers here, two players: the only time they talk over their heads.
+  _duo() { return !!(this.player2 && this.player2.active); }
+
+  // A line one brother says to the other with two players, or the plain
+  // instruction it amounts to with one.
+  _hint(lines, tip) {
+    if (this._duo()) this._say(lines);
+    if (tip) this._showTip(tip);
+  }
+
   // Drop the rest of what is being said and clear the bubble. Everything the
   // lines were going to do has already happened — they are commentary on the
   // stage, never a gate in front of it — so there is nothing to fast-forward
@@ -6971,13 +6993,26 @@ class WalkScene extends Phaser.Scene {
       if (b.needs === 'pickup' && !this.pickup) { b.fired = true; continue; }
       if (b.needs === 'radio' && GameState.seen['bunker-radio']) { b.fired = true; continue; }
       b.fired = true;
-      if (b.say) this._say(b.say);
+      // Lines over their heads are the brothers talking to each other, so
+      // they are for two players; on his own he gets the instruction instead.
+      if (b.say && b.duoOnly && !this._duo()) { if (b.soloTip) this._showTip(b.soloTip); }
+      else if (b.say) this._say(b.say);
       if (b.tip) this._showTip(b.tip);
     }
 
     // spoken lines hold for long enough to read, then hand over to the next
     const now = this.time.now;
     if (now >= this._sayUntil) {
+      // On his own, nothing the other brother says goes over anyone's head:
+      // there is no one there to say it.
+      if (!this._duo()) {
+        const me = (castById(this.castId) || {}).name || 'ETERWOLF';
+        while (this._sayQueue.length) {
+          const w = this._sayQueue[0][0];
+          if ((w === 'ETERWOLF' || w === 'WOLFFEL') && w !== me) this._sayQueue.shift();
+          else break;
+        }
+      }
       if (this._sayQueue.length) {
         const [who, text] = this._sayQueue.shift();
         // 'PLAYER' is whichever brother was chosen, so a line that either of
@@ -7210,7 +7245,7 @@ class WalkScene extends Phaser.Scene {
     const p = who || this.player;
     if (!p || !p.active || p._down || p._crouching || this._dead || now < (p._nextSwingAt || 0) ||
         this._holdInput || this._transitioning) return;
-    p._nextSwingAt = now + 380;
+    p._nextSwingAt = now + 250;
     const hero = p._hero;
     const chain = ['sword', 'sword2', 'sword3', 'sword4'].filter(a => heroHas(hero, a));
     p._comboStep = (chain.length && now < (p._comboUntil || 0))
@@ -7766,7 +7801,6 @@ const WalkCombat = {
       z._enraged = true;
       z._nextLungeAt = now + 420;
       Sfx.roar();
-      if (this._screamLines) this._screamLines(z.x, z.y - 0.3 * z._H, 520, 0.75 * z._H / this.charH);
     }
     z._knockUntil = now + 160;
     z._lungeUntil = 0;
@@ -8171,13 +8205,13 @@ const WalkAim = {
   },
 
   _aimSt(p) {
-    return p._aim || (p._aim = { cur: -90, tgt: 0, face: p._facing || 1, up: false, active: false,
+    return p._aim || (p._aim = { cur: AIM_MIN, tgt: 0, face: p._facing || 1, up: false, active: false,
                                  ready: false, until: 0, wasUp: false, src: 'key' });
   },
   _aimOff(st) {
     if (!st) return;
     st.active = false; st.up = false; st.ready = false; st.wasUp = false;
-    st.cur = -90; st.until = 0;
+    st.cur = AIM_MIN; st.until = 0;
   },
 
   // May he have a gun up at all right now? The same gates the trigger has, so
@@ -8244,7 +8278,7 @@ const WalkAim = {
       if (Math.hypot(dx, dy) < 28 * H.sx) break;                    // too close to be worth it
       a = Math.atan2(-dy, Math.max(0, dx)) / D2R;
     }
-    st.tgt = Phaser.Math.Clamp(a, -90, 90);
+    st.tgt = Phaser.Math.Clamp(a, AIM_MIN, AIM_MAX);
   },
 
   // Called by driveWalker each frame, before it decides which way he faces and
@@ -8284,7 +8318,7 @@ const WalkAim = {
       st.face = p._facing || st.face || 1; st.tgt = 0; st.src = 'key';       // straight ahead
     } else if (move) st.face = p._facing || st.face;                      // K held, he turns with the keys
     // ---- the arm follows ----
-    const goal = st.up ? (crouch ? 0 : st.tgt) : -90;      // crouched: level, and nothing else
+    const goal = st.up ? (crouch ? 0 : Phaser.Math.Clamp(st.tgt, AIM_MIN, AIM_MAX)) : AIM_MIN;   // crouched: level, and nothing else
     const step = AIM_SLEW * dt;
     st.cur += Math.max(-step, Math.min(step, goal - st.cur));
     st.active = st.up || st.cur > AIM_DOWN;
@@ -9803,7 +9837,8 @@ class BunkerScene extends WalkScene {
       beats: [
         { at: 0,    tip: 'HOLD  A  TO GO LEFT,  D  TO GO RIGHT' },
         { at: 0.22, tip: 'HOLD  SHIFT  WHILE WALKING TO RUN' },
-        { at: 0.30, say: [['ETERWOLF', 'Is that... a radio?']], needs: 'radio' }
+        { at: 0.30, say: [['ETERWOLF', 'Is that... a radio?']], needs: 'radio', duoOnly: true,
+          soloTip: "THERE'S A RADIO ON THE BENCH  —  E" }
       ],
       exits: [
         // The blast door's box, measured off bunker_wide.png: the slab runs
@@ -9817,20 +9852,20 @@ class BunkerScene extends WalkScene {
         { xFrac: 0.90, w: 180, label: 'EXIT THE BUNKER', target: 'ExitScene',
           glow: true, noArrow: true, glowShape: false,
           glowFrac: { x0: 0.838, x1: 0.952, y0: 0.264, y1: 0.775 },
-          // Out to where, though? Not until the radio has said — and not on
-          // an empty stomach. Both, then the door.
-          locked: () => !GameState.seen['bunker-radio'] || !GameState.seen['bunker-ate'],
-          lockedLabel: 'GO WHERE, THOUGH?',
+          // Locked. The key is in the food box; and before they go, the
+          // radio says where to. Both, then the door.
+          locked: () => !GameState.seen['bunker-ate'] || !GameState.seen['bunker-radio'],
+          lockedLabel: 'LOCKED',
           onLocked() {
             if (this.time.now < (this._doorNagAt || 0)) return;
             this._doorNagAt = this.time.now + 2600;
             Sfx.ensure(); Sfx.deny();
-            if (!GameState.seen['bunker-radio']) {
-              this._say([['ETERWOLF', 'Go where, though?']]);
-              this._showTip("THERE'S A RADIO ON THE BENCH  —  E");
+            if (!GameState.seen['bunker-ate']) {
+              this._hint([['ETERWOLF', "Locked. There has to be a key somewhere."]],
+                         'LOCKED  —  LOOK AROUND BEFORE GOING THROUGH THE DOOR');
             } else {
-              this._say([['WOLFFEL', 'Not on an empty stomach.']]);
-              this._showTip('THE BOX BY THE DOOR  —  E TO OPEN');
+              this._hint([['ETERWOLF', 'The radio first. Maybe it says something important.']],
+                         'LOOK AROUND BEFORE GOING THROUGH  —  THE RADIO ON THE BENCH');
             }
           } }
       ],
@@ -9866,24 +9901,7 @@ class BunkerScene extends WalkScene {
     this._calmIdle = false;
     this._doorOpen = false;
     this._buildRadio();
-    // Already heard: El Acecho is on the radio, as it was left.
-    if (this._radioUsed) { if (!RadioSong.started) RadioSong.start(0.12, 1500); else RadioSong.duck(false, 300); }
     this._buildCrate();
-    // The wolf painted on the banner by the bunks. Not theirs — nothing here
-    // is — and Feli would know.
-    if (!GameState.seen['bunker-banner']) {
-      const w = this._paintToWorld(BUNKER_ART.banner[0], BUNKER_ART.banner[1]);
-      this.addInspect({
-        x: w.x, y: w.y, floorY: this.groundY, labelY: w.y - 70, label: 'E  —  LOOK',
-        reach: 0.8 * this.charH,
-        onUse(it) {
-          this._retireInspect(it);
-          once('bunker-banner');
-          this._say([['ETERWOLF', 'Feli... did you paint that?'],
-                     ['WOLFFEL', "Me? No. I'd remember making something that good."]]);
-        }
-      });
-    }
     this.input.keyboard.on('keydown-E', () => {
       if (this._inConversation || this._holdInput || this._transitioning) return;
       if (this._atRadio()) this._useRadio();
@@ -10084,21 +10102,13 @@ class BunkerScene extends WalkScene {
     this._radioLive(false);
     if (this._static) this._static.setVolume(0.24, 350);
     const stopChatter = () => { if (this._chatter) { this._chatter.stop(); this._chatter = null; } };
-    // The broadcast is lost to static — and out of the static, a song: El
-    // Acecho, coming through the radio.
-    const song = () => {
-      if (RadioSong.started) return;
-      Sfx.ensure(); Sfx.burst(0.5, 0.35, 2400, 0.7);
-      if (this._static) { this._static.setVolume(0.3, 80); this._static.setVolume(0.05, 1400); }
-      RadioSong.start(0.38, 1800);
-    };
+    // The broadcast, lost to static. (El Acecho no longer comes out of it:
+    // the song starts as they go out of the door.)
     this.time.delayedCall(1300, () => {
       if (!this.scene.isActive()) return;
       this._panel(RADIO_LINES, (i, line) => {
         this._radioLine = i;
         stopChatter();
-        // the brothers talk over the song; it comes back up between them
-        if (line.who !== 'RADIO') { song(); RadioSong.duck(true); }
         if (!this._static) return;
         if (line.who === 'RADIO') {
           // loud under the voice, and the voice itself as chatter while it types
@@ -10109,25 +10119,21 @@ class BunkerScene extends WalkScene {
         }
         if (line.cue === 'lost') {
           // the signal goes: a surge of static over the end of the sentence
-          // (only if that line is still up — skipped past, the brothers keep
-          // the quiet they are talking in)
           this.time.delayedCall(line.text.length * 26 - 150, () => {
             if (this._radioLine !== i || !this._static) return;
             stopChatter();
             this._static.setVolume(0.34, 120);
-            this.time.delayedCall(700, () => {
-              if (this._radioLine === i && this._static) this._static.setVolume(0.16, 400);
-              if (this._radioLine === i) song();
-            });
+            this.time.delayedCall(700, () => { if (this._radioLine === i && this._static) this._static.setVolume(0.16, 400); });
           });
         }
       }, () => {
         stopChatter();
-        song();
-        RadioSong.duck(false, 900);
         if (this._static) this._static.setVolume(0.04, 900);
         this._release();
-        this._showTip('THE PLAZA  —  OUT THROUGH THE DOOR');
+        // where to now: the door if the key is found, the food if it is not
+        if (this._ate) this._showTip('THE PLAZA  —  OUT THROUGH THE DOOR');
+        else this._hint([['WOLFFEL', "I'm super hungry. Is there anything to eat?"]],
+                        'LOOK AROUND  —  THE BOX BY THE DOOR  —  E');
       });
     });
   }
@@ -10148,13 +10154,23 @@ class BunkerScene extends WalkScene {
       if (wf) { wf._facing = this.crateX >= wf.x ? 1 : -1; playOnce(wf, 'burger', wf._facing); }
       this._panel(CRATE_LINES, (i, line) => {
         if (line.cue === 'munch') this.time.delayedCall(260, () => Sfx.munch());
-      }, () => this._release());
+        if (line.cue === 'key') { Sfx.ensure(); Sfx.blip(1320, 0.2, 'triangle', 0.05, 1760); }
+      }, () => {
+        this._release();
+        this._paintInventory && this._paintInventory(true);
+        // the key, but out to where? the radio, if it has not been heard
+        if (this._radioUsed) this._showTip('THE KEY  —  OUT THROUGH THE DOOR');
+        else this._hint([['ETERWOLF', "Let's check the radio. Maybe it says something important."]],
+                        'A KEY  —  NOW THE RADIO ON THE BENCH  —  E');
+      });
     });
   }
 
   update(time, delta) {
     super.update(time, delta);
     if (!this.player || this.radioX == null) return;
+    const doorEx = this.exits && this.exits.find(e => e.target === 'ExitScene');
+    if (doorEx) doorEx.lockedLabel = !this._ate ? 'LOCKED' : 'THE RADIO FIRST';
     const now = this.time.now;
     // standby light blinks until it is on
     if (!this._radioUsed) this.radioLed.setAlpha(Math.floor(now / 520) % 2 ? 1 : 0.15);
@@ -10181,8 +10197,6 @@ class BunkerScene extends WalkScene {
       const want = 0.12 + 0.26 * Math.max(0, 1 - dm / 6);
       if (Math.abs(RadioSong.level - want) > 0.01) RadioSong.radio(want, 250);
     }
-    const door = this.exits && this.exits.find(e => e.target === 'ExitScene');
-    if (door) door.lockedLabel = this._radioUsed ? 'NOT ON AN EMPTY STOMACH' : 'GO WHERE, THOUGH?';
   }
 }
 
@@ -10194,6 +10208,9 @@ class BunkerScene extends WalkScene {
 BunkerScene.prototype.goExit = function (ex) {
   if (ex.target !== 'ExitScene' || this._doorOpen) return WalkScene.prototype.goExit.call(this, ex);
   this._doorOpen = true;
+  // El Acecho: it starts as the door opens and they go up into what is left
+  // of the town, clean, and carries on out there.
+  startAcecho(0.3, 2600);
   // the walk up and through: once a game; after that, just the door
   if (!firstCinematic('bunker-door')) return WalkScene.prototype.goExit.call(this, ex);
   this._transitioning = true;
@@ -10287,7 +10304,7 @@ const RADIO_LINES = [
 
 const CRATE_LINES = [
   { who: 'WOLFFEL',  text: 'Arepas! Somebody stocked this place.', cue: 'munch' },
-  { who: 'ETERWOLF', text: "Eat fast. The Plaza's a long way." },
+  { who: 'ETERWOLF', text: "And a key, under them. That'll be the door.", cue: 'key' },
   { who: 'WOLFFEL',  text: "I'm going to take ten.", cue: 'munch' }
 ];
 
@@ -10402,8 +10419,8 @@ class ExitScene extends WalkScene {
     // The fires across the valley are heard the whole time out here, low and
     // far off; the cinematic brings them up while the camera is out there.
     this._crackle = playSample('sfxFireFar', { loop: true, far: true, vol: 0, scale: 0.6 });
-    // El Acecho, off the bunker radio, carries on out here: clean, and low
-    if (RadioSong.playing && RadioSong.mode === 'radio') RadioSong.clean(0.14, 2500);
+    // El Acecho, from the moment they came out of the door
+    startAcecho(GameState.seen['exit-intro'] ? 0.2 : 0.3, 2500);
     if (this._crackle) this._crackle.setVolume(GameState.seen['exit-intro'] ? 0.28 : 0.12, 1500);
     this._introTimers = [];
     this._exitTalking = false;
@@ -10493,7 +10510,10 @@ const EXIT_LINES = [
   { who: 'WOLFFEL',  text: 'Eter... the whole town is burning.' },
   { who: 'ETERWOLF', text: 'How long were we down there?' },
   { who: 'WOLFFEL',  text: 'Long enough to miss the end of the world, looks like.' },
-  { who: 'ETERWOLF', text: 'No sirens. No people. Nothing.' },
+  { who: 'ETERWOLF', text: 'Feli... be honest. Was this you?' },
+  { who: 'WOLFFEL',  text: 'Me?!' },
+  { who: 'ETERWOLF', text: 'Last time somebody ate your arepa, half the street went up.' },
+  { who: 'WOLFFEL',  text: "That was ONE time. And he had it coming." },
   { who: 'ETERWOLF', text: 'The Plaza, then. Stay close, Feli.' }
 ];
 
@@ -13070,6 +13090,7 @@ class StoreScene extends WalkScene {
     // out.
     this._horde = !!GameState.seen['fight1-won'] && !GameState.seen['tienda-cleared'];
     this._cleared = !!GameState.seen['tienda-cleared'];
+    this._sentry = null;
 
     // Zoomed so the brothers read against a room this wide. The painting's own
     // scale comes off the door on the right — 0.205 of the height for a door a
@@ -13211,17 +13232,78 @@ class StoreScene extends WalkScene {
   _startHorde() {
     this._hordeKills = 0;
     this.onEnemyKilled = () => this._hordeKill();
+    // One is already in here: stood just inside the storage door they come
+    // back out of, its back to them. It hears them, turns, and comes.
+    this._placeSentry(0.80);
     this.time.delayedCall(700, () => {
       if (this._dead) return;
       playTrack('fightMusic');
-      Sfx.ensure(); Sfx.roar();
       this.cameras.main.shake(300, 0.004);
       this._hordeView(1300);
       this.startCombat();
-      this._say([['PLAYER', 'The front. Something is coming in the front.']]);
-      this._showTip('THEY ARE COMING IN FROM THE STREET');
+      this._showTip('THEY ARE IN THE SHOP');
     });
-    [1900, 4700, 7500].forEach((t, i) => this.time.delayedCall(t, () => this._hordeAlien(i)));
+    // and the rest close by: one out of the shadows in the middle of the
+    // floor, and a berserker running in at the front
+    this.time.delayedCall(2600, () => this._hordeAlien(0, 0.50));
+    this.time.delayedCall(4600, () => this._hordeBerserker(0.035));
+  }
+
+  // Stood with its back to them: first encounter enemy.gif held on its first
+  // frame. Close enough, or a couple of seconds after they come in, it turns
+  // to them, opens its claws, screams — and is a fighting alien from there.
+  _placeSentry(xf) {
+    this._sentry = null;
+    if (!this.anims.exists('alien-face')) { this.time.delayedCall(900, () => this._hordeAlien(0, xf)); return; }
+    const S = ALIEN_FACE_SHEET, H = this.alienH(), x = this.fx(xf);
+    const z = this.add.sprite(x, this.groundY + 2, S.key, 'ae0').setDepth(9)
+      .setOrigin(S.cx / S.cw, (S.foot + 1) / S.ch).setScale(H / S.standH).setFlipX(true);
+    z._woke = false;
+    z._wakeAt = this.time.now + 2400;
+    this._sentry = z;
+  }
+
+  _updateSentry() {
+    const z = this._sentry;
+    if (!z || z._woke || this._dead || this._holdInput) return;
+    // a moment stood there with its back to them first, however close they are
+    const p = this._nearestFighter(z.x), near = p && Math.abs(p.x - z.x) < 3.2 * this.pxPerM;
+    if (this.time.now < z._wakeAt - (near ? 1100 : 0)) return;
+    z._woke = true;
+    z.play('alien-face');
+    Sfx.ensure(); Sfx.roar();
+    this.cameras.main.shake(200, 0.004);
+    let done = false;
+    const go = () => {
+      if (done) return;
+      done = true;
+      if (!z.active) return;
+      const x = z.x;
+      z.destroy();
+      if (this._sentry === z) this._sentry = null;
+      if (this._dead || this._transitioning) return;
+      const a = this.spawnAlien({ x, speed: 0.75, rage: 1.0, calmLunge: true, lungeDelay: 500 });
+      if (a) { a._enraged = true; a.setTint(ALIEN_RAGE_TINT); }
+    };
+    z.once('animationcomplete', go);
+    this.time.delayedCall(1800, go);
+  }
+
+  // The berserker: runs rather than walks, comes on enraged, and takes twice
+  // the cutting. (first enemy acid attack.gif is its art when it arrives;
+  // until then it is the alien, red with it.)
+  _hordeBerserker(xf) {
+    if (this._dead || this._transitioning) return;
+    const z = this.spawnAlien({ x: this.fx(xf), speed: 1.25, rage: 1.45, calmLunge: true,
+                                lungeDelay: 600, hp: WALK_ALIEN_HP * 2 });
+    if (!z) return;
+    z._berserk = true;
+    z._enraged = true;
+    z.setTint(0xff6a5a);
+    z.setAlpha(0);
+    this.tweens.add({ targets: z, alpha: 1, duration: 300 });
+    Sfx.ensure(); Sfx.roar(); Sfx.roar();
+    this._showTip('A BERSERKER  —  IT RUNS, AND IT TAKES SOME CUTTING');
   }
 
   // The whole shop in the picture and the camera still: a horde fight you
@@ -13260,9 +13342,9 @@ class StoreScene extends WalkScene {
     });
   }
 
-  _hordeAlien(i) {
+  _hordeAlien(i, xf) {
     if (this._dead || this._transitioning) return;
-    const z = this.spawnAlien({ x: this.fx(0.035), speed: 0.7 + i * 0.06, rage: 0.95,
+    const z = this.spawnAlien({ x: this.fx(xf != null ? xf : 0.035), speed: 0.7 + i * 0.06, rage: 0.95,
                                 calmLunge: true, lungeDelay: 1800 });
     // out of the dark of the doorway rather than appearing on the floor
     z.setAlpha(0);
@@ -13771,6 +13853,7 @@ class StoreScene extends WalkScene {
     super.update(time, delta);
     if (!this.player || this._transitioning) return;
     this._updateShards(this.time.now, delta || 16);
+    this._updateSentry();
 
     // ---- carry the ledges, and whoever is standing on them ----------
     const d = Math.min(48, delta || 16);
@@ -14199,8 +14282,12 @@ const Cutting = {
     if (o.gate) {
       // A solid post in the cord's footprint, floor to the top of the room.
       // Walk into it and you stop; cut the cord down and it goes with it.
+      // As wide as the cord is drawn (it was a 34px post in the middle of a
+      // cord three times that, so you walked into the drawing, and a dash went
+      // clean through the post in one step).
       const top = bg.y, h = y - top;
-      const g = this.add.rectangle(x, top + h / 2, 34, h, 0x000000, 0).setDepth(-1);
+      const gw = Math.max(70, (art ? art.pw * Math.abs(im.scaleX) : im.displayWidth) * 0.8);
+      const g = this.add.rectangle(x, top + h / 2, gw, h, 0x000000, 0).setDepth(-1);
       this.physics.add.existing(g, true);
       this.solidsW.push(g);
       if (this.player) this.physics.add.collider(this.player, g);
@@ -14531,7 +14618,10 @@ class StorageTwoScene extends WalkScene {
     // gate stands in its footprint until it falls.
     this.switchCord = this.addCuttable({ tex: 'scene_ropemulti', xFrac: 0.322,
       yFrac: STORAGE_FLOOR, full: true, need: 5, widthK: 0.8, label: 'CORD' });
-    this.cordGate = this.add.rectangle(this.switchCord.im.x, this.groundY - 300, 40, 600,
+    // the full height of the room and the width of the cord, like the others
+    const gTop = this.bgGeom.y, gH = this.groundY - gTop;
+    this.cordGate = this.add.rectangle(this.switchCord.im.x, gTop + gH / 2,
+                                       Math.max(70, this.switchCord.im.displayWidth * 0.5), gH,
                                        0x000000, 0).setDepth(-1);
     this.physics.add.existing(this.cordGate, true);
     this.solidsW.push(this.cordGate);
@@ -14863,7 +14953,9 @@ class StorageTwoScene extends WalkScene {
         lines: STORAGE_MEET_LINES,
         sleeper: null, keepMusic: true, hold: 300, fadeMs: 380,
         overlay: true, barTop: true,
-        onLine: (i, line) => { if (line.cue === 'rise') this._creatureRise(); },
+        // It stays down in the goo while they talk; it gets up after the last
+        // word (onDone, below), and then the cinematic.
+        onLine: () => {},
         onDone: () => {
           // The guard stays up until the room is gone — ESC during the shake
           // would otherwise race the cinematic to the next scene.

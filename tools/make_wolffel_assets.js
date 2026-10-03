@@ -88,7 +88,7 @@ const SHARE_X = ['idle0', 'aim', 'sword', 'crouch', 'jump', 'p45', 'pfire'];
 // box would slide his body to meet the reach, the bow or the fall. The number
 // is the frame whose soles he is anchored on — where he is standing when it
 // starts, or for getting up, where he ends up standing.
-const ANCHOR = { burger: 0, death: 0, getup: 8, pickup: 0, grieve: 0, doorwalk: 'mean' };
+const ANCHOR = { burger: 20, death: 0, getup: 8, pickup: 0, grieve: 0, doorwalk: 'mean' };
 // and the ones that go down to the floor keep every frame on it
 const PIN_EACH = ['death', 'getup'];
 
@@ -98,9 +98,16 @@ L.shareX(clips, SHARE_X);
 for (const [name, at] of Object.entries(ANCHOR)) {
   const d = clips[name];
   if (!d) continue;
-  const cx = at === 'mean'
+  let cx = at === 'mean'
     ? d.frames.reduce((s, _, i) => s + L.solesX(d, i), 0) / d.frames.length
     : L.solesX(d, at);
+  // The eating follows straight on from the three-quarter idle, which is cut
+  // centred on its box, not on its feet: its feet sit off the canvas middle.
+  // Put the burger's feet in the same place, or he slides when he starts.
+  if (name === 'burger' && clips.idle) {
+    const b = clips.idle.boxes[0];
+    cx += (b.minX + b.maxX) / 2 - L.solesX(clips.idle, 0);
+  }
   L.anchorX(clips, name, cx);
 }
 PIN_EACH.forEach(n => L.pinEach(clips, n));
@@ -162,14 +169,20 @@ const K = {
   doorwalk: pool('doorwalk', 'doorwalk', false),
   doorwalkW: pool('doorwalkW', 'doorwalk', true)
 };
-// The game plays 'burgerin' and chains 'burger' behind it, so the eating is
-// split between them: the reach up to his mouth (0-3), then the eating and
-// putting it down (4-20). Once through, one meal.
+// The game plays 'burgerin' and chains 'burger' behind it. The clip as drawn
+// opens with the food already in his hand and ends with the hand going into
+// his pocket, which reads backwards — eating first, then digging for it. So
+// it is played from its last frame: stood empty-handed (20, the same pose as
+// his three-quarter idle), the hand down to the pocket and the food out and
+// up (19-16); then the eating (8-15) and the rest put away (16-20).
 if (K.burgerin) {
-  K.burger    = K.burgerin.slice(4);
-  K.burgerW   = K.burgerinW.slice(4);
-  K.burgerin  = K.burgerin.slice(0, 4);
-  K.burgerinW = K.burgerinW.slice(0, 4);
+  const pick = (k, idx) => idx.map(i => k[i]);
+  const IN = [20, 19, 18, 17, 16], EAT = [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+  const a = K.burgerin, aw = K.burgerinW;
+  K.burger    = pick(a, EAT);
+  K.burgerW   = pick(aw, EAT);
+  K.burgerin  = pick(a, IN);
+  K.burgerinW = pick(aw, IN);
 }
 if (K.shootin) {
   K.shoot  = K.shootin.slice(LOOP_FROM.aim);
@@ -259,7 +272,8 @@ const SWING = {
   swordguard: [14, 15, 16],
   deathblow:  [2, 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
 };
-const SWING_FPS = { sword: 28, sword2: 28, sword3: 26, swordguard: 4, deathblow: 15 };
+// Quick to the button: the cut has to come out the moment it is pressed.
+const SWING_FPS = { sword: 38, sword2: 38, sword3: 34, swordguard: 4, deathblow: 15 };
 const strike = {};
 if (K.gs) {
   const pick = (keys, idx) => idx.map(i => keys[i]);

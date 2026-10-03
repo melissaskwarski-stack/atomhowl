@@ -451,10 +451,12 @@ const mod = {
     // Frame rates are high: a swing wants to land, and at 20fps the katana
     // took two fifths of a second just to reach the target.
     ...(K.katana ? {
-      sword:       A_(K.katana.slice(0, 12),  34, 0),   // hit 1: draw and cut
-      swordW:      A_(K.katanaW.slice(0, 12), 34, 0),
-      sword2:      A_(K.katana.slice(5, 12),  36, 0),   // hit 2: blade already out
-      sword2W:     A_(K.katanaW.slice(5, 12), 36, 0),
+      // the first two frames of the draw are him still standing: gone, so
+      // the cut starts on the press
+      sword:       A_(K.katana.slice(2, 12),  46, 0),   // hit 1: draw and cut
+      swordW:      A_(K.katanaW.slice(2, 12), 46, 0),
+      sword2:      A_(K.katana.slice(5, 12),  46, 0),   // hit 2: blade already out
+      sword2W:     A_(K.katanaW.slice(5, 12), 46, 0),
       swordguard:  A_(K.katana.slice(11),      6),      // blade out, waiting
       swordguardW: A_(K.katanaW.slice(11),     6)
     } : {}),
@@ -554,12 +556,13 @@ Object.assign(mod.anims, AIM.anims);
 // the follow-through into guard, with the standing frames at the head dropped
 // (the previous beat has already left the blade out).
 if (K.katana3) {
-  mod.anims.sword3  = A_(K.katana3.slice(3, 12),  30, 0);
-  mod.anims.sword3W = A_(K.katana3W.slice(3, 12), 30, 0);
+  mod.anims.sword3  = A_(K.katana3.slice(3, 12),  40, 0);
+  mod.anims.sword3W = A_(K.katana3W.slice(3, 12), 40, 0);
 }
 if (K.bsword) {
-  mod.anims.sword4  = A_(K.bsword.slice(5, 14),  28, 0);
-  mod.anims.sword4W = A_(K.bswordW.slice(5, 14), 28, 0);
+  // The fourth beat (the straight sword off the holder on his back) is out:
+  // the combo is three cuts.
+  delete mod.anims.sword4; delete mod.anims.sword4W;
 }
 if (K.pickup) {
   mod.anims.pickup  = A_(K.pickup,  16, 0);
