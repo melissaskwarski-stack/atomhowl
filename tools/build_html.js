@@ -129,7 +129,8 @@ const SCENE_SRC = {
   alienface:    ['public/assets/alien_encounter_sheet.png'],
   // jump through window.gif, 17 frames on the walk's 247 box (ALIEN_JUMP_SHEET)
   alienjump:    ['public/assets/alien_window_jump.png'],
-  alienacid:    ['public/assets/alien_acid_sheet.png'],   // the berserker's acid attack (tools/make_alien_acid_sheet.js)
+  alienacid:    ['public/assets/alien_acid_sheet.png'],
+  radiobanner:  ['public/assets/radio_banner.png'],     // the broadcast, over the bunker radio (radio banner.png)   // the berserker's acid attack (tools/make_alien_acid_sheet.js)
   // The tienda window: window glass.png baked to the window's shape (whole and
   // broken), and window shattered.png as a burst plus its shards cut apart.
   panewhole:    ['public/assets/tienda_pane.png'],

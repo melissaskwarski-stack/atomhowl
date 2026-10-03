@@ -10156,40 +10156,114 @@ class BunkerScene extends WalkScene {
     Sfx.blip(1800, 0.3, 'sine', 0.08, 380);
     this._radioLive(false);
     if (this._static) this._static.setVolume(0.24, 350);
-    const stopChatter = () => { if (this._chatter) { this._chatter.stop(); this._chatter = null; } };
-    // The broadcast, lost to static. (El Acecho no longer comes out of it:
-    // the song starts as they go out of the door.)
-    this.time.delayedCall(1300, () => {
-      if (!this.scene.isActive()) return;
-      this._panel(RADIO_LINES, (i, line) => {
-        this._radioLine = i;
-        stopChatter();
-        if (!this._static) return;
-        if (line.who === 'RADIO') {
-          // loud under the voice, and the voice itself as chatter while it types
-          this._static.setVolume(0.16, 200);
-          this._chatter = Sfx.radioChatter(line.text.length * 26 + 250);
-        } else {
-          this._static.setVolume(0.045, 300);       // down, under them talking
-        }
-        if (line.cue === 'lost') {
-          // the signal goes: a surge of static over the end of the sentence
-          this.time.delayedCall(line.text.length * 26 - 150, () => {
-            if (this._radioLine !== i || !this._static) return;
-            stopChatter();
-            this._static.setVolume(0.34, 120);
-            this.time.delayedCall(700, () => { if (this._radioLine === i && this._static) this._static.setVolume(0.16, 400); });
-          });
-        }
-      }, () => {
-        stopChatter();
-        if (this._static) this._static.setVolume(0.04, 900);
-        this._release();
-        // where to now: the door if the key is found, the food if it is not
-        if (this._ate) this._showTip('THE PLAZA  —  OUT THROUGH THE DOOR');
-        else this._hint([['WOLFFEL', "I'm super hungry. Is there anything to eat?"]],
-                        'LOOK AROUND  —  THE BOX BY THE DOOR  —  E');
+    // The broadcast comes up on the banner over the set, typed out as it is
+    // heard, static under all of it; then the signal goes, with a cut-off,
+    // and the brothers talk about what they heard.
+    this.time.delayedCall(900, () => { if (this.scene.isActive()) this._broadcast(() => this._afterBroadcast()); });
+  }
+
+  // radio banner.png above the radio, against the wall behind them.
+  _buildRadioBanner() {
+    if (!this.textures.exists('scene_radiobanner')) return null;
+    const W = 560, im = this.add.image(0, 0, 'scene_radiobanner');
+    const k = W / im.width, h = im.height * k;
+    const radioTop = this._paintToWorld(0, BUNKER_ART.radio.top).y;
+    const bottom = Math.min(radioTop - 24, this.groundY - this.charH - 24);
+    const x = Phaser.Math.Clamp(this.radioX, W / 2 + 10, this.worldW - W / 2 - 10), y = bottom - h / 2;
+    im.setPosition(x, y).setScale(k).setDepth(5.6);
+    // the screen inside the frame: x 12.5-90.5%, y 29.3-66% of the picture
+    const sx0 = x - W / 2 + 0.125 * W, sx1 = x - W / 2 + 0.905 * W;
+    const sy0 = y - h / 2 + 0.293 * h, sy1 = y - h / 2 + 0.66 * h;
+    const txt = this.add.text(sx0 + 16, (sy0 + sy1) / 2, '', {
+      fontFamily: 'Courier New, monospace', fontSize: '17px', fontStyle: '700', color: '#ffd89a',
+      stroke: '#1a0e04', strokeThickness: 3, lineSpacing: 3,
+      wordWrap: { width: sx1 - sx0 - 32 }
+    }).setOrigin(0, 0.5).setDepth(5.7);
+    // the lamp on its left end, lit while the signal is there
+    const lamp = this.add.circle(x - W / 2 + 0.06 * W, y - h / 2 + 0.36 * h, 0.022 * W, 0xffb040, 0.55)
+      .setDepth(5.65).setBlendMode(Phaser.BlendModes.ADD);
+    const scan = this.add.rectangle((sx0 + sx1) / 2, sy0, sx1 - sx0, 3, 0xffc070, 0.12)
+      .setDepth(5.68).setBlendMode(Phaser.BlendModes.ADD);
+    return { im, txt, lamp, scan, parts: [im, txt, lamp, scan], sy0, sy1, k };
+  }
+
+  _broadcast(done) {
+    const B = this._buildRadioBanner();
+    const st = this._static, ok = () => this.scene.isActive() && !this._transitioning;
+    if (!B) { done(); return; }
+    // up out of nothing: a flick of the frame, then it holds
+    B.parts.forEach(o => o.setAlpha(0));
+    B.im.setScale(B.k * 0.85);
+    this.tweens.add({ targets: B.im, alpha: 1, scale: B.k, duration: 260, ease: 'Back.Out' });
+    this.tweens.add({ targets: [B.txt, B.lamp, B.scan], alpha: 1, duration: 200, delay: 160 });
+    this.tweens.add({ targets: B.lamp, alpha: 0.2, duration: 380, yoyo: true, repeat: -1, delay: 400 });
+    this.tweens.add({ targets: B.scan, y: B.sy1, duration: 1300, repeat: -1 });
+    Sfx.ensure(); Sfx.burst(0.25, 0.3, 2600, 0.8);
+    if (st) st.setVolume(0.2, 200);
+    const GLITCH = '#/~%|=\\*';
+    let li = 0, skip = false;
+    const onEnter = () => { skip = true; };
+    this.input.keyboard.on('keydown-ENTER', onEnter);
+    this.input.keyboard.on('keydown-SPACE', onEnter);
+    const next = () => {
+      if (!ok()) return finish(false);
+      if (li >= RADIO_BROADCAST.length) return finish(true);
+      const line = RADIO_BROADCAST[li++];
+      let n = 0;
+      skip = false;
+      if (this._chatter) { this._chatter.stop(); this._chatter = null; }
+      this._chatter = Sfx.radioChatter(line.length * 42 + 200);
+      const tick = () => {
+        if (!ok()) return finish(false);
+        if (skip) n = line.length;
+        else n++;
+        // a word now and then breaks up before it lands
+        const shown = line.slice(0, n);
+        const glitch = n < line.length && Math.random() < 0.18
+          ? GLITCH[Math.floor(Math.random() * GLITCH.length)] : '';
+        B.txt.setText(shown + glitch + (n < line.length ? '_' : ''));
+        if (st && Math.random() < 0.08) { st.setVolume(0.3, 40); this.time.delayedCall(90, () => st && st.setVolume(0.2, 120)); }
+        if (n < line.length) { this.time.delayedCall(38 + Math.random() * 30, tick); return; }
+        if (this._chatter) { this._chatter.stop(); this._chatter = null; }
+        this.time.delayedCall(skip ? 350 : 1150, next);
+      };
+      tick();
+    };
+    const finish = completed => {
+      this.input.keyboard.off('keydown-ENTER', onEnter);
+      this.input.keyboard.off('keydown-SPACE', onEnter);
+      if (this._chatter) { this._chatter.stop(); this._chatter = null; }
+      if (!completed) { B.parts.forEach(o => o.destroy()); return; }
+      // the signal goes: a surge, a hard click, and the banner with it
+      if (st) st.setVolume(0.36, 80);
+      this.time.delayedCall(420, () => {
+        Sfx.ensure();
+        Sfx.blip(2600, 0.03, 'square', 0.12, 900);
+        Sfx.burst(0.14, 0.45, 1800, 1.4);
+        Sfx.blip(120, 0.18, 'sawtooth', 0.08, 50);
+        if (st) st.setVolume(0, 30);
+        this.tweens.killTweensOf(B.parts);
+        B.txt.setText('');
+        // the picture collapses to a line and goes, like an old set
+        this.tweens.add({ targets: B.im, scaleY: B.k * 0.04, alpha: 0.6, duration: 110, ease: 'Quad.easeIn',
+          onComplete: () => this.tweens.add({ targets: B.im, alpha: 0, scaleX: 0, duration: 120,
+            onComplete: () => B.parts.forEach(o => o.destroy()) }) });
+        [B.lamp, B.scan].forEach(o => o.setAlpha(0));
+        // a beat of dead air, then the hiss comes back, low
+        this.time.delayedCall(900, () => { if (st) st.setVolume(0.04, 900); done(); });
       });
+    };
+    this.time.delayedCall(450, next);
+  }
+
+  _afterBroadcast() {
+    if (!this.scene.isActive()) return;
+    this._panel(RADIO_LINES, null, () => {
+      this._release();
+      // where to now: the door if the key is found, the food if it is not
+      if (this._ate) this._showTip('THE PLAZA  —  OUT THROUGH THE DOOR');
+      else this._hint([['WOLFFEL', "I'm super hungry. Is there anything to eat?"]],
+                      'LOOK AROUND  —  THE BOX BY THE DOOR  —  E');
     });
   }
 
@@ -10345,12 +10419,16 @@ const BUNKER_ART = {
   banner: [145, 262]
 };
 
-// The broadcast: a voice they don't know, cut to pieces by static.
+// The broadcast: a voice they don't know, cut to pieces by static. Typed out
+// on the banner over the set as it comes in.
+const RADIO_BROADCAST = [
+  '...kssshh... this is... emergency broadcast... channel nine... krrt...',
+  '...all survivors... the quarantine checkpoint... at the Plaza... is still holding... over...',
+  '...cross the river... before dark. Repeat... before dark...',
+  '...do not... do not let them— kkhhhssshhh—'
+];
+// and what the brothers make of it, after it cuts out
 const RADIO_LINES = [
-  { who: 'RADIO', silent: true,
-    text: '—kkhh— ...all survivors... the quarantine checkpoint at the Plaza is still holding—' },
-  { who: 'RADIO', silent: true, cue: 'lost',
-    text: '—cross the river before dark. Do not... do not let them—' },
   { who: 'WOLFFEL',  text: 'Let them what?' },
   { who: 'ETERWOLF', text: 'The Plaza. Across the river.' },
   { who: 'WOLFFEL',  text: 'And why are we even down here?' },
