@@ -91,7 +91,10 @@ const SRC = {
   // eterwolf fall down crawl.gif: he sags from standing onto his hands and
   // knees (0-12), head down, then crawls (13-20 loops: 21 is 13 again, seam
   // 0.03 of a step). Down in co-op, waiting for his brother.
-  downcrawl:  A + 'Idle_v3_downcrawl_east.gif'
+  downcrawl:  A + 'Idle_v3_downcrawl_east.gif',
+  // throw grenade.gif: three-quarter, facing east. Winds up 0-9, lets go on
+  // 10, follows through 11-15 and settles back to standing by 20.
+  throw:      A + 'Idle_v3_throw_east.gif'
 };
 
 // Several clips open with a one-shot action and only then settle into
@@ -196,13 +199,19 @@ L.shareX(clips, SHARE_X);
 // Actions done on the spot are held on his feet instead of on their box, so
 // his body does not slide to meet the arc or the reach (see anchorX). The
 // number is the frame whose soles anchor it: where he stands when it starts.
-const ANCHOR = { katana3: 0, broadsword: 0, pickup: 0, revive: 5, grieve: 0, doorwalk: 'mean' };
+const ANCHOR = { katana3: 0, broadsword: 0, pickup: 0, revive: 5, grieve: 0, doorwalk: 'mean', throw: 0 };
 for (const [name, at] of Object.entries(ANCHOR)) {
   const d = clips[name];
   if (!d) continue;
-  const cx = at === 'mean'
+  let cx = at === 'mean'
     ? d.frames.reduce((s2, _, i) => s2 + L.solesX(d, i), 0) / d.frames.length
     : L.solesX(d, at);
+  // The throw starts straight out of standing, which is cut centred on its
+  // box, not its feet: put the throw's feet where the idle's are, or he slides.
+  if (name === 'throw' && clips.idle) {
+    const b = clips.idle.boxes[0];
+    cx += (b.minX + b.maxX) / 2 - L.solesX(clips.idle, 0);
+  }
   L.anchorX(clips, name, cx);
 }
 L.pinEach(clips, 'grieve');     // down on his knees: every frame on the floor
@@ -285,7 +294,9 @@ const K = {
   doorwalk:  clips.doorwalk ? pool('doorwalk',  'doorwalk', false) : null,
   doorwalkW: clips.doorwalk ? pool('doorwalkW', 'doorwalk', true)  : null,
   dcrawl:    clips.downcrawl ? pool('dcrawl',  'downcrawl', false) : null,
-  dcrawlW:   clips.downcrawl ? pool('dcrawlW', 'downcrawl', true)  : null
+  dcrawlW:   clips.downcrawl ? pool('dcrawlW', 'downcrawl', true)  : null,
+  throw:     clips.throw ? pool('throw',  'throw', false) : null,
+  throwW:    clips.throw ? pool('throwW', 'throw', true)  : null
 };
 // Each looping tail reuses frames already emitted for its intro, so splitting
 // a clip in two costs no extra image data.
@@ -582,6 +593,14 @@ if (K.doorwalk) {
 }
 // Down in co-op: the fall runs straight into the crawl's first frame, and the
 // crawl is 7fps so a planted knee drags back at about the 0.5 m/s he moves.
+// The throw: from the third frame (the first two are him standing), 30fps.
+// The grenade leaves his hand on frame 10 of the clip — index 8 here — which
+// the game reads off art.throwAt.
+if (K.throw) {
+  mod.anims.throw  = A_(K.throw.slice(2, 20),  30, 0);
+  mod.anims.throwW = A_(K.throwW.slice(2, 20), 30, 0);
+  mod.throwAt = 8;
+}
 if (K.dcrawl) {
   mod.anims.downfall   = A_(K.dcrawl.slice(0, 13),  16, 0);
   mod.anims.downfallW  = A_(K.dcrawlW.slice(0, 13), 16, 0);

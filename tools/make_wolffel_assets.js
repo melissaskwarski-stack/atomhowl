@@ -74,7 +74,9 @@ const SRC = {
   // squat (16) — when his brother has gone for good.
   grieve: A('wf_grieve_front.gif'),
   // walk up.gif: from behind, walking away from us (25) — through a door.
-  doorwalk: A('wf_doorwalk_back.gif')
+  doorwalk: A('wf_doorwalk_back.gif'),
+  // throw grenade wolffel.gif: winds up 0-6, lets go on 7, follows through.
+  throw:    A('wf_throw_east.gif')
 };
 
 // Where each one-shot settles into something repeatable.
@@ -88,11 +90,19 @@ const SHARE_X = ['idle0', 'aim', 'sword', 'crouch', 'jump', 'p45', 'pfire'];
 // box would slide his body to meet the reach, the bow or the fall. The number
 // is the frame whose soles he is anchored on — where he is standing when it
 // starts, or for getting up, where he ends up standing.
-const ANCHOR = { burger: 20, death: 0, getup: 8, pickup: 0, grieve: 0, doorwalk: 'mean' };
+const ANCHOR = { burger: 20, death: 0, getup: 8, pickup: 0, grieve: 0, doorwalk: 'mean', throw: 0 };
 // and the ones that go down to the floor keep every frame on it
 const PIN_EACH = ['death', 'getup'];
 
 const clips = L.loadClips(SRC);
+// The throw's release frame has the grenade drawn flying off past his hand:
+// the game throws its own, so the drawn one (a thin streak right of x 206)
+// goes, and with it the extra width it gave the whole canvas.
+if (clips.throw) {
+  const d = clips.throw, f = d.frames[7];
+  for (let y = 0; y < d.H; y++) for (let x = 207; x < d.W; x++) f[(y * d.W + x) * 4 + 3] = 0;
+  d.boxes[7] = L.bbox(f, d.W, d.H);
+}
 if (!clips.idle) { console.error('need the idle clip'); process.exit(1); }
 L.shareX(clips, SHARE_X);
 for (const [name, at] of Object.entries(ANCHOR)) {
@@ -104,6 +114,11 @@ for (const [name, at] of Object.entries(ANCHOR)) {
   // The eating follows straight on from the three-quarter idle, which is cut
   // centred on its box, not on its feet: its feet sit off the canvas middle.
   // Put the burger's feet in the same place, or he slides when he starts.
+  // (the throw starts from his side-on standing pose)
+  if (name === 'throw' && clips.idle0) {
+    const b = clips.idle0.boxes[0];
+    cx += (b.minX + b.maxX) / 2 - L.solesX(clips.idle0, 0);
+  }
   if (name === 'burger' && clips.idle) {
     const b = clips.idle.boxes[0];
     cx += (b.minX + b.maxX) / 2 - L.solesX(clips.idle, 0);
@@ -167,7 +182,9 @@ const K = {
   grieve:   pool('grieve',   'grieve', false),
   grieveW:  pool('grieveW',  'grieve', true),
   doorwalk: pool('doorwalk', 'doorwalk', false),
-  doorwalkW: pool('doorwalkW', 'doorwalk', true)
+  doorwalkW: pool('doorwalkW', 'doorwalk', true),
+  throw:    pool('throw',    'throw',  false),
+  throwW:   pool('throwW',   'throw',  true)
 };
 // The game plays 'burgerin' and chains 'burger' behind it. The clip as drawn
 // opens with the food already in his hand and ends with the hand going into
@@ -406,6 +423,12 @@ if (K.grieve) {
   add('grieve',  K.grieve,  10, 0);
   add('grieveW', K.grieveW, 10, 0);
 }
+// The throw, from the first frame he moves (1), at 22fps; the grenade leaves
+// his hand on frame 7 — index 6 here (art.throwAt).
+if (K.throw) {
+  add('throw',  K.throw.slice(1),  22, 0);
+  add('throwW', K.throwW.slice(1), 22, 0);
+}
 if (K.doorwalk) {
   // 5-16 is one whole stride pair and loops without a seam (0.04 of a step)
   add('doorwalk',  K.doorwalk.slice(5, 17),  12);
@@ -443,6 +466,7 @@ const mod = {
   body, muzzle, muzzles,
   canvasW: CW, canvasH: CH,
   animShift, strike,
+  throwAt: 6,
   aim: AIM.aim,
   pending: ['west art (all mirrored east)',
             'a front-facing finisher', 'a real standing firing clip'],

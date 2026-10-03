@@ -9155,8 +9155,38 @@ const WalkGrenades = {
     p._nextThrowAt = now + 650;
     GameState.grenades[id]--;
     this._paintInventory(true);
-    const m = this.pxPerM || 90, f = p._facing || 1;
-    const g = this.physics.add.image(p.x + f * 0.28 * this.charH, p.y - 0.28 * this.charH, 'scene_grenade').setDepth(11);
+    const f = p._facing || 1, hero = p._hero;
+    // throw grenade.gif / throw grenade wolffel.gif: the wind-up, and the
+    // grenade leaves his hand on the frame it does (art.throwAt). The whole
+    // throw plays, follow-through and all (about 0.6s).
+    if (p._real && hero && heroHas(hero, 'throw')) {
+      playOnce(p, 'throw', f);
+      const clip = this.anims.get(heroAnim(hero, 'throw', f));
+      const at = hero.art.throwAt || 0;
+      const delay = clip ? at * (clip.msPerFrame || 1000 / clip.frameRate) : 0;
+      p._nextThrowAt = Math.max(p._nextThrowAt, now + delay + 300);
+      let gone = false;
+      const release = () => {
+        if (gone) return;
+        gone = true;
+        p.off('animationupdate', onFrame);
+        if (p.active && !p._down && !this._dead) this._launchGrenade(p, f, true);
+      };
+      const onFrame = (anim, frame) => { if (anim === clip && frame.index - 1 >= at) release(); };
+      p.on('animationupdate', onFrame);
+      this.time.delayedCall(delay + 120, release);
+      Sfx.ensure(); Sfx.blip(1400, 0.05, 'square', 0.03, 900);    // the pin
+      return;
+    }
+    if (p._real && hero && heroHas(hero, 'shootin')) playOnce(p, 'shootin', f);
+    this._launchGrenade(p, f, false);
+  },
+
+  // Out of his hand: from up by his shoulder as the arm comes over.
+  _launchGrenade(p, f, fromHand) {
+    const m = this.pxPerM || 90, H = this.charH;
+    const g = this.physics.add.image(p.x + f * (fromHand ? 0.36 : 0.28) * H, p.y - (fromHand ? 0.4 : 0.28) * H,
+                                     'scene_grenade').setDepth(11);
     g.setScale((0.3 * m) / g.height);
     g.body.setSize(g.width * 0.8, g.height * 0.8);
     g.setBounce(0.38);
@@ -9169,8 +9199,9 @@ const WalkGrenades = {
         g.setAngularVelocity(g.body.angularVelocity * 0.6);
       }
     });
-    Sfx.ensure(); Sfx.swoop(); Sfx.blip(1400, 0.05, 'square', 0.03, 900);    // the pin
-    if (p._real && p._hero && heroHas(p._hero, 'shootin')) playOnce(p, 'shootin', f);
+    if (this._sortNew) this._sortNew();
+    Sfx.ensure(); Sfx.swoop();
+    if (!fromHand) Sfx.blip(1400, 0.05, 'square', 0.03, 900);    // the pin
     this.time.delayedCall(GRENADE_FUSE_MS, () => {
       if (!g.active) return;
       const x = g.x, y = g.y;
