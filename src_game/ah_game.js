@@ -520,6 +520,10 @@ const RadioSong = {
   reset() { if (this.playing) this.fadeOut(600); this.started = false; this.out = null; this._duck = 1; }
 };
 
+// What the brothers say has no em dashes in it: a pause is a comma or a
+// full stop when somebody speaks.
+function plainSpeech(t) { return String(t).replace(/\s*—\s*/g, ', ').replace(/,\s*([.!?])/g, '$1').replace(/^,\s*/, ''); }
+
 // The song, clean (not through the radio): started once, as they leave the
 // bunker; after that only its level moves.
 function startAcecho(vol, ms) {
@@ -6104,19 +6108,20 @@ class IntroDialogueScene extends Phaser.Scene {
     // the text complete slightly before the audio tail, which reads as the
     // speaker finishing rather than the text lagging.
     const spoken = playVoice(line.vox);
+    const text = plainSpeech(line.text);
     const delay = spoken
-      ? Math.max(12, Math.round((spoken * 1000 * 0.88) / Math.max(1, line.text.length)))
+      ? Math.max(12, Math.round((spoken * 1000 * 0.88) / Math.max(1, text.length)))
       : 26;
 
     this._typeEv = this.time.addEvent({
       delay: delay,
-      repeat: line.text.length - 1,
+      repeat: text.length - 1,
       callback: () => {
-        this._body.setText(line.text.slice(0, ++i));
+        this._body.setText(text.slice(0, ++i));
         // The keyclick is the stand-in for a voice; with a real one it is just
         // noise over the top of it.
         if (!spoken && !line.silent && i % 3 === 0) Sfx.type();
-        if (i >= line.text.length) { this._typing = false; this._more.setAlpha(0.8); }
+        if (i >= text.length) { this._typing = false; this._more.setAlpha(0.8); }
       }
     });
   }
@@ -6124,7 +6129,7 @@ class IntroDialogueScene extends Phaser.Scene {
   _advance() {
     if (this._typing) {                       // first press completes the line
       if (this._typeEv) this._typeEv.remove();
-      this._body.setText(this.lines[this._idx].text);
+      this._body.setText(plainSpeech(this.lines[this._idx].text));
       this._typing = false;
       this._more.setAlpha(0.8);
       return;                                 // the voice keeps playing out
@@ -7105,7 +7110,7 @@ class WalkScene extends Phaser.Scene {
         this.tweens.killTweensOf(this._sayName);
         this.tweens.killTweensOf(this._sayText);
         this._sayName.setText(speaker).setAlpha(1);
-        this._sayText.setText(text).setAlpha(1);
+        this._sayText.setText(plainSpeech(text)).setAlpha(1);
         this._sayUntil = now + 1600 + text.length * 45;
       } else if (this._sayText.alpha > 0) {
         this.tweens.add({ targets: [this._sayName, this._sayText], alpha: 0, duration: 300 });
@@ -10383,23 +10388,38 @@ class BunkerScene extends WalkScene {
     firstCinematic('bunker-ate');
     this.crateLabel.setAlpha(0);
     this._hold(this.crateX);
-    this._reach(this.player, this.crateX);
-    this._openBox(() => {
-      if (!this.scene.isActive()) return;
-      // and Feli, wherever he is standing, eats (eating wolffel.gif)
+    // One thing at a time, and nobody talks over any of it: he reaches down,
+    // the box comes open, Feli eats, and only then do they say a word.
+    const reach = this._reach(this.player, this.crateX) || 0;
+    const live = () => this.scene.isActive();
+    this.time.delayedCall(reach * 0.55, () => { if (live()) this._openBox(() => {
+      if (!live()) return;
+      // and Feli, wherever he is standing, eats (eating wolffel.gif): out of
+      // the pocket first, then into it
       const wf = [this.player, this.player2].find(q => q && q.active && q._hero && q._hero.id === 'wolffel');
-      if (wf) { wf._facing = this.crateX >= wf.x ? 1 : -1; playOnce(wf, 'burger', wf._facing); }
-      this._panel(CRATE_LINES, (i, line) => {
-        if (line.cue === 'munch') this.time.delayedCall(260, () => Sfx.munch());
-        if (line.cue === 'key') { Sfx.ensure(); Sfx.blip(1320, 0.2, 'triangle', 0.05, 1760); }
-      }, () => {
-        this._release();
-        this._paintInventory && this._paintInventory(true);
-        // the key, but out to where? the radio, if it has not been heard
-        if (this._radioUsed) this._showTip('THE KEY  —  OUT THROUGH THE DOOR');
-        else this._hint([['ETERWOLF', "Let's check the radio. Maybe it says something important."]],
-                        'A KEY  —  NOW THE RADIO ON THE BENCH  —  E');
-      });
+      let eat = 0;
+      if (wf) {
+        wf._facing = this.crateX >= wf.x ? 1 : -1;
+        eat = playOnce(wf, 'burger', wf._facing);
+        if (eat) { this.time.delayedCall(eat * 0.55, () => live() && Sfx.munch());
+                   this.time.delayedCall(eat * 0.8, () => live() && Sfx.munch()); }
+      }
+      // whatever is left of the reach, the eating, and a breath after
+      const rest = Math.max(0, (wf ? eat : 0), reach * 0.45 - 1150);
+      this.time.delayedCall(rest + 250, () => { if (live()) this._talkCrate(); });
+    }); });
+  }
+
+  _talkCrate() {
+    this._panel(CRATE_LINES, (i, line) => {
+      if (line.cue === 'key') { Sfx.ensure(); Sfx.blip(1320, 0.2, 'triangle', 0.05, 1760); }
+    }, () => {
+      this._release();
+      this._paintInventory && this._paintInventory(true);
+      // the key, but out to where? the radio, if it has not been heard
+      if (this._radioUsed) this._showTip('THE KEY  —  OUT THROUGH THE DOOR');
+      else this._hint([['ETERWOLF', "Let's check the radio. Maybe it says something important."]],
+                      'A KEY  —  NOW THE RADIO ON THE BENCH  —  E');
     });
   }
 
@@ -10544,9 +10564,9 @@ const RADIO_LINES = [
 ];
 
 const CRATE_LINES = [
-  { who: 'WOLFFEL',  text: 'Arepas! Somebody stocked this place.', cue: 'munch' },
+  { who: 'WOLFFEL',  text: 'Arepas! Somebody stocked this place.' },
   { who: 'ETERWOLF', text: "And a key, under them. That'll be the door.", cue: 'key' },
-  { who: 'WOLFFEL',  text: "I'm going to take ten.", cue: 'munch' }
+  { who: 'WOLFFEL',  text: "I'm going to take ten." }
 ];
 
 // ================================================================== //
@@ -12548,7 +12568,7 @@ class NightStreetScene extends WalkScene {
       if (first.active) this._screamLines(first.x, first.y - 0.3 * first._H, 900, first._H / this.charH);
     });
     this._hordeTimer = this.time.addEvent({ delay: 1700, loop: true, callback: () => this._ledgeSpawn() });
-    this._say([['PLAYER', 'Off the ledge — here they come!']]);
+    this._say([['PLAYER', 'Off the ledge! Here they come!']]);
     this._showTip('SWING INTO THE SPIKES TO SEND THEM BACK — ITS OWN SPIKE BRINGS IT DOWN');
   }
 
@@ -12595,7 +12615,7 @@ class NightStreetScene extends WalkScene {
     this._kills++;
     if (NIGHT_ORB_AT.includes(this._kills)) this.time.delayedCall(650, () => { if (!this._dead) this.dropAntiAcid(x); });
     if (this._kills === 5) this.time.delayedCall(600, () => {
-      if (!this._dead && this._sendFlyer(1)) this._say([['PLAYER', 'Another one — in the air!']]);
+      if (!this._dead && this._sendFlyer(1)) this._say([['PLAYER', 'Another one, in the air!']]);
     });
     this._nightCheck();
   }
@@ -13692,7 +13712,7 @@ class StoreScene extends WalkScene {
     if (this._overview) this.time.delayedCall(900, () => { if (!this._dead) this._followAgain(1300); });
     this.time.delayedCall(1400, () => {
       this._say([['ETERWOLF', "That's all of them."],
-                 ['WOLFFEL',  'For now. Out the front — go.']]);
+                 ['WOLFFEL',  'For now. Out the front, go.']]);
       this._showTip('OUT THE FRONT  —  LEFT, BACK TO THE STREET');
     });
   }
