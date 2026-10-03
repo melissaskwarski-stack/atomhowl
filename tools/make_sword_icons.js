@@ -9,7 +9,9 @@ const fs = require('fs'), path = require('path'), { PNG } = require('pngjs');
 const ROOT = path.join(__dirname, '..');
 const JOBS = [
   { src: 'public/assets/signal_sword_src.png', out: 'public/assets/sword_single.png', w: 560 },
-  { src: 'public/assets/both_swords_src.png',  out: 'public/assets/sword_pair.png',   w: 440 }
+  { src: 'public/assets/both_swords_src.png',  out: 'public/assets/sword_pair.png',   w: 440 },
+  // pistol bullet.png: the round in flight, and the magazine in the item box
+  { src: 'public/assets/pistol_bullet_src.png', out: 'public/assets/pistol_bullet.png', w: 128 }
 ];
 
 function trim(p) {

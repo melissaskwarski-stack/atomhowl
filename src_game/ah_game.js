@@ -372,7 +372,7 @@ function audioType(url) {
 // muffled (the highs go first over distance) with a slow echo coming back
 // off the hills. The handle is the same shape as Sfx.loop's — setVolume,
 // volume, stop — so either can stand in for the other.
-const _samples = {};
+const _samples = {}, _sampleBuf = {};
 function loadSample(key) {
   if (_samples[key]) return _samples[key];
   Sfx.ensure();
@@ -380,8 +380,12 @@ function loadSample(key) {
   if (!list.length || !Sfx.ctx) return (_samples[key] = Promise.resolve(null));
   return (_samples[key] = fetch(pickAudio(list)).then(r => r.arrayBuffer())
     .then(b => new Promise((ok, no) => Sfx.ctx.decodeAudioData(b, ok, no)))
+    .then(buf => (_sampleBuf[key] = buf))
     .catch(() => null));
 }
+// Decoded and ready to play this instant (a sound that has to land on a
+// frame, a shot, cannot wait for a fetch).
+function sampleReady(key) { if (!_sampleBuf[key]) loadSample(key); return !!_sampleBuf[key]; }
 function playSample(key, o) {
   o = o || {};
   Sfx.ensure();
@@ -427,7 +431,8 @@ function playSample(key, o) {
     src.buffer = buf;
     src.loop = !!o.loop;
     src.connect(into);
-    src.start();
+    // `offset`/`dur`: one sound out of a take that holds several
+    if (o.offset != null) src.start(0, o.offset, o.dur); else src.start();
     if (!o.loop) src.onended = () => setTimeout(() => h.stop(o.far ? 1500 : 50), o.far ? 1200 : 0);
   });
   return h;
@@ -522,6 +527,40 @@ const RadioSong = {
 
 // What the brothers say has no em dashes in it: a pause is a comma or a
 // full stop when somebody speaks.
+// ---- the pistol's sounds ----------------------------------------------------
+// pistol sound.mp3 is four shots in one take: each is played on its own, never
+// the same one twice running, so a held trigger does not sound like a loop.
+// reloading.mp3 is the magazine coming out, then going in. Until they have
+// decoded, the synthesised shot stands in.
+const PISTOL_SHOTS = [[0.233, 0.73], [1.076, 0.775], [1.934, 0.72], [3.347, 0.73]];   // s into the take
+const RELOAD_OUT = [0, 0.21], RELOAD_IN = [0.416, 0.45];
+let _lastShot = -1;
+function gunShotSound() {
+  Sfx.ensure();
+  if (!sampleReady('sfxPistol')) { Sfx.pistol(); return; }
+  let i = Math.floor(Math.random() * PISTOL_SHOTS.length);
+  if (i === _lastShot) i = (i + 1) % PISTOL_SHOTS.length;
+  _lastShot = i;
+  playSample('sfxPistol', { vol: 0.42, offset: PISTOL_SHOTS[i][0], dur: PISTOL_SHOTS[i][1] });
+}
+function reloadSound(part) {
+  Sfx.ensure();
+  if (!sampleReady('sfxReload')) {
+    if (part === 'out') Sfx.blip(420, 0.06, 'square', 0.05, 240);
+    else { Sfx.blip(900, 0.05, 'square', 0.05, 1300); setTimeout(() => Sfx.blip(640, 0.07, 'square', 0.05, 420), 70); }
+    return;
+  }
+  const seg = part === 'out' ? RELOAD_OUT : RELOAD_IN;
+  playSample('sfxReload', { vol: 1, scale: 1.8, offset: seg[0], dur: seg[1] });
+}
+// The jam: the hammer falls on nothing, then the slide grinds and catches.
+function gunJamSound() {
+  Sfx.ensure();
+  Sfx.blip(2600, 0.018, 'square', 0.07);
+  setTimeout(() => { Sfx.noise(0.12, 0.12, 3400); Sfx.blip(150, 0.14, 'square', 0.07, 70); }, 60);
+}
+function gunDryClick() { Sfx.ensure(); Sfx.blip(2900, 0.012, 'square', 0.06); Sfx.blip(1500, 0.02, 'triangle', 0.03); }
+
 function plainSpeech(t) { return String(t).replace(/\s*—\s*/g, ', ').replace(/,\s*([.!?])/g, '$1').replace(/^,\s*/, ''); }
 
 // The song, clean (not through the radio): started once, as they leave the
@@ -8237,7 +8276,11 @@ const WalkCombat = {
   // Fire if the gun is up and on its mark and its cooldown is over.
   _gunTry(p, now) {
     if (now < (p._nextFireAt || 0) || now < (p._swingUntil || 0)) return;
-    if (p._reload) return;
+    if (p._reload) {
+      // the trigger on a jammed gun: a dry click, and nothing
+      if (p._reload.jam && now >= (p._dryAt || 0)) { p._dryAt = now + 320; gunDryClick(); }
+      return;
+    }
     if (this._ammo(p) <= 0) { this._startReload(p, now); return; }
     const G = this._gunOf(p);
     if (this._aimCapable(p)) {
@@ -8257,7 +8300,10 @@ const WalkCombat = {
   },
 
   // ---- the magazine ---------------------------------------------------
-  _ammo(p) { if (p._mag == null) p._mag = PISTOL_MAG; return p._mag; },
+  _ammo(p) {
+    if (p._mag == null) { p._mag = PISTOL_MAG; loadSample('sfxPistol'); loadSample('sfxReload'); }
+    return p._mag;
+  },
 
   reloadPress(p) {
     if (!p || !p.active || p._down || this._dead || !GameState.hasPistol) return;
@@ -8271,7 +8317,7 @@ const WalkCombat = {
     if (p._reload || !GameState.hasPistol) return;
     p._reload = { at: now, end: now + RELOAD_MS, tried: false, jam: false, hitAt: 0 };
     p._hot = 0;
-    Sfx.ensure(); Sfx.blip(420, 0.06, 'square', 0.05, 240);      // the magazine out
+    reloadSound('out');                                          // the magazine out
     this._paintInventory(true);
   },
 
@@ -8285,7 +8331,8 @@ const WalkCombat = {
     else {
       r.jam = true;
       r.end = r.at + RELOAD_JAM_MS;
-      Sfx.ensure(); Sfx.blip(150, 0.16, 'square', 0.07, 90);     // the slide catches
+      gunJamSound();
+      this._jamSmoke(p);
       this._reloadWord(p, 'JAMMED', '#e0523a');
     }
   },
@@ -8295,9 +8342,7 @@ const WalkCombat = {
     p._reload = null;
     p._mag = PISTOL_MAG;
     p._hot = how === 'perfect' ? PISTOL_MAG : 0;
-    Sfx.ensure();
-    Sfx.blip(900, 0.05, 'square', 0.05, 1300);                   // in
-    this.time.delayedCall(70, () => Sfx.blip(640, 0.07, 'square', 0.05, 420));   // the slide
+    reloadSound('in');                                           // in, and the slide
     if (how === 'perfect') { Sfx.blip(1760, 0.22, 'triangle', 0.05, 2640); this._reloadWord(p, 'PERFECT', '#f2b13c'); }
     else if (how === 'good') this._reloadWord(p, 'QUICK', '#f0e6d4');
     this._paintInventory(true);
@@ -8356,14 +8401,13 @@ const WalkCombat = {
       const f = rig.face, dx = f * Math.cos(a), dy = -Math.sin(a);
       const k = this.charH / 146;
       const rot = Math.atan2(dy, dx);
-      Sfx.ensure(); Sfx[G.sfx || 'pistol']();
-      const b = this.add.image(mz.x, mz.y, 'bullet').setDepth(11).setScale(k).setRotation(rot)
-        .setBlendMode(Phaser.BlendModes.ADD);
+      if ((G.sfx || 'pistol') === 'pistol') gunShotSound(); else { Sfx.ensure(); Sfx[G.sfx](); }
+      const b = this._round(mz.x, mz.y, k, rot, false);
       b._vx = dx * G.speed * this.charH; b._vy = dy * G.speed * this.charH;
       b._born = now; b._life = G.life;
       // fury, or a perfect reload: twice as hard (the two do not stack)
       b._dmg = G.dmg * ((this.furyActive && this.furyActive()) || p._hot > 0 ? 2 : 1);
-      if (b._dmg > G.dmg) b.setTint(0xffb040).setScale(k * 1.3);
+      if (b._dmg > G.dmg) this._hotRound(b);
       // The first step is tested from his shoulder, not from the muzzle, or an
       // alien already on top of him sits between the two and every round misses.
       b._x0 = mz.X + f * rig.m.shoulder[0] * rig.sx; b._y0 = mz.Y + rig.m.shoulder[1] * rig.sy;
@@ -8388,10 +8432,9 @@ const WalkCombat = {
         my = p.y + (mp.y - p.originY * art.canvasH) * sy;
       }
     }
-    Sfx.ensure(); Sfx.pistol();
+    gunShotSound();
     const k = this.charH / 146;          // the combat scene's tracer, at this scale
-    const b = this.add.image(mx, my, 'bullet').setDepth(11).setScale(k)
-      .setBlendMode(Phaser.BlendModes.ADD).setFlipX(face < 0);
+    const b = this._round(mx, my, k, face < 0 ? Math.PI : 0, false);
     b._vx = face * 7.2 * this.charH; b._vy = 0;
     b._born = now; b._life = 1100; b._dmg = PISTOL_DMG;
     b._x0 = p.x; b._y0 = my;
@@ -8402,6 +8445,42 @@ const WalkCombat = {
                       onComplete: () => fl.destroy() });
     this.cameras.main.shake(28, 0.0009);
     return true;
+  },
+
+  // A round in flight: pistol bullet.png, nose first along its line, with a
+  // faint streak of light behind it. The streak goes when the round does.
+  _round(x, y, k, rot) {
+    if (!this.textures.exists('scene_pistolbullet')) {
+      return this.add.image(x, y, 'bullet').setDepth(11).setScale(k).setRotation(rot)
+        .setBlendMode(Phaser.BlendModes.ADD);
+    }
+    const len = 0.22 * this.charH;
+    const trail = this.add.image(x, y, 'bullet').setDepth(10.9).setOrigin(1, 0.5).setRotation(rot)
+      .setBlendMode(Phaser.BlendModes.ADD).setAlpha(0.55).setScale(2.4 * k, 0.6 * k);
+    const b = this.add.image(x, y, 'scene_pistolbullet').setDepth(11).setOrigin(0.85, 0.5).setRotation(rot);
+    b.setScale(len / b.width);
+    b._trail = trail;
+    b.once('destroy', () => trail.destroy());
+    return b;
+  },
+  // fury, or a perfect reload: a bigger round on a hot orange streak
+  _hotRound(b) {
+    if (b._trail) { b._trail.setTint(0xff9a30).setAlpha(0.9); b.setScale(b.scaleX * 1.25); }
+    else b.setTint(0xffb040).setScale(b.scaleX * 1.3);
+  },
+
+  // A puff of grey out of the barrel when it jams.
+  _jamSmoke(p) {
+    const G = this._gunOf(p) || GUNS.pistol, rig = p._aimRig, st = p._aim;
+    let x = p.x + (p._facing || 1) * 0.25 * this.charH, y = p.y - 0.15 * this.charH;
+    if (rig && rig.showing && st) { const mz = rig.muzzle(G, st); x = mz.x; y = mz.y; }
+    const k = this.charH / 146;
+    for (let i = 0; i < 6; i++) {
+      const c = this.add.circle(x, y, (3 + i) * k, 0x8a8478, 0.55).setDepth(12);
+      this.tweens.add({ targets: c, x: x + (Math.random() - 0.3) * 30 * k, y: y - (14 + i * 6) * k,
+                        scale: 2.2, alpha: 0, delay: i * 40, duration: 520, onComplete: () => c.destroy() });
+    }
+    this._sortNew();
   },
 
   // Anything just added to a scene with a second (HUD) camera draws on both
@@ -8421,6 +8500,7 @@ const WalkCombat = {
       const px = b._x0 != null ? b._x0 : b.x, py = b._y0 != null ? b._y0 : b.y;
       b._x0 = null; b._y0 = null;
       b.x += b._vx * dt; b.y += (b._vy || 0) * dt;
+      if (b._trail) b._trail.setPosition(b.x - Math.cos(b.rotation) * 0.1 * this.charH, b.y - Math.sin(b.rotation) * 0.1 * this.charH);
       if (now - b._born > (b._life || 1100) || b.x < -40 || b.x > this.worldW + 40 ||
           b.y < top || b.y > wh + 60) { b.destroy(); return false; }
       const dx = b.x - px, dy = b.y - py;
@@ -9580,12 +9660,21 @@ const WalkGrenades = {
           im.setScale(46 / pw);
           // the magazine: a pip a round, gold after a perfect reload, and
           // RELOAD over them while it is going in
-          const [, n, flags] = it.split(':'), left = +n, g = add(this.add.graphics());
-          const pw2 = 4, gap = 2, x1 = cx - (PISTOL_MAG * (pw2 + gap) - gap) / 2, y1 = cy + 17;
+          const [, n, flags] = it.split(':'), left = +n;
+          const pw2 = 5, gap = 1.5, x1 = cx - (PISTOL_MAG * (pw2 + gap) - gap) / 2 + pw2 / 2, y1 = cy + 17;
+          const icon = this.textures.exists('scene_pistolbullet');
+          const g = icon ? null : add(this.add.graphics());
           for (let r = 0; r < PISTOL_MAG; r++) {
-            const full = r < left && flags.indexOf('r') < 0;
-            g.fillStyle(full ? (flags.indexOf('h') >= 0 ? 0xf2b13c : 0xf0e6d4) : 0x3a3029, 1);
-            g.fillRect(x1 + r * (pw2 + gap), y1, pw2, 8);
+            const full = r < left && flags.indexOf('r') < 0, hot = flags.indexOf('h') >= 0;
+            if (icon) {
+              // the rounds left, standing in a row; spent ones a shadow
+              const b = add(this.add.image(x1 + r * (pw2 + gap), y1 + 5, 'scene_pistolbullet').setAngle(-90));
+              b.setScale(13 / b.width).setAlpha(full ? 1 : 0.18);
+              if (full && hot) b.setTint(0xffc860);
+            } else {
+              g.fillStyle(full ? (hot ? 0xf2b13c : 0xf0e6d4) : 0x3a3029, 1);
+              g.fillRect(x1 - pw2 / 2 + r * (pw2 + gap), y1, pw2, 8);
+            }
           }
           if (flags.indexOf('r') >= 0) add(this.add.text(cx, y1 - 2, 'RELOAD', { fontFamily: F_UI, fontSize: '10px',
             fontStyle: '700', color: '#e0a040', stroke: '#070605', strokeThickness: 3 }).setOrigin(0.5, 1));

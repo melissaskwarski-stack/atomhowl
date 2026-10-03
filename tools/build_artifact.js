@@ -52,7 +52,10 @@ const MEDIA = {
   sfxFire: [['public/assets/fire.mp3', 'fire.mp3']],
   sfxFireFar: [['public/assets/fire_distance.mp3', 'fire_distance.mp3']],
   // El Acecho: on the bunker radio, then quietly outside
-  songAcecho: [['public/assets/el_acecho.mp3', 'el_acecho.mp3']]
+  songAcecho: [['public/assets/el_acecho.mp3', 'el_acecho.mp3']],
+  // the pistol: four shots in one take, and the reload (out, then in)
+  sfxPistol: [['public/assets/pistol_sound_src.mp3', 'pistol_sound.mp3']],
+  sfxReload: [['public/assets/reloading_src.mp3', 'reloading.mp3']]
 };
 
 const files = [];

@@ -101,6 +101,7 @@ const SCENE_SRC = {
   // crossed pair (multiplayer). tools/make_sword_icons.js makes both.
   swordone:  ['public/assets/sword_single.png'],
   swordpair: ['public/assets/sword_pair.png'],
+  pistolbullet: ['public/assets/pistol_bullet.png'],
   leveroff:  ['public/assets/lever_off.png'],
   leveron:   ['public/assets/lever_on.png'],
   // ---- THE STORAGE ROOMS -----------------------------------------------
@@ -283,6 +284,10 @@ const MEDIA_SRC = {
   sfxFireFar: [['public/assets/fire_distance.mp3', 'audio/mpeg']],
   // El Acecho: on the bunker radio, then quietly outside
   songAcecho: [['public/assets/el_acecho.mp3', 'audio/mpeg']],
+  // the pistol: four shots in one take (cut by offset in the game) and the
+  // reload, the magazine out and then in
+  sfxPistol: [['public/assets/pistol_sound_src.mp3', 'audio/mpeg']],
+  sfxReload: [['public/assets/reloading_src.mp3', 'audio/mpeg']],
 };
 
 // ---------- dialogue voice ----------
