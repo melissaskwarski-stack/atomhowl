@@ -5107,6 +5107,143 @@ class MenuScene extends Phaser.Scene {
 }
 
 // ================================================================== //
+//  PAUSE — over a stage, from ESC or the pad's Start                  //
+//                                                                     //
+//  The stage freezes under it (physics, timers, tweens, its keys) and //
+//  stays in view, dimmed. Carry on, restart the stage the way R does, //
+//  sound, fullscreen, or leave for the main menu. Restart and quit ask //
+//  once. Keys: up/down (W/S, d-pad, stick), Enter/Space/E (A) choose,  //
+//  Esc (Start) or Q (B) carries on.                                   //
+// ================================================================== //
+class PauseScene extends Phaser.Scene {
+  constructor() { super('PauseScene'); }
+
+  init(data) { this.from = data.from; this.canReset = !!data.canReset; this._gone = false; this._confirming = false; this._rows = []; }
+
+  create() {
+    const W = 1280, H = 720, LX = 520;
+    this.add.rectangle(0, 0, W, H, 0x070605, 0.72).setOrigin(0).setInteractive();   // eats clicks
+    const band = this.add.graphics();
+    for (let i = 0; i < 40; i++) {
+      band.fillStyle(0x070605, 0.55 * (1 - Math.abs(i - 20) / 20));
+      band.fillRect(LX - 140 + i * 16, 0, 16, H);
+    }
+    this.add.text(LX, 196, 'PAUSED', {
+      fontFamily: F_UI, fontSize: '58px', fontStyle: '700', color: '#f0e6d4',
+      stroke: '#070605', strokeThickness: 6
+    }).setOrigin(0, 0.5);
+    this.add.rectangle(LX, 236, 250, 2, 0xf2b13c, 0.85).setOrigin(0, 0.5);
+    this._sub = this.add.text(LX, 262, '', {
+      fontFamily: F_UI, fontSize: '15px', fontStyle: '600', color: '#cbbba1',
+      stroke: '#070605', strokeThickness: 3
+    }).setOrigin(0, 0.5);
+    this._rows = [];
+    this._main();
+
+    const kb = this.input.keyboard;
+    const move = d => {
+      if (this._gone || !this._items.length) return;
+      this._cursor = (this._cursor + d + this._items.length) % this._items.length;
+      Sfx.ensure(); Sfx.hover();
+      this._highlight();
+    };
+    ['UP', 'W'].forEach(k => kb.on('keydown-' + k, () => move(-1)));
+    ['DOWN', 'S'].forEach(k => kb.on('keydown-' + k, () => move(1)));
+    ['ENTER', 'SPACE', 'E'].forEach(k => kb.on('keydown-' + k, () => this._choose(this._cursor)));
+    ['ESC', 'Q'].forEach(k => kb.on('keydown-' + k, () => this._confirming ? this._main() : this._resume()));
+    // the sound row keeps up with N, which still works here
+    kb.on('keydown-N', () => { Sfx.toggleMute(); if (!this._confirming) this._main(this._cursor); });
+  }
+
+  // The list, rebuilt for each page (the menu, or a yes/no).
+  _list(items, sub, at) {
+    this._rows.forEach(r => { r.txt.destroy(); r.caret.destroy(); });
+    this._items = items;
+    this._sub.setText(sub || '');
+    this._rows = items.map(([label], i) => {
+      const y = 318 + i * 52;
+      const txt = this.add.text(520 + 26, y, label, {
+        fontFamily: F_UI, fontSize: '27px', fontStyle: '600', color: '#f2b13c',
+        stroke: '#070605', strokeThickness: 5
+      }).setOrigin(0, 0.5).setInteractive({ useHandCursor: true });
+      const caret = this.add.text(520, y, '▸', { fontFamily: F_UI, fontSize: '21px', color: '#f2b13c' })
+        .setOrigin(0, 0.5).setAlpha(0);
+      txt.on('pointerover', () => { if (this._cursor !== i) { this._cursor = i; Sfx.ensure(); Sfx.hover(); this._highlight(); } });
+      txt.on('pointerdown', () => this._choose(i));
+      return { txt, caret };
+    });
+    this._cursor = Phaser.Math.Clamp(at || 0, 0, items.length - 1);
+    this._highlight();
+  }
+
+  _highlight() {
+    this._rows.forEach((r, i) => {
+      const on = i === this._cursor;
+      r.txt.setColor(on ? '#fff2c8' : '#f2b13c');
+      r.caret.setAlpha(on ? 1 : 0);
+    });
+  }
+
+  _main(at) {
+    this._confirming = false;
+    const items = [['RESUME', () => this._resume()]];
+    if (this.canReset) items.push(['RESTART STAGE', () => this._ask('RESTART THIS STAGE?', 'Back to the start of this stage.', () => this._restart())]);
+    items.push(
+      ['SOUND: ' + (Sfx.muted ? 'OFF' : 'ON'), () => { Sfx.toggleMute(); this._main(this._cursor); }],
+      ['FULLSCREEN', () => toggleFullscreen()],
+      ['QUIT TO MAIN MENU', () => this._ask('QUIT TO THE MAIN MENU?', 'CONTINUE starts you from this stage.', () => this._quit())]
+    );
+    this._list(items, '', at);
+  }
+
+  _ask(q, sub, yes) {
+    this._confirming = true;
+    this._list([['NO', () => this._main()], ['YES', yes]], q + '   ' + sub, 0);
+  }
+
+  _choose(i) {
+    if (this._gone || !this._items[i]) return;
+    Sfx.ensure(); Sfx.select();
+    this._items[i][1]();
+  }
+
+  _stage() { return this.scene.get(this.from); }
+
+  _resume() {
+    if (this._gone) return;
+    this._gone = true;
+    this.scene.resume(this.from);
+    this.scene.stop();
+  }
+
+  _restart() {
+    if (this._gone) return;
+    this._gone = true;
+    const st = this._stage();
+    this.scene.resume(this.from);
+    this.scene.stop();
+    if (st && st.resetStage && !st._transitioning) {
+      // a brother down was already on his way to a restart: this one replaces it
+      if (st._downTimer) { st._downTimer.remove(); st._downTimer = null; }
+      st._transitioning = true;
+      st.resetStage();
+    }
+  }
+
+  _quit() {
+    if (this._gone) return;
+    this._gone = true;
+    stopVoice();
+    ['IntroDialogueScene', 'EnemyCinematicScene'].forEach(k => { if (this.scene.isActive(k) || this.scene.isPaused(k)) this.scene.stop(k); });
+    this.cameras.main.fadeOut(300, 0, 0, 0);
+    this.cameras.main.once('camerafadeoutcomplete', () => {
+      this.scene.stop(this.from);
+      this.scene.start('MenuScene');
+    });
+  }
+}
+
+// ================================================================== //
 //  CHARACTER SELECT                                                  //
 //  Eterwolf is shown as the live Idle_v3 loop — the same art the      //
 //  player controls — rather than a separate portrait that could drift //
@@ -6609,12 +6746,21 @@ class WalkScene extends Phaser.Scene {
     // otherwise do both at once.
     this.input.keyboard.on('keydown-ESC', () => {
       if (this._inConversation || this._transitioning) return;
-      // Down, ESC still goes to the menu — and takes the pending restart with it.
-      if (this._downTimer) { this._downTimer.remove(); this._downTimer = null; }
-      this._transitioning = true;
-      this.cameras.main.fadeOut(300, 0, 0, 0);
-      this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('MenuScene'));
+      // The pause menu: the stage freezes under it (a pending death restart
+      // with it) and stops hearing keys until it is back.
+      this.scene.pause();
+      this.scene.launch('PauseScene', { from: this.scene.key, canReset: !!cfg.canReset });
+      this.scene.bringToTop('PauseScene');
     });
+    // Back from it: whatever was held when it paused is let go, so nothing
+    // walks on by itself or fires a shot from the click on RESUME.
+    const onResume = () => {
+      this.input.keyboard.resetKeys();
+      try { Pad.release(); } catch (e) {}
+      this._ptrFire = false; this._ptrLatch = 0;
+    };
+    this.events.on('resume', onResume);
+    this.events.once('shutdown', () => this.events.off('resume', onResume));
 
     // exit zones (xFrac → world x)
     // Markers float above the player's head, so the clearance has to come from
@@ -6833,6 +6979,7 @@ class WalkScene extends Phaser.Scene {
     if (GameState.hasPistol) parts.push(pad ? 'R STICK AIM   RT SHOOT' : 'MOUSE AIM   LMB / K SHOOT');
     if (this.grenadesOf && this.player && this.grenadesOf(this.player) > 0) parts.push(pad ? 'LT GRENADE' : 'G GRENADE');
     if (!pad) parts.push('N MUTE');
+    parts.push(pad ? 'START MENU' : 'ESC MENU');
     return parts.join(sep);
   }
 
@@ -15697,7 +15844,7 @@ window.__game = new Phaser.Game({
           ShopStreetScene, StoreScene, NightStreetScene, EmbankmentScene,
           StorageOneScene, StorageTwoScene, EnemyCinematicScene,
           CityScene, ShopFrontScene, ShopScene,
-          GameScene, DebugScene]
+          GameScene, DebugScene, PauseScene]
 });
 
 // ---- gamepad ----

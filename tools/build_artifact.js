@@ -196,10 +196,10 @@ h1 span{color:var(--faint); letter-spacing:.08em; font-weight:600; float:right}
   <span><b>GRENADE</b> <span class="k">G</span></span>
   <span><b>RESTART STAGE</b> <span class="k">R</span></span>
   <span><b>SKIP DIALOGUE</b> <span class="k">ENTER</span></span>
-  <span><b>MENU</b> <span class="k">ESC</span></span>
+  <span><b>PAUSE MENU</b> <span class="k">ESC</span></span>
   <span><b>MUTE</b> <span class="k">N</span></span>
   <span><b>FULLSCREEN</b> <span class="k">ALT</span>+<span class="k">ENTER</span></span>
-  <span class="row"><b>CONTROLLER</b> <span class="k">A</span> jump &middot; <span class="k">LB</span>/<span class="k">L3</span> run &middot; <span class="k">B</span>/<span class="k">RB</span> dash &middot; <span class="k">&darr;</span> crouch &middot; <span class="k">Y</span> use &middot; <span class="k">X</span> sword &middot; <span class="k">R stick</span> aim &middot; <span class="k">RT</span> fire &middot; <span class="k">LT</span> grenade &middot; <span class="k">BACK</span> skip &middot; <span class="k">START</span> menu</span>
+  <span class="row"><b>CONTROLLER</b> <span class="k">A</span> jump &middot; <span class="k">LB</span>/<span class="k">L3</span> run &middot; <span class="k">B</span>/<span class="k">RB</span> dash &middot; <span class="k">&darr;</span> crouch &middot; <span class="k">Y</span> use &middot; <span class="k">X</span> sword &middot; <span class="k">R stick</span> aim &middot; <span class="k">RT</span> fire &middot; <span class="k">LT</span> grenade &middot; <span class="k">BACK</span> skip &middot; <span class="k">START</span> pause menu</span>
   <span class="row"><b>PLAYER 2</b> second controller, same buttons (right stick aims) &middot; <span class="k">A</span> join &middot; hold <span class="k">Y</span> by a downed brother to pick him up &middot; <span class="k">BACK</span> leave</span>
   <span class="row"><b>DEV</b> sandbox in the main menu (there: <span class="k">UP</span>+FIRE aim 45&deg;, <span class="k">E</span> swap weapon) &middot; <span class="k">M</span> prop editor (<span class="k">O</span> export) &middot; <span class="k">F10</span> controller tester &middot; <span class="k">F11</span> collision</span>
 </div>
