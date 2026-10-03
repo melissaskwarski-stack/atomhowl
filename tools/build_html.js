@@ -97,6 +97,10 @@ const SCENE_SRC = {
   // The opening clip as one horizontal strip of 12 frames, cut from the gif
   // to its painted box. CHEST_FRAMES in the game has to match the 12.
   chestopen: ['public/assets/chest_open_strip.png'],
+  // the blades in the chest, and in the item box: one (single player) or the
+  // crossed pair (multiplayer). tools/make_sword_icons.js makes both.
+  swordone:  ['public/assets/sword_single.png'],
+  swordpair: ['public/assets/sword_pair.png'],
   leveroff:  ['public/assets/lever_off.png'],
   leveron:   ['public/assets/lever_on.png'],
   // ---- THE STORAGE ROOMS -----------------------------------------------

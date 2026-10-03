@@ -9291,6 +9291,13 @@ const GRENADE_R_M     = 1.9;     // what the blast takes, metres from it
 const GRENADE_HURT_M  = 1.3;     // a brother closer than this is hurt by it
 const GRENADE_HURT    = 2;       // hearts
 function heroKey(p) { return (p && p._hero && p._hero.id) || GameState.castId || 'eterwolf'; }
+// The blades as the player sees them, in the chest and in the item box: the
+// one (signal sword.png) for a single player, the crossed pair (sword asset
+// both swords.png) for two.
+function swordArtKey(scene) {
+  const k = GameState.coop ? 'scene_swordpair' : 'scene_swordone';
+  return scene.textures.exists(k) ? k : null;
+}
 
 const WalkGrenades = {
   grenadesOf(p) { return (GameState.grenades && GameState.grenades[heroKey(p)]) || 0; },
@@ -9442,7 +9449,11 @@ const WalkGrenades = {
         color: '#f2b13c', stroke: '#070605', strokeThickness: 3 }).setOrigin(0, 1));
       items.forEach((it, j) => {
         const cx = x0 + 12 + PW + 10 + j * SLOT + SLOT / 2, cy = y0 + H / 2;
-        if (it === 'sword') {
+        if (it === 'sword' && swordArtKey(this)) {
+          const key = swordArtKey(this), im = add(this.add.image(cx, cy, key));
+          if (key === 'scene_swordpair') im.setScale(52 / im.height);
+          else im.setScale(64 / im.width).setAngle(-38);
+        } else if (it === 'sword') {
           const g = add(this.add.graphics());
           g.lineStyle(4, 0xd9d4c8, 1); g.lineBetween(cx - 14, cy + 14, cx + 16, cy - 16);
           g.lineStyle(5, 0x8a6a3a, 1); g.lineBetween(cx - 8, cy + 2, cx + 2, cy + 12);
@@ -14213,46 +14224,94 @@ class StoreScene extends WalkScene {
   _openChest() {
     if (this._swordsTaken || !this.chest) return;
     this._swordsTaken = true;
-    this._reach(this.player, this.chestX);
+    const reach = this._reach(this.player, this.chestX) || 0;
     GameState.hasSwords = true;
     this.cfg.noSprint = false;
     this._refreshHint();
-    Sfx.ensure(); Sfx.land();
-    if (this.chestLabel) this.chestLabel.setAlpha(0);
-    // The clip takes over from the still drawing and holds where it ends.
-    if (this.chestAnim) {
-      this.chest.setVisible(false);
-      this.chestAnim.setVisible(true).play('chest-open');
-    }
-    this._say([['PLAYER', 'Two of them. One each.']]);
-    // The card comes after the clip, not over it.
-    this.time.delayedCall(820, () => this._bladePanel());
-    this.time.delayedCall(1100, () => this._showTip(
-      'SWORD UNLOCKED — RMB OR  F  TO SWING  ·  NOW DOWN TO THE DOOR'));
     showBladeUnlocked();
+    if (this.chestLabel) this.chestLabel.setAlpha(0);
+    // One thing after another, nobody talking over any of it: he reaches,
+    // the chest lights up, the blades come up out of it, the card, and only
+    // then a word between the brothers.
+    const live = () => this.scene.isActive();
+    this.time.delayedCall(reach * 0.5, () => {
+      if (!live()) return;
+      Sfx.ensure(); Sfx.land();
+      let clip = 0;
+      // The clip takes over from the still drawing and holds where it ends.
+      if (this.chestAnim) {
+        this.chest.setVisible(false);
+        this.chestAnim.setVisible(true).play('chest-open');
+        const a = this.anims.get('chest-open');
+        clip = a ? a.duration : 800;
+      }
+      this.time.delayedCall(clip, () => { if (live()) this._bladesRise(() => this._bladePanel(() => {
+        this._showTip('SWORD UNLOCKED  ·  RMB OR  F  TO SWING  ·  NOW DOWN TO THE DOOR');
+        if (this._duo()) this._say([['PLAYER', 'Two of them. One each.']]);
+      })); });
+    });
+  }
+
+  // The blades come up out of the lit chest: the one (single player) or the
+  // crossed pair (multiplayer), rising into a warm light, a glint along the
+  // steel, held a moment, then up and away as the card arrives.
+  _bladesRise(done) {
+    const key = swordArtKey(this);
+    if (!key) { done(); return; }
+    const m = this.pxPerM, top = this.chestY - (this.chest ? this.chest.displayHeight : 0.6 * m);
+    const im = this.add.image(this.chestX, top, key).setDepth(7.5).setAlpha(0);
+    const k = key === 'scene_swordpair' ? (1.15 * m) / im.height : (1.5 * m) / im.width;
+    im.setScale(k * 0.6);
+    torchTexture(this);
+    const glow = this.add.image(this.chestX, top - 0.6 * m, TORCH_KEY).setDepth(7.4)
+      .setBlendMode(Phaser.BlendModes.ADD).setTint(0xffc070).setAlpha(0).setScale(1.6 * m / 512);
+    const upY = top - 0.75 * m - im.height * k / 2;
+    Sfx.ensure(); Sfx.blip(660, 0.5, 'sine', 0.05, 1320);
+    this.tweens.add({ targets: glow, alpha: 0.55, duration: 450 });
+    this.tweens.add({ targets: im, y: upY, alpha: 1, scale: k, duration: 700, ease: 'Back.easeOut',
+      onComplete: () => {
+        // the glint along the steel
+        Sfx.blip(2600, 0.12, 'triangle', 0.04, 3600);
+        if (im.setTintFill) { im.setTintFill(0xffffff); this.time.delayedCall(60, () => im.active && im.clearTint()); }
+        this.tweens.add({ targets: im, y: upY - 6, duration: 600, yoyo: true, ease: 'Sine.easeInOut' });
+      } });
+    this.time.delayedCall(1700, () => {
+      if (!this.scene.isActive()) return;
+      this.tweens.add({ targets: [im, glow], alpha: 0, duration: 380, onComplete: () => { im.destroy(); glow.destroy(); } });
+      this.tweens.add({ targets: im, y: upY - 40, duration: 380 });
+      done();
+    });
   }
 
   // acquireWeapon's card is about a gun and tells you to go back outside, so
-  // the blades get their own.
-  _bladePanel() {
-    const panel = this.add.rectangle(640, 350, 620, 190, 0x0d0a08, 0.93)
+  // the blades get their own, with the blades on it.
+  _bladePanel(done) {
+    const duo = GameState.coop, key = swordArtKey(this);
+    const name = (heroKey(this.player) || 'eterwolf').replace(/^./, c => c.toUpperCase());
+    const panel = this.add.rectangle(640, 350, 640, 250, 0x0d0a08, 0.93)
       .setScrollFactor(0).setDepth(90).setStrokeStyle(3, 0xf2b13c);
-    const t1 = this.add.text(640, 300, 'A PAIR OF BLADES', {
+    const grp = [panel];
+    if (key) {
+      const im = this.add.image(640, 292, key).setScrollFactor(0).setDepth(91);
+      im.setScale(key === 'scene_swordpair' ? 112 / im.height : 330 / im.width);
+      grp.push(im);
+    }
+    grp.push(this.add.text(640, 378, duo ? 'A PAIR OF BLADES' : 'THE BLADE', {
       fontFamily: 'Courier New, monospace', fontSize: '26px', color: '#f2b13c',
       stroke: '#0d0a08', strokeThickness: 5
-    }).setOrigin(0.5).setScrollFactor(0).setDepth(91);
-    const t2 = this.add.text(640, 340, 'one each  —  Eterwolf and Wolffel both carry one now', {
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(91));
+    grp.push(this.add.text(640, 412, duo ? 'one each  ·  Eterwolf and Wolffel both carry one now'
+                                         : name + ' carries it from here on', {
       fontFamily: 'Courier New, monospace', fontSize: '16px', color: '#d9c7a8'
-    }).setOrigin(0.5).setScrollFactor(0).setDepth(91);
-    const t3 = this.add.text(640, 386, 'RMB  or  F  to swing  ·  hold the rhythm for the three-hit chain', {
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(91));
+    grp.push(this.add.text(640, 444, 'RMB  or  F  to swing  ·  hold the rhythm for the three-hit chain', {
       fontFamily: 'Courier New, monospace', fontSize: '14px', color: '#8a6f4a'
-    }).setOrigin(0.5).setScrollFactor(0).setDepth(91);
-    const grp = [panel, t1, t2, t3];
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(91));
     grp.forEach(o => o.setAlpha(0));
     this.tweens.add({ targets: grp, alpha: 1, duration: 250 });
     this.time.delayedCall(3200, () => this.tweens.add({
       targets: grp, alpha: 0, duration: 450,
-      onComplete: () => grp.forEach(o => o.destroy())
+      onComplete: () => { grp.forEach(o => o.destroy()); if (done && this.scene.isActive()) done(); }
     }));
   }
 
