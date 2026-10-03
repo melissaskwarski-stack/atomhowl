@@ -1514,7 +1514,9 @@ const AIM_MOUSE_MS = 2500; // the mouse counts as aiming this long after it last
 const GUNS = {
   pistol: {
     name: 'PISTOL', tex: 'gun_pistol', sfx: 'pistol',
-    cd: 210, dmg: 1, spread: 0.012, speed: 7.2, life: 1100, hold: 900,
+    // never runs out, but eight to a magazine and a reload between them, so
+    // it keeps things off you rather than doing the sword's job
+    cd: 250, dmg: 1, spread: 0.012, speed: 7.2, life: 1100, hold: 900,
     muzzle: [17, -7],
     // The handle goes DOWN THROUGH the fist (only its butt shows under the
     // little finger); the slide rides on top of the hand and the barrel
@@ -4035,6 +4037,7 @@ const WALK_SPEED   = 300;
 // same pace with a different cycle on top, which is not what holding a key
 // should feel like.
 const RUN_SPEED    = 560;
+const BACK_SPEED   = 230;      // backing off with the gun up, pointed the other way
 // Combat runs by default (X drops it to the walk); the exploration sprint is
 // faster still because there is nothing there to run into.
 const COMBAT_SPEED = 340;
@@ -4069,6 +4072,7 @@ const PAD_KEYS = {
   ENTER: [13, 'Enter',      'Enter'],
   G:     [71, 'KeyG',       'g'],
   ESC:   [27, 'Escape',     'Escape'],
+  R:     [82, 'KeyR',       'r'],
   UP:    [38, 'ArrowUp',    'ArrowUp'],
   DOWN:  [40, 'ArrowDown',  'ArrowDown'],
   LEFT:  [37, 'ArrowLeft',  'ArrowLeft'],
@@ -4089,7 +4093,7 @@ const PAD_MAP = {
   2:  'F',       // X      sword
   3:  'E',       // Y      use: doors, picking up, switches, a brother
   4:  'SHIFT',   // LB     run (hold)
-  5:  'Q',       // RB     dash
+  5:  'R',       // RB     reload (press again on the mark: the active reload)
   6:  'G',       // LT     grenade
   7:  'K',       // RT     fire
   8:  'ENTER',   // Back   skip what is being said
@@ -4317,7 +4321,8 @@ function makePrompts(scene, x, y, items, align, depth) {
 // drives Wolffel from these exactly as it drives Eterwolf from the keyboard.
 const P2_MAP = {
   0: 'SPACE',                            // A      jump — and press it to join
-  1: 'Q', 5: 'Q',                        // B, RB  dash
+  1: 'Q',                                // B      dash
+  5: 'R',                                // RB     reload
   2: 'F',                                // X      sword
   3: 'E',                                // Y      pick your brother up
   4: 'SHIFT', 10: 'SHIFT',               // LB, L3 run (hold)
@@ -4326,7 +4331,7 @@ const P2_MAP = {
   8: 'BACK',                             // Back   drop out
   12: 'UP', 13: 'DOWN', 14: 'LEFT', 15: 'RIGHT'
 };
-const P2_KEYS = ['W', 'A', 'S', 'D', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'SPACE', 'SHIFT', 'Q', 'E', 'K', 'F', 'G', 'BACK'];
+const P2_KEYS = ['W', 'A', 'S', 'D', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'SPACE', 'SHIFT', 'Q', 'E', 'K', 'F', 'G', 'R', 'BACK'];
 const P2Pad = {
   connected: false, keys: {}, joinReq: false, leaveReq: false, _lostAt: 0,
   aim: { x: 0, y: 0, mag: 0, on: false, _on: false },   // his right stick, as Pad.aim is player 1's
@@ -4626,8 +4631,11 @@ function driveWalker(scene, p, keys, onGround) {
   if (aim) p._facing = aim.face;
   // With a gun up, moving IS running: the aim has three leg states (still,
   // running, crouched) and the run is the sprint, so it goes at sprint pace
-  // instead of walking pace with the stride slowed to match.
-  const sprint = !crouch && !!((keys.SHIFT && keys.SHIFT.isDown) || aim) &&
+  // instead of walking pace with the stride slowed to match. Except away from
+  // where he points: sprinting backwards read as skating, so he backs off at
+  // a steady step, slower than a walk, the stride slowed down to it.
+  const back = !!aim && move !== 0 && move !== aim.face;
+  const sprint = !crouch && !back && !!((keys.SHIFT && keys.SHIFT.isDown) || aim) &&
                  !(scene.cfg && scene.cfg.noSprint);
   const dt = Math.min(0.05, ((scene.game && scene.game.loop.delta) || 16.7) / 1000);
 
@@ -4669,7 +4677,7 @@ function driveWalker(scene, p, keys, onGround) {
     // tenth of a second to reach a walk, a little more for a run, and a
     // shorter stop. Less grip in the air. Coming out of a dash this is also
     // what eases him down from the burst instead of cutting it dead.
-    const target = move * (sprint ? RUN_SPEED : WALK_SPEED) * k;
+    const target = move * (back ? BACK_SPEED : sprint ? RUN_SPEED : WALK_SPEED) * k;
     const vx = p.body.velocity.x;
     const grip = onGround ? 1 : 0.6;
     const slowing = target === 0 || Math.sign(target) !== Math.sign(vx) || Math.abs(target) < Math.abs(vx);
@@ -4816,9 +4824,10 @@ function driveWalker(scene, p, keys, onGround) {
       if (at) p.anims.setCurrentFrame(p.anims.currentAnim.frames[at]);
       p._curAnim = key;
     }
-    // The aimed stride is the sprint, slowed to the pace he is moving at.
-    const ts = (want === 'aimrun' || want === 'aimrunB')
-      ? Phaser.Math.Clamp(Math.abs(p.body.velocity.x) / (RUN_SPEED * k), 0.85, 1.15) : 1;
+    // The aimed stride is the sprint, slowed to the pace he is moving at:
+    // a little either way going forwards, a lot backing off.
+    const ts = want === 'aimrun' ? Phaser.Math.Clamp(Math.abs(p.body.velocity.x) / (RUN_SPEED * k), 0.85, 1.15)
+             : want === 'aimrunB' ? Phaser.Math.Clamp(Math.abs(p.body.velocity.x) / (RUN_SPEED * k), 0.4, 1) : 1;
     if (p.anims.timeScale !== ts) p.anims.timeScale = ts;
   } else {
     if (!onGround) p.play('hero-air', true);
@@ -6684,14 +6693,11 @@ class WalkScene extends Phaser.Scene {
     // input
     this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,SHIFT,Q,M,E,ENTER,R,K');
     this.input.keyboard.on('keydown-N', () => Sfx.toggleMute());
-    // Not during a scripted beat or a conversation laid over the stage: the
-    // restart would happen under it and leave it talking over a reset room.
-    // Nor while he is down or the stage is already leaving: the death restart
-    // is on its way, and a second exit racing it left two scenes running.
-    if (cfg.canReset) this.input.keyboard.on('keydown-R', () => {
+    // R (RB on a pad) reloads the pistol, and pressed again on the mark is
+    // the active reload. Restarting the stage is in the pause menu (ESC).
+    this.input.keyboard.on('keydown-R', () => {
       if (this._holdInput || this._inConversation || this._dead || this._transitioning) return;
-      this._transitioning = true;
-      this.resetStage();
+      if (this.reloadPress) this.reloadPress(this.player);
     });
     if (cfg.castSwitch && !GameState.coop) this._buildCastSwitch();
     if (GameState.coop && P2Pad.connected) this._spawnP2();
@@ -6976,7 +6982,7 @@ class WalkScene extends Phaser.Scene {
     if (!cfg.noJump) parts.push(pad ? 'A JUMP' : 'W JUMP');
     parts.push(pad ? 'DOWN CROUCH' : 'S CROUCH', pad ? 'Y USE' : 'E USE');
     if (armedWithBlade()) parts.push(pad ? 'X SWORD' : 'F SWORD');
-    if (GameState.hasPistol) parts.push(pad ? 'R STICK AIM   RT SHOOT' : 'MOUSE AIM   LMB / K SHOOT');
+    if (GameState.hasPistol) parts.push(pad ? 'R STICK AIM   RT SHOOT   RB RELOAD' : 'MOUSE AIM   LMB / K SHOOT   R RELOAD');
     if (this.grenadesOf && this.player && this.grenadesOf(this.player) > 0) parts.push(pad ? 'LT GRENADE' : 'G GRENADE');
     if (!pad) parts.push('N MUTE');
     parts.push(pad ? 'START MENU' : 'ESC MENU');
@@ -7037,7 +7043,7 @@ class WalkScene extends Phaser.Scene {
       x += t.width + 26;
     });
     this._paintCast();
-    this.add.text(x + 14, 59, 'R  RESTART STAGE', {
+    this.add.text(x + 14, 59, 'ESC  MENU', {
       fontFamily: F_UI, fontSize: '11px', fontStyle: '600', color: '#7d6c55'
     }).setScrollFactor(0).setDepth(45);
   }
@@ -7620,7 +7626,16 @@ const WALK_INVULN_MS  = 950;
 const WALK_ALIEN_HP   = 6;       // two cuts, or six rounds
 const SWORD_DMG_WALK  = 3;
 const PISTOL_DMG      = 1;
-const PISTOL_CD       = 210;
+const PISTOL_CD       = 250;
+// The magazine and the active reload. R (RB) or running dry starts it: a mark
+// sweeps the bar over his head. Press again with it in the light part and the
+// magazine is in at once; in the gold, and it is in and the next eight rounds
+// hit twice as hard. Anywhere else and it jams: longer than leaving it alone.
+const PISTOL_MAG      = 8;
+const RELOAD_MS       = 1500;
+const RELOAD_JAM_MS   = 2500;            // from the start of a reload that jammed
+const RELOAD_GOOD     = [0.38, 0.68];    // of the sweep
+const RELOAD_PERFECT  = [0.47, 0.56];
 // What a kill leaves: the clip runs the body down into a pool of acid, and the
 // pool stays this long before it dries up.
 const ACID_HOLD_MS    = 7000;
@@ -8222,6 +8237,8 @@ const WalkCombat = {
   // Fire if the gun is up and on its mark and its cooldown is over.
   _gunTry(p, now) {
     if (now < (p._nextFireAt || 0) || now < (p._swingUntil || 0)) return;
+    if (p._reload) return;
+    if (this._ammo(p) <= 0) { this._startReload(p, now); return; }
     const G = this._gunOf(p);
     if (this._aimCapable(p)) {
       const st = p._aim;
@@ -8231,7 +8248,100 @@ const WalkCombat = {
       if (!st || !st.active || !st.ready || !this._rigLive(p)) return;
       p._nextFireAt = now + G.cd * (this.furyActive && this.furyActive() ? 0.5 : 1);
     } else p._nextFireAt = now + PISTOL_CD;
-    this.fireBullet(now, p);
+    if (!this.fireBullet(now, p)) return;
+    p._mag--;
+    if (p._hot) p._hot--;
+    this._paintInventory(true);
+    // dry: the reload starts by itself, a beat after the last round
+    if (p._mag <= 0) this.time.delayedCall(140, () => { if (p.active && !p._reload && p._mag <= 0) this._startReload(p, this.time.now); });
+  },
+
+  // ---- the magazine ---------------------------------------------------
+  _ammo(p) { if (p._mag == null) p._mag = PISTOL_MAG; return p._mag; },
+
+  reloadPress(p) {
+    if (!p || !p.active || p._down || this._dead || !GameState.hasPistol) return;
+    const now = this.time.now;
+    if (p._reload) { this._activeReload(p, p._reload, now); return; }
+    if (this._ammo(p) >= PISTOL_MAG) return;
+    this._startReload(p, now);
+  },
+
+  _startReload(p, now) {
+    if (p._reload || !GameState.hasPistol) return;
+    p._reload = { at: now, end: now + RELOAD_MS, tried: false, jam: false, hitAt: 0 };
+    p._hot = 0;
+    Sfx.ensure(); Sfx.blip(420, 0.06, 'square', 0.05, 240);      // the magazine out
+    this._paintInventory(true);
+  },
+
+  _activeReload(p, r, now) {
+    if (r.tried) return;
+    r.tried = true;
+    const t = (now - r.at) / RELOAD_MS;
+    r.hitAt = t;
+    if (t >= RELOAD_PERFECT[0] && t <= RELOAD_PERFECT[1]) this._endReload(p, 'perfect');
+    else if (t >= RELOAD_GOOD[0] && t <= RELOAD_GOOD[1]) this._endReload(p, 'good');
+    else {
+      r.jam = true;
+      r.end = r.at + RELOAD_JAM_MS;
+      Sfx.ensure(); Sfx.blip(150, 0.16, 'square', 0.07, 90);     // the slide catches
+      this._reloadWord(p, 'JAMMED', '#e0523a');
+    }
+  },
+
+  _endReload(p, how) {
+    if (!p._reload) return;
+    p._reload = null;
+    p._mag = PISTOL_MAG;
+    p._hot = how === 'perfect' ? PISTOL_MAG : 0;
+    Sfx.ensure();
+    Sfx.blip(900, 0.05, 'square', 0.05, 1300);                   // in
+    this.time.delayedCall(70, () => Sfx.blip(640, 0.07, 'square', 0.05, 420));   // the slide
+    if (how === 'perfect') { Sfx.blip(1760, 0.22, 'triangle', 0.05, 2640); this._reloadWord(p, 'PERFECT', '#f2b13c'); }
+    else if (how === 'good') this._reloadWord(p, 'QUICK', '#f0e6d4');
+    this._paintInventory(true);
+  },
+
+  _reloadWord(p, word, color) {
+    const k = 1 / (this.cameras.main.zoom || 1);
+    const t = this.add.text(p.x, p.body.top - 40 * k, word, {
+      fontFamily: F_UI, fontSize: '20px', fontStyle: '700', color,
+      stroke: '#070605', strokeThickness: 4
+    }).setOrigin(0.5, 1).setDepth(64).setScale(k);
+    this.tweens.add({ targets: t, y: t.y - 26 * k, alpha: 0, delay: 380, duration: 520, onComplete: () => t.destroy() });
+    this._sortNew();
+  },
+
+  // Every frame, for each brother: a reload left alone finishes on its own,
+  // and the bar over his head shows the sweep, the light part and the gold.
+  _reloadTick(p, now) {
+    const r = p._reload;
+    if (r && (now >= r.end || p._down || !GameState.hasPistol)) {
+      if (p._down) { p._reload = null; this._paintInventory(true); }
+      else this._endReload(p, 'slow');
+    }
+    const g = p._rbar;
+    if (!p._reload) { if (g && g.visible) g.setVisible(false); return; }
+    if (!g || !g.scene) { p._rbar = this.add.graphics().setDepth(63); this._sortNew(); }
+    const bar = p._rbar.setVisible(true).clear();
+    // the same size on screen whatever the stage's zoom: it has to be read
+    // in a fraction of a second
+    const k = 1 / (this.cameras.main.zoom || 1), w = 120 * k, h = 10 * k;
+    const x0 = p.x - w / 2, y0 = p.body.top - 26 * k;
+    const R = p._reload, t = Phaser.Math.Clamp(R.jam ? R.hitAt : (now - R.at) / RELOAD_MS, 0, 1);
+    bar.fillStyle(0x070605, 0.85).fillRect(x0 - 2, y0 - 2, w + 4, h + 4);
+    bar.fillStyle(R.jam ? 0x6a1c12 : 0x3a2f24, 1).fillRect(x0, y0, w, h);
+    if (!R.jam && !R.tried) {
+      bar.fillStyle(0xcfc6b4, 0.75).fillRect(x0 + w * RELOAD_GOOD[0], y0, w * (RELOAD_GOOD[1] - RELOAD_GOOD[0]), h);
+      bar.fillStyle(0xf2b13c, 1).fillRect(x0 + w * RELOAD_PERFECT[0], y0, w * (RELOAD_PERFECT[1] - RELOAD_PERFECT[0]), h);
+    }
+    if (R.jam) {
+      // the jam runs out as a red fill to the end of its longer wait
+      const jt = Phaser.Math.Clamp((now - R.at) / RELOAD_JAM_MS, 0, 1);
+      bar.fillStyle(0xe0523a, 0.6).fillRect(x0, y0, w * jt, h);
+    }
+    bar.fillStyle(0xffffff, 1).fillRect(x0 + w * t - 1.5 * k, y0 - 3 * k, 3 * k, h + 6 * k);
   },
 
   fireBullet(now, who) {
@@ -8240,7 +8350,7 @@ const WalkCombat = {
     const rig = p._aimRig, st = p._aim;
     // ---- aimed: out of the end of the barrel, along the angle it is at ----
     if (this._aimCapable(p)) {
-      if (!(rig && rig.showing && st && st.active)) return;
+      if (!(rig && rig.showing && st && st.active)) return false;
       const mz = rig.muzzle(G, st);
       const a = st.cur * D2R + (Math.random() - 0.5) * G.spread;
       const f = rig.face, dx = f * Math.cos(a), dy = -Math.sin(a);
@@ -8251,7 +8361,8 @@ const WalkCombat = {
         .setBlendMode(Phaser.BlendModes.ADD);
       b._vx = dx * G.speed * this.charH; b._vy = dy * G.speed * this.charH;
       b._born = now; b._life = G.life;
-      b._dmg = G.dmg * (this.furyActive && this.furyActive() ? 2 : 1);
+      // fury, or a perfect reload: twice as hard (the two do not stack)
+      b._dmg = G.dmg * ((this.furyActive && this.furyActive()) || p._hot > 0 ? 2 : 1);
       if (b._dmg > G.dmg) b.setTint(0xffb040).setScale(k * 1.3);
       // The first step is tested from his shoulder, not from the muzzle, or an
       // alien already on top of him sits between the two and every round misses.
@@ -8263,7 +8374,7 @@ const WalkCombat = {
                         onComplete: () => fl.destroy() });
       this.cameras.main.shake(28, 0.0009);
       this._sortNew();
-      return;
+      return true;
     }
     // ---- art without the aim rig: the old flat shot ----
     const sx = Math.abs(p.scaleX), sy = Math.abs(p.scaleY);
@@ -8290,6 +8401,7 @@ const WalkCombat = {
     this.tweens.add({ targets: fl, alpha: 0, scale: 0.4 * k, duration: 60,
                       onComplete: () => fl.destroy() });
     this.cameras.main.shake(28, 0.0009);
+    return true;
   },
 
   // Anything just added to a scene with a second (HUD) camera draws on both
@@ -8615,8 +8727,10 @@ const WalkAim = {
   // Run after the scene has moved everyone and heroShift has run: hang the
   // upper body on the legs frame that is showing.
   _aimSync() {
+    const now = this.time.now;
     [this.player, this.player2].forEach(p => {
       if (!p || !p.active) return;
+      this._reloadTick(p, now);
       const hero = p._hero, art = hero && hero.art;
       if (!art || !art.aim || !p._real) return;
       const st = p._aim, G = this._gunOf(p);
@@ -9407,7 +9521,7 @@ const WalkGrenades = {
   _itemsOf(p) {
     const out = [];
     if (armedWithBlade()) out.push('sword');
-    if (GameState.hasPistol) out.push('pistol');
+    if (GameState.hasPistol) out.push('pistol:' + this._ammo(p) + ':' + (p._reload ? 'r' : '') + (p._hot ? 'h' : ''));
     const n = this.grenadesOf(p);
     if (n > 0 || this._grenadeStage) out.push('grenade:' + n);
     if (this._hasKey && !this._keyUsed) out.push('key');
@@ -9458,12 +9572,23 @@ const WalkGrenades = {
           g.lineStyle(4, 0xd9d4c8, 1); g.lineBetween(cx - 14, cy + 14, cx + 16, cy - 16);
           g.lineStyle(5, 0x8a6a3a, 1); g.lineBetween(cx - 8, cy + 2, cx + 2, cy + 12);
           g.lineStyle(5, 0x3a2a1c, 1); g.lineBetween(cx - 20, cy + 20, cx - 12, cy + 12);
-        } else if (it === 'pistol' && this.textures.exists('scene_pistolsprite')) {
-          const im = add(this.add.image(cx, cy, 'scene_pistolsprite'));
+        } else if (it.indexOf('pistol') === 0 && this.textures.exists('scene_pistolsprite')) {
+          const im = add(this.add.image(cx, cy - 5, 'scene_pistolsprite'));
           const art = paintedBox(this, 'scene_pistolsprite');
           const pw = art ? art.pw : im.width;
           if (art) im.setOrigin((art.x0 + pw / 2) / art.w, (art.y0 + art.ph / 2) / art.h);
           im.setScale(46 / pw);
+          // the magazine: a pip a round, gold after a perfect reload, and
+          // RELOAD over them while it is going in
+          const [, n, flags] = it.split(':'), left = +n, g = add(this.add.graphics());
+          const pw2 = 4, gap = 2, x1 = cx - (PISTOL_MAG * (pw2 + gap) - gap) / 2, y1 = cy + 17;
+          for (let r = 0; r < PISTOL_MAG; r++) {
+            const full = r < left && flags.indexOf('r') < 0;
+            g.fillStyle(full ? (flags.indexOf('h') >= 0 ? 0xf2b13c : 0xf0e6d4) : 0x3a3029, 1);
+            g.fillRect(x1 + r * (pw2 + gap), y1, pw2, 8);
+          }
+          if (flags.indexOf('r') >= 0) add(this.add.text(cx, y1 - 2, 'RELOAD', { fontFamily: F_UI, fontSize: '10px',
+            fontStyle: '700', color: '#e0a040', stroke: '#070605', strokeThickness: 3 }).setOrigin(0.5, 1));
         } else if (it.indexOf('grenade') === 0) {
           const n = +it.split(':')[1];
           if (this.textures.exists('scene_grenade')) {
@@ -9695,6 +9820,7 @@ const Coop = {
     driveWalker(this, p2, k, b.blocked.down || b.touching.down);
     if (Phaser.Input.Keyboard.JustDown(k.F)) this.swingBlade(p2);
     if (Phaser.Input.Keyboard.JustDown(k.G)) this.throwGrenade(p2);
+    if (Phaser.Input.Keyboard.JustDown(k.R)) this.reloadPress(p2);
     if (GameState.hasPistol && k.K.isDown && !this._inConversation &&
         (this._aimCapable(p2) || !p2._crouching)) {
       if (!this._aimCapable(p2)) p2._gunUntil = now + 520;
