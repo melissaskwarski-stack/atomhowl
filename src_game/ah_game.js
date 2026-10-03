@@ -4986,8 +4986,9 @@ class MenuScene extends Phaser.Scene {
     this._cursor = 0;
     this._highlight(0);
 
+    this._leaving = false;
     const move = d => {
-      if (this._modes) return;
+      if (this._leaving) return;
       this._cursor = (this._cursor + d + this._btns.length) % this._btns.length;
       Sfx.ensure(); Sfx.hover();
       this._highlight(this._cursor);
@@ -4995,21 +4996,11 @@ class MenuScene extends Phaser.Scene {
     this.input.keyboard.on('keydown-DOWN', () => move(1));
     this.input.keyboard.on('keydown-UP', () => move(-1));
     const activate = () => {
-      if (this._modes) { this._pickMode(); return; }
+      if (this._leaving) return;
       Sfx.ensure(); Sfx.select(); items[this._cursor][1]();
     };
     this.input.keyboard.on('keydown-ENTER', activate);
     this.input.keyboard.on('keydown-SPACE', activate);
-    // the mode cards: left / right to choose, Esc or the pad's B to go back
-    const side = d => { if (this._modes) this._moveMode(d); };
-    this.input.keyboard.on('keydown-LEFT', () => side(-1));
-    this.input.keyboard.on('keydown-RIGHT', () => side(1));
-    this.input.keyboard.on('keydown-A', () => side(-1));
-    this.input.keyboard.on('keydown-D', () => side(1));
-    const back = () => { if (this._modes) this._closeModes(); };
-    this.input.keyboard.on('keydown-ESC', back);
-    this.input.keyboard.on('keydown-Q', back);          // the pad's B
-    this._modes = null;
     this.input.on('pointerdown', () => Sfx.ensure());
 
     this._toastTxt = this.add.text(86, 604, '', {
@@ -5092,115 +5083,14 @@ class MenuScene extends Phaser.Scene {
       this.scene.start(c.scene, Object.assign({}, c.data, { cast: GameState.castId })));
   }
 
-  // NEW GAME: the list steps aside for two cards — one brother, or both.
+  // NEW GAME: a screen of its own — one brother, or both.
   _newGame() {
-    if (this._modes) return;
-    const items = [];
-    this._btns.forEach(b => {
-      b.txt.disableInteractive();
-      this.tweens.add({ targets: [b.txt, b.rule], alpha: 0, x: '-=30', duration: 220 });
-    });
-    torchTexture(this);
-    const mk = (i, key, title, sub) => {
-      const x = 700 + i * 330, y = 368;
-      const glow = this.add.image(x, y, TORCH_KEY).setDepth(11).setBlendMode(Phaser.BlendModes.ADD)
-        .setTint(0xff8a2a).setDisplaySize(420, 560).setAlpha(0);
-      const art = this.textures.exists(key) ? this.add.image(x, y, key).setDepth(12) : null;
-      if (art) art.setScale(420 / art.height);
-      const t = this.add.text(x, y + 232, title, { fontFamily: F_UI, fontSize: '26px', fontStyle: '700', color: '#f0e6d4',
-        stroke: '#070605', strokeThickness: 5 }).setOrigin(0.5).setDepth(13);
-      const u = this.add.rectangle(x, y + 254, 0, 2, 0xf2b13c, 1).setDepth(13);
-      const st = this.add.text(x, y + 272, sub, { fontFamily: F_UI, fontSize: '13px', fontStyle: '600', color: '#a08d72',
-        stroke: '#070605', strokeThickness: 3 }).setOrigin(0.5).setDepth(13);
-      const zone = this.add.zone(x, y + 20, 300, 520).setInteractive({ useHandCursor: true }).setDepth(14);
-      zone.on('pointerover', () => { if (this._modes && this._modes.cur !== i) { this._modes.cur = i; Sfx.ensure(); Sfx.hover(); this._paintModes(); } });
-      zone.on('pointerdown', () => { if (this._modes) { this._modes.cur = i; this._pickMode(); } });
-      const parts = [glow, art, t, u, st, zone].filter(Boolean);
-      parts.forEach(o => { if (o !== zone) o.setAlpha(0); });
-      if (art) this.tweens.add({ targets: art, alpha: 1, duration: 320, delay: 80 + i * 80 });
-      this.tweens.add({ targets: [t, st], alpha: 1, duration: 320, delay: 120 + i * 80 });
-      return { x, glow, art, t, u, st, zone, parts };
-    };
-    this._modes = {
-      cur: 0,
-      cards: [mk(0, 'scene_modesingle', 'SINGLE PLAYER', 'ETERWOLF, ON HIS OWN'),
-              mk(1, 'scene_modemulti', 'MULTIPLAYER', 'BOTH BROTHERS  ·  SECOND PLAYER ON A CONTROLLER')],
-      head: this.add.text(700 + 165, 108, 'NEW GAME', { fontFamily: F_UI, fontSize: '15px', fontStyle: '700', color: '#f2b13c',
-        letterSpacing: 6 }).setOrigin(0.5).setDepth(13),
-      prompts: null, mode: null
-    };
-    this._paintModes();
+    if (this._leaving) return;
+    this._leaving = true;
+    this.cameras.main.fadeOut(320, 0, 0, 0);
+    this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('ModeSelectScene'));
   }
 
-  _paintModes() {
-    const M = this._modes;
-    if (!M) return;
-    M.cards.forEach((c, i) => {
-      const on = i === M.cur;
-      if (c.art) {
-        this.tweens.killTweensOf(c.art);
-        this.tweens.add({ targets: c.art, scale: (on ? 440 : 390) / c.art.height, alpha: on ? 1 : 0.5, duration: 200, ease: 'Quad.easeOut' });
-        c.art.setTint(on ? 0xffffff : 0x9a8e82);
-      }
-      this.tweens.add({ targets: c.glow, alpha: on ? 0.42 : 0, duration: 220 });
-      this.tweens.add({ targets: c.u, width: on ? c.t.width : 0, duration: 220 });
-      c.t.setColor(on ? '#fff2c8' : '#8a7a66');
-    });
-    // prompts for whatever is in his hands
-    if (M.prompts) M.prompts.destroy();
-    M.mode = InputMode.p1;
-    const pad = M.mode === 'pad';
-    M.prompts = makePrompts(this, 700 + 165, 672, [
-      [pad ? null : '◀ ▶', pad ? '◀ ▶  CHOOSE' : 'CHOOSE'],
-      [pad ? 'A' : 'ENTER', 'SELECT'],
-      [pad ? 'B' : 'ESC', 'BACK']
-    ], 'center', 13);
-  }
-
-  _moveMode(d) {
-    const M = this._modes;
-    M.cur = (M.cur + d + M.cards.length) % M.cards.length;
-    Sfx.ensure(); Sfx.hover();
-    this._paintModes();
-  }
-
-  _closeModes() {
-    const M = this._modes;
-    this._modes = null;
-    M.cards.forEach(c => c.parts.forEach(o => o.destroy()));
-    M.head.destroy();
-    if (M.prompts) M.prompts.destroy();
-    this._btns.forEach(b => {
-      b.txt.setInteractive({ useHandCursor: true });
-      this.tweens.add({ targets: b.txt, alpha: 1, x: '+=30', duration: 220 });
-      this.tweens.add({ targets: b.rule, x: '+=30', duration: 220 });
-    });
-    this._highlight(this._cursor);
-    Sfx.ensure(); Sfx.hover();
-  }
-
-  // One brother: straight into the game. Both: the character select.
-  _pickMode() {
-    const M = this._modes;
-    if (!M || M.going) return;
-    M.going = true;
-    Sfx.ensure(); Sfx.select();
-    resetProgress();
-    GameState.castId = 'eterwolf';
-    const multi = M.cur === 1;
-    GameState.coop = false;
-    P2Pad.assigned = null;
-    // The menu song carries on into the character select; going straight into
-    // the game, it fades out with the picture.
-    if (!multi) stopMusic(700);
-    this.cameras.main.fadeOut(600, 0, 0, 0);
-    this.cameras.main.once('camerafadeoutcomplete', () =>
-      this.scene.start(multi ? 'CoopSelectScene' : 'IntroDialogueScene'));
-  }
-
-  update() {
-    if (this._modes && this._modes.mode !== InputMode.p1) this._paintModes();
-  }
 
   _toast(msg) {
     this._toastTxt.setText(msg).setAlpha(1);
@@ -5244,6 +5134,192 @@ const SELECT_ART = {
 // The middle of each pedestal's lit disc, in the 1280x720 room.
 const SELECT_PEDESTAL = { left: [267, 488], right: [1022, 488] };
 const SELECT_H = 400;          // on-screen height of a standing brother
+
+// ================================================================== //
+//  NEW GAME — ONE BROTHER, OR BOTH                                    //
+//                                                                     //
+//  Its own screen, not the menu with cards over it: the select room   //
+//  in the dark behind, the title, and two framed cards. Left/right    //
+//  (keys, d-pad, stick) or the mouse choose, Enter/A picks, Esc/B     //
+//  goes back to the menu.                                             //
+// ================================================================== //
+const MODE_CARD = { w: 330, h: 470, art: 0.80 };   // frame size; the share of it the art fills
+class ModeSelectScene extends Phaser.Scene {
+  constructor() { super('ModeSelectScene'); }
+
+  create() {
+    const W = 1280, H = 720;
+    this.cameras.main.setBackgroundColor('#070605');
+    this._going = false;
+    this._cur = 0;
+    startMusic();                       // the menu's song carries on (already playing: no-op)
+
+    // the select room, dark and still behind it
+    if (this.textures.exists('scene_selectbg')) {
+      const bg = this.add.image(W / 2, H / 2, 'scene_selectbg').setDepth(-20);
+      bg.setScale(Math.max(W / bg.width, H / bg.height)).setTint(0x4a4038);
+    }
+    const veil = this.add.graphics().setDepth(-15);
+    veil.fillStyle(0x070605, 0.55); veil.fillRect(0, 0, W, H);
+    for (let i = 0; i < 40; i++) {                 // darker toward the edges
+      const a = 0.5 * (1 - i / 40);
+      veil.fillStyle(0x070605, a);
+      veil.fillRect(0, i * 4, W, 4); veil.fillRect(0, H - (i + 1) * 4, W, 4);
+      veil.fillRect(i * 6, 0, 6, H); veil.fillRect(W - (i + 1) * 6, 0, 6, H);
+    }
+    // embers drifting up through it
+    this._embers = [];
+    for (let i = 0; i < 26; i++) {
+      const e = this.add.circle(Math.random() * W, Math.random() * H, 1 + Math.random() * 2,
+                                Math.random() < 0.7 ? 0xf2b13c : 0xff6a2a, 0.5 + Math.random() * 0.4)
+        .setDepth(-10).setBlendMode(Phaser.BlendModes.ADD);
+      e._v = 12 + Math.random() * 30; e._w = Math.random() * Math.PI * 2;
+      this._embers.push(e);
+    }
+
+    // the title
+    this.add.text(W / 2, 84, 'NEW GAME', { fontFamily: F_UI, fontSize: '52px', fontStyle: '700', color: '#f0e6d4',
+      stroke: '#070605', strokeThickness: 6 }).setOrigin(0.5);
+    this.add.rectangle(W / 2, 120, 260, 2, 0xf2b13c, 0.85);
+    this.add.text(W / 2, 140, 'CHOOSE HOW TO PLAY', { fontFamily: F_UI, fontSize: '15px', fontStyle: '700',
+      color: '#a08d72', letterSpacing: 6 }).setOrigin(0.5);
+
+    torchTexture(this);
+    this._cards = [
+      this._card(0, W / 2 - 205, 'scene_modesingle', 'SINGLE PLAYER', 'ETERWOLF, ON HIS OWN'),
+      this._card(1, W / 2 + 205, 'scene_modemulti', 'MULTIPLAYER', 'BOTH BROTHERS  ·  A SECOND CONTROLLER')
+    ];
+
+    // keys and buttons (the pad types the same keys)
+    const kb = this.input.keyboard;
+    const side = d => { if (!this._going) { this._cur = (this._cur + d + 2) % 2; Sfx.ensure(); Sfx.hover(); this._paint(); } };
+    ['LEFT', 'A'].forEach(k => kb.on('keydown-' + k, () => side(-1)));
+    ['RIGHT', 'D'].forEach(k => kb.on('keydown-' + k, () => side(1)));
+    ['ENTER', 'SPACE'].forEach(k => kb.on('keydown-' + k, () => this._pick()));
+    ['ESC', 'Q'].forEach(k => kb.on('keydown-' + k, () => this._back()));      // Q is the pad's B
+    this.input.on('pointerdown', () => Sfx.ensure());
+
+    this._prompts = null; this._mode = null;
+    this._paint(true);
+    this.cameras.main.fadeIn(380, 0, 0, 0);
+  }
+
+  // A card: a dark plate in a riveted ember frame, the art in its upper part,
+  // the name and a line under it in a band at the bottom.
+  _card(i, x, key, title, sub) {
+    const C = MODE_CARD, y = 404;
+    const c = this.add.container(x, y);
+    const glow = this.add.image(0, 0, TORCH_KEY).setBlendMode(Phaser.BlendModes.ADD)
+      .setTint(0xff8a2a).setDisplaySize(C.w * 1.45, C.h * 1.3).setAlpha(0);
+    const plate = this.add.rectangle(0, 0, C.w, C.h, 0x0d0a08, 0.92);
+    const artH = C.h * C.art - 14, artW = C.w - 14, artY = -C.h / 2 + 7 + artH / 2;
+    let art = null;
+    if (this.textures.exists(key)) {
+      art = this.add.image(0, artY, key);
+      const sc = Math.max(artW / art.width, artH / art.height);
+      art.setScale(sc);
+      // crop to the window in the frame, from the top of the picture (faces)
+      const cw = artW / sc, ch = artH / sc;
+      art.setCrop((art.width - cw) / 2, 0, cw, ch);
+      art.setY(artY + (art.height * sc - artH) / 2);
+    }
+    const shade = this.add.graphics();               // the art fades into the name band
+    for (let k = 0; k < 24; k++) {
+      shade.fillStyle(0x0d0a08, k / 24);
+      shade.fillRect(-artW / 2, artY + artH / 2 - 48 + k * 2, artW, 2);
+    }
+    const bandY = C.h / 2 - (C.h * (1 - C.art)) / 2;
+    const t = this.add.text(0, bandY - 12, title, { fontFamily: F_UI, fontSize: '27px', fontStyle: '700', color: '#f0e6d4',
+      stroke: '#070605', strokeThickness: 5 }).setOrigin(0.5);
+    const st = this.add.text(0, bandY + 22, sub, { fontFamily: F_UI, fontSize: '12px', fontStyle: '700', color: '#a08d72',
+      letterSpacing: 1 }).setOrigin(0.5);
+    const frame = this.add.graphics();
+    c.add([glow, plate, art, shade, t, st, frame].filter(Boolean));
+    const zone = this.add.zone(x, y, C.w, C.h).setInteractive({ useHandCursor: true });
+    zone.on('pointerover', () => { if (!this._going && this._cur !== i) { this._cur = i; Sfx.ensure(); Sfx.hover(); this._paint(); } });
+    zone.on('pointerdown', () => { if (!this._going) { this._cur = i; this._pick(); } });
+    c.setAlpha(0).setY(y + 24);
+    this.tweens.add({ targets: c, alpha: 1, y, duration: 380, delay: 120 + i * 110, ease: 'Quad.easeOut' });
+    return { c, glow, art, t, st, frame, y };
+  }
+
+  _drawFrame(g, on) {
+    const C = MODE_CARD, w = C.w, h = C.h, x0 = -w / 2, y0 = -h / 2;
+    g.clear();
+    const col = on ? 0xf2b13c : 0x5a4a3a;
+    g.lineStyle(on ? 3 : 2, col, on ? 1 : 0.9); g.strokeRect(x0, y0, w, h);
+    g.lineStyle(1, col, on ? 0.45 : 0.3); g.strokeRect(x0 + 6, y0 + 6, w - 12, h - 12);
+    // the line over the name band
+    const by = y0 + h * C.art;
+    g.lineStyle(2, col, on ? 0.8 : 0.5); g.lineBetween(x0 + 16, by, x0 + w - 16, by);
+    // corner brackets and rivets
+    const L = 26;
+    g.lineStyle(on ? 5 : 3, on ? 0xffd27a : 0x7a6450, 1);
+    [[x0, y0, 1, 1], [x0 + w, y0, -1, 1], [x0, y0 + h, 1, -1], [x0 + w, y0 + h, -1, -1]].forEach(([cx, cy, dx, dy]) => {
+      g.lineBetween(cx, cy, cx + dx * L, cy); g.lineBetween(cx, cy, cx, cy + dy * L);
+      g.fillStyle(on ? 0xffd27a : 0x7a6450, 1); g.fillCircle(cx + dx * 12, cy + dy * 12, 2.5);
+    });
+  }
+
+  _paint(first) {
+    this._cards.forEach((k, i) => {
+      const on = i === this._cur;
+      this._drawFrame(k.frame, on);
+      this.tweens.killTweensOf([k.glow]);
+      this.tweens.add({ targets: k.glow, alpha: on ? 0.38 : 0, duration: 220 });
+      this.tweens.add({ targets: k.c, scale: on ? 1.04 : 0.96, duration: 220, ease: 'Quad.easeOut' });
+      if (k.art) k.art.setTint(on ? 0xffffff : 0x6e645a);
+      k.t.setColor(on ? '#fff2c8' : '#8a7a66');
+      k.st.setColor(on ? '#d9c7a8' : '#6e6258');
+    });
+    // the prompts, in keys or buttons as the hands are
+    if (this._prompts) this._prompts.destroy();
+    this._mode = InputMode.p1;
+    const pad = this._mode === 'pad';
+    this._prompts = makePrompts(this, 640, 690, [
+      [pad ? null : '◀ ▶', pad ? '◀ ▶  CHOOSE' : 'CHOOSE'],
+      [pad ? 'A' : 'ENTER', 'SELECT'],
+      [pad ? 'B' : 'ESC', 'BACK']
+    ], 'center', 20);
+  }
+
+  // One brother: straight into the game. Both: the character select.
+  _pick() {
+    if (this._going) return;
+    this._going = true;
+    Sfx.ensure(); Sfx.select();
+    const k = this._cards[this._cur];
+    this.tweens.add({ targets: k.c, scale: 1.09, duration: 120, yoyo: true });
+    this.cameras.main.flash(160, 255, 210, 140);
+    resetProgress();
+    GameState.castId = 'eterwolf';
+    const multi = this._cur === 1;
+    GameState.coop = false;
+    P2Pad.assigned = null;
+    // the song carries on into the character select; into the game, it goes
+    if (!multi) stopMusic(700);
+    this.cameras.main.fadeOut(600, 0, 0, 0);
+    this.cameras.main.once('camerafadeoutcomplete',
+      () => this.scene.start(multi ? 'CoopSelectScene' : 'IntroDialogueScene'));
+  }
+
+  _back() {
+    if (this._going) return;
+    this._going = true;
+    Sfx.ensure(); Sfx.hover();
+    this.cameras.main.fadeOut(300, 0, 0, 0);
+    this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('MenuScene'));
+  }
+
+  update(time, delta) {
+    const dt = (delta || 16) / 1000;
+    this._embers.forEach(e => {
+      e.y -= e._v * dt; e.x += Math.sin(time / 900 + e._w) * 8 * dt;
+      if (e.y < -6) { e.y = 726; e.x = Math.random() * 1280; }
+    });
+    if (this._mode !== InputMode.p1 && !this._going) this._paint();
+  }
+}
 
 class CoopSelectScene extends Phaser.Scene {
   constructor() { super('CoopSelectScene'); }
@@ -5385,7 +5461,8 @@ class CoopSelectScene extends Phaser.Scene {
     P2Pad.assigned = null;
     Sfx.ensure(); Sfx.hover();
     this.cameras.main.fadeOut(300, 0, 0, 0);
-    this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('MenuScene'));
+    // back one step: the one-or-both screen, not all the way to the menu
+    this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('ModeSelectScene'));
   }
 
   _flash(img) {
@@ -15564,7 +15641,7 @@ window.__game = new Phaser.Game({
   scale: Object.assign({ mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
     (typeof document !== 'undefined' && document.getElementById('game')) ? { fullscreenTarget: 'game' } : {}),
   physics: { default: 'arcade', arcade: { gravity: { y: GRAVITY }, debug: false } },
-  scene: [BootScene, StartScene, MenuScene, CharSelectScene, CoopSelectScene, IntroDialogueScene,
+  scene: [BootScene, StartScene, MenuScene, ModeSelectScene, CharSelectScene, CoopSelectScene, IntroDialogueScene,
           BunkerScene, ExitScene, JumpScene, BridgeScene, DashScene,
           ShopStreetScene, StoreScene, NightStreetScene, EmbankmentScene,
           StorageOneScene, StorageTwoScene, EnemyCinematicScene,
