@@ -1,0 +1,502 @@
+#!/usr/bin/env node
+// Build build/wf_assets.js — Wolffel, the second playable brother.
+//
+// He has far less art than Eterwolf: an idle, a walk, a sprint, the burger he
+// digs out of his side pocket when he is left standing, and one arm-extend that
+// stands in for firing. The game fills the gaps by falling back along a chain
+// (no dash art -> run, no jump art -> run, and so on), which is what lets a
+// character be dropped into the sandbox before its set is finished.
+//
+// All of it is drawn facing east or south-east, so every west animation is a
+// mirrored copy baked here — the directional player expects a real 'W' key to
+// exist rather than flipping the sprite at runtime.
+//
+// Two of the clips are one-shot actions rather than cycles, and each is emitted
+// twice: '<name>in' plays the whole thing once and chains into '<name>', which
+// loops the settled tail. The burger's tail is the chew, and it ping-pongs
+// (4,5,6,5) because three frames of a hand at a mouth do not wrap — retracing
+// them has no seam at all, which scoring the wrap discontinuity could not beat
+// (best straight loop scored 1.55; Eterwolf's guitar, for reference, is 1.12).
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const L = require('./lib/clipcut');
+
+const ROOT = path.resolve(__dirname, '..');
+const A = rel => path.join(ROOT, 'public/assets', rel);
+const OUT = path.join(ROOT, 'build/wf_assets.js');
+
+const SRC = {
+  // Two standing poses, played in order — see the idle chain below.
+  // Side-on, squared up the way the walk leaves him.
+  idle0:  A('wf_idle_side.gif'),
+  idle:   A('wf_idle_se.gif'),      // 3/4 view, breathing on the spot
+  walk:   A('wf_walk_east.gif'),
+  run:    A('wf_sprint_east.gif'),
+  // eating wolffel.gif: 21 frames, 3/4 view — he brings it up, eats, and puts
+  // it down again. It replaced the old burger clip; the name stays 'burger'
+  // because that is what his idle chain and the game call it.
+  burger: A('wf_eat_se.gif'),
+  aim:    A('wf_aim_east.gif'),     // extends the arm; stands in for shooting
+  // sing sword wolffel.gif, 20 frames, side on: the blade comes out in front
+  // of him (2-3), up over his shoulder (4) and HELD there (5-8, four frames
+  // with nothing moving — the slow start), drawn back (9), the cut with its
+  // red arc (10), the follow-through (11-13), held out (14-16) and put away
+  // (17-19). He stands at the left of it and the blade reaches the right
+  // edge, so the clip is cut off his feet and carries a shift (animShift).
+  sword:  A('wf_swing_east.gif'),
+  crouch: A('wf_crouch_east.gif'),
+  akwalk: A('wf_akwalk_east.gif'),        // walking and firing the rifle
+  pwalk:  A('wf_pistolwalk_east.gif'),    // walking with the pistol up
+  // 21 frames of him leaning into a hard run. Only the front of it is a dash:
+  // four standing frames, then the lean at 4, the push-off widening 116 -> 205
+  // through 5-8, and 9 coming back down. Frames 4-9 are the whole move; the
+  // rest is a sprint cycle he already has.
+  dash:   A('wf_dash_east.gif'),
+  // wolffel jump.gif, 8 frames: standing (0), the knees going for the push
+  // (1), off the floor tucking (2), rising tucked (3), tucked at the top
+  // (4-5), the legs coming down for the floor (6), down (7).
+  jump:   A('wf_jump2_east.gif'),
+  // Running with the pistol held up at roughly 45 degrees, and walking while
+  // firing it flat. Both are east-only, mirrored here like the rest of him.
+  p45:    A('wf_pistol45_east.gif'),
+  pfire:  A('wf_pistolfire_east.gif'),
+  // death fall down wolfell.gif: 28 frames. He staggers and goes down on his
+  // front through 0-11, then crawls on the floor; 16-25 is one whole crawl
+  // and loops without a seam (measured: 0.07 of an ordinary step).
+  death:  A('wf_death_east.gif'),
+  // get up from healing.gif: frame 0 is a standing reference; 1-8 take him
+  // from face down on the floor back up onto his feet.
+  getup:  A('wf_getup_se.gif'),
+  // pick up wolffel.gif: bends, reaches down and forward, straightens (9).
+  pickup: A('wf_pickup_east.gif'),
+  // sad when eterwolf down.gif: faces us, bows his head and sinks into a
+  // squat (16) — when his brother has gone for good.
+  grieve: A('wf_grieve_front.gif'),
+  // walk up.gif: from behind, walking away from us (25) — through a door.
+  doorwalk: A('wf_doorwalk_back.gif'),
+  // throw grenade wolffel.gif: winds up 0-6, lets go on 7, follows through.
+  throw:    A('wf_throw_east.gif')
+};
+
+// Where each one-shot settles into something repeatable.
+const LOOP_FROM = { aim: 7 };
+// The eating clip is one whole performance — up, eats, down — and plays
+// straight through.
+// The arm swings wide in the aim and the burger comes up across the body, so
+// both would shimmy if each frame were centred on its own silhouette.
+const SHARE_X = ['idle0', 'aim', 'sword', 'crouch', 'jump', 'p45', 'pfire'];
+// Actions done on the spot are held on his feet instead (see anchorX): the
+// box would slide his body to meet the reach, the bow or the fall. The number
+// is the frame whose soles he is anchored on — where he is standing when it
+// starts, or for getting up, where he ends up standing.
+const ANCHOR = { burger: 20, death: 0, getup: 8, pickup: 0, grieve: 0, doorwalk: 'mean', throw: 0 };
+// and the ones that go down to the floor keep every frame on it
+const PIN_EACH = ['death', 'getup'];
+
+const clips = L.loadClips(SRC);
+// The throw's release frame has the grenade drawn flying off past his hand:
+// the game throws its own, so the drawn one (a thin streak right of x 206)
+// goes, and with it the extra width it gave the whole canvas.
+if (clips.throw) {
+  const d = clips.throw, f = d.frames[7];
+  for (let y = 0; y < d.H; y++) for (let x = 207; x < d.W; x++) f[(y * d.W + x) * 4 + 3] = 0;
+  d.boxes[7] = L.bbox(f, d.W, d.H);
+}
+if (!clips.idle) { console.error('need the idle clip'); process.exit(1); }
+L.shareX(clips, SHARE_X);
+for (const [name, at] of Object.entries(ANCHOR)) {
+  const d = clips[name];
+  if (!d) continue;
+  let cx = at === 'mean'
+    ? d.frames.reduce((s, _, i) => s + L.solesX(d, i), 0) / d.frames.length
+    : L.solesX(d, at);
+  // The eating follows straight on from the three-quarter idle, which is cut
+  // centred on its box, not on its feet: its feet sit off the canvas middle.
+  // Put the burger's feet in the same place, or he slides when he starts.
+  // (the throw starts from his side-on standing pose)
+  if (name === 'throw' && clips.idle0) {
+    const b = clips.idle0.boxes[0];
+    cx += (b.minX + b.maxX) / 2 - L.solesX(clips.idle0, 0);
+  }
+  if (name === 'burger' && clips.idle) {
+    const b = clips.idle.boxes[0];
+    cx += (b.minX + b.maxX) / 2 - L.solesX(clips.idle, 0);
+  }
+  L.anchorX(clips, name, cx);
+}
+PIN_EACH.forEach(n => L.pinEach(clips, n));
+
+const { CW, CH } = L.canvasFor(clips);
+const cut = L.makeCutter(CW, CH);
+
+// ---------- unique frame pool ----------
+// Pool keys double as texture names ('wf_' + key), and every animation is a
+// list of those keys, so a frame used by both an intro and its loop is stored
+// once.
+const frames = {};
+const pool = (poolName, clip, mirror) => {
+  if (!clips[clip]) return null;
+  return clips[clip].frames.map((_, i) => {
+    const k = `${poolName}_${i}`;
+    frames[k] = cut(clips[clip], i, mirror);
+    return k;
+  });
+};
+
+const K = {
+  idle0:    pool('idle0',    'idle0',  false),
+  idle0W:   pool('idle0W',   'idle0',  true),
+  idle:     pool('idle',     'idle',   false),
+  idleW:    pool('idleW',    'idle',   true),
+  walk:     pool('walk',     'walk',   false),
+  walkW:    pool('walkW',    'walk',   true),
+  run:      pool('run',      'run',    false),
+  runW:     pool('runW',     'run',    true),
+  burgerin: pool('burgerin', 'burger', false),
+  burgerinW: pool('burgerinW', 'burger', true),
+  shootin:  pool('shootin',  'aim',    false),
+  shootinW: pool('shootinW', 'aim',    true),
+  gs:       pool('gs',       'sword',  false),
+  gsW:      pool('gsW',      'sword',  true),
+  crouch:   pool('crouch',   'crouch', false),
+  crouchW:  pool('crouchW',  'crouch', true),
+  ak:       pool('ak',       'akwalk', false),
+  akW:      pool('akW',      'akwalk', true),
+  pw:       pool('pw',       'pwalk',  false),
+  pwW:      pool('pwW',      'pwalk',  true),
+  dash:     pool('dash',     'dash',   false),
+  dashW:    pool('dashW',    'dash',   true),
+  jump:     pool('jump',     'jump',   false),
+  jumpW:    pool('jumpW',    'jump',   true),
+  p45:      pool('p45',      'p45',    false),
+  p45W:     pool('p45W',     'p45',    true),
+  pfire:    pool('pfire',    'pfire',  false),
+  pfireW:   pool('pfireW',   'pfire',  true),
+  death:    pool('death',    'death',  false),
+  deathW:   pool('deathW',   'death',  true),
+  getup:    pool('getup',    'getup',  false),
+  getupW:   pool('getupW',   'getup',  true),
+  pickup:   pool('pickup',   'pickup', false),
+  pickupW:  pool('pickupW',  'pickup', true),
+  grieve:   pool('grieve',   'grieve', false),
+  grieveW:  pool('grieveW',  'grieve', true),
+  doorwalk: pool('doorwalk', 'doorwalk', false),
+  doorwalkW: pool('doorwalkW', 'doorwalk', true),
+  throw:    pool('throw',    'throw',  false),
+  throwW:   pool('throwW',   'throw',  true)
+};
+// The game plays 'burgerin' and chains 'burger' behind it. The clip as drawn
+// opens with the food already in his hand and ends with the hand going into
+// his pocket, which reads backwards — eating first, then digging for it. So
+// it is played from its last frame: stood empty-handed (20, the same pose as
+// his three-quarter idle), the hand down to the pocket and the food out and
+// up (19-16); then the eating (8-15) and the rest put away (16-20).
+if (K.burgerin) {
+  const pick = (k, idx) => idx.map(i => k[i]);
+  const IN = [20, 19, 18, 17, 16], EAT = [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+  const a = K.burgerin, aw = K.burgerinW;
+  K.burger    = pick(a, EAT);
+  K.burgerW   = pick(aw, EAT);
+  K.burgerin  = pick(a, IN);
+  K.burgerinW = pick(aw, IN);
+}
+if (K.shootin) {
+  K.shoot  = K.shootin.slice(LOOP_FROM.aim);
+  K.shootW = K.shootinW.slice(LOOP_FROM.aim);
+}
+
+// ---------- body box + muzzle ----------
+const ib = clips.idle.boxes[0];
+const iw = ib.maxX - ib.minX + 1, ih = ib.maxY - ib.minY + 1;
+const bw = Math.max(8, Math.round(iw * 0.46));
+const body = { w: bw, h: ih - 6, x: Math.round((CW - bw) / 2), y: CH - ih + 2 };
+// Measured off the aim clip when there is one: the arm ends up level with the
+// chest and a little in front of the torso. Expressed relative to the sprite's
+// centre, which is what the game adds to player.y.
+const FEET_Y = CH - 2;
+const armed = clips.aim && clips.aim.boxes[clips.aim.boxes.length - 1];
+const muzzle = {
+  dx: Math.round((armed ? (armed.maxX - armed.minX + 1) : iw) * 0.5 + 4),
+  dy: Math.round((FEET_Y - ih * 0.72) - CH / 2)
+};
+// Per-weapon muzzles in canvas pixels — see the note in lib/clipcut.js.
+const muzzles = {};
+// `mirror` when the clip is drawn facing west and the east pose is its mirror.
+// Every muzzle is stored as the EAST-facing canvas position; the game negates
+// the x offset for west, so measuring one side is enough.
+// `names` may be several keys for one measurement — the game looks the muzzle
+// up by the action it is playing, and falls back to the weapon.
+const mz = (names, clip, frame, mirror) => {
+  if (!clips[clip]) return;
+  const m = L.muzzleTip(clips[clip], frame, CW, CH, mirror);
+  if (!m) return;
+  [].concat(names).forEach(n => { muzzles[n] = m; });
+  console.log(`muzzle ${[].concat(names).join('/')}: canvas ${m.x},${m.y}`);
+};
+// Keyed by the ACTION as well as the weapon — see the note in the Eterwolf
+// tool. Each running pose holds the gun somewhere the standing draw does not.
+mz(['pistol', 'shoot', 'shootin'], 'aim', 7);
+mz(['ak', 'akshoot', 'akshootin', 'akrunshoot'], 'akwalk', 11);
+// Measured on a frame that is actually firing, so the tip is the barrel with
+// the flash on it rather than a hand mid-swing.
+mz(['runshoot', 'runshootin'], 'pfire', 7);
+mz(['shoot45', 'shoot45in'], 'p45', 20);
+
+const A_ = (keys, fps, repeat) => ({ fps, repeat: repeat === undefined ? -1 : repeat, keys });
+const anims = {};
+const add = (name, keys, fps, repeat) => { if (keys) anims[name] = A_(keys, fps, repeat); };
+
+add('idle0',     K.idle0,     5);
+add('idle0W',    K.idle0W,    5);
+add('idle',      K.idle,      5);
+add('idleW',     K.idleW,     5);
+add('walk',      K.walk,      11);
+add('walkW',     K.walkW,     11);
+add('run',       K.run,       14);
+add('runW',      K.runW,      14);
+// the raw clip, kept for anything that wants it whole
+add('burgerin',  K.burgerin,  10, 0);
+add('burgerinW', K.burgerinW, 10, 0);
+// Once through (repeat 0), and the game puts him back on his feet after. 7fps
+// runs the 21 frames in three seconds: an unhurried snack.
+// (the note below is the old two-bite loop, kept for the reasoning)
+// when it finishes — see longIdleOnce.
+add('burger',    K.burger,    7, 0);
+add('burgerW',   K.burgerW,   7, 0);
+// the arm-extend, standing in for a draw-and-fire
+// The draw must finish inside the weapon cooldown (150ms for the pistol), or
+// bullets leave while the arm is still coming up and appear to fire from his
+// hip. Seven frames at 44fps is 159ms.
+add('shootin',   K.shootin.slice(0, 3),   44, 0);
+add('shootinW',  K.shootinW.slice(0, 3),  44, 0);
+add('shoot',     K.shoot,     10);
+add('shootW',    K.shootW,    10);
+
+// ---- the sword ---------------------------------------------------------------
+// Cut to be quick. The standing frames at the front and the four-frame hold
+// over his shoulder are gone, and every beat knows which of its frames is the
+// cut (gif frame 10, the red arc), so the game lands the hit on it rather than
+// on the button (strike, below).
+//   first   out, up, back, CUT, through                     2-5, 9-13
+//   second  the blade already out: up, back, CUT, through   5, 9-13
+//   third   up, back, CUT, through, held, and put away      4-5, 9-18
+const SWING_CUT = 10;
+const SWING = {
+  sword:      [2, 3, 4, 5, 9, 10, 11, 12, 13],
+  sword2:     [5, 9, 10, 11, 12, 13],
+  sword3:     [4, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18],
+  swordguard: [14, 15, 16],
+  deathblow:  [2, 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+};
+// Quick to the button: the cut has to come out the moment it is pressed.
+const SWING_FPS = { sword: 38, sword2: 38, sword3: 34, swordguard: 4, deathblow: 15 };
+const strike = {};
+if (K.gs) {
+  const pick = (keys, idx) => idx.map(i => keys[i]);
+  for (const [name, idx] of Object.entries(SWING)) {
+    const loop = name === 'swordguard' ? -1 : 0;
+    add(name,       pick(K.gs,  idx), SWING_FPS[name], loop);
+    add(name + 'W', pick(K.gsW, idx), SWING_FPS[name], loop);
+    const at = idx.indexOf(SWING_CUT);
+    if (at >= 0 && name !== 'deathblow') { strike[name] = at; strike[name + 'W'] = at; }
+  }
+}
+// Where his feet land in the swing against where they land standing side on
+// (idle0, the pose he swings from), in canvas px: the game moves the drawing
+// by this much while a swing plays, and not his body, so he stands still.
+const animShift = {};
+if (clips.sword && clips.idle0) {
+  const at = (d, i, mirror) => {
+    const b = d.boxes[i], w = b.maxX - b.minX + 1, ox = Math.floor((CW - w) / 2), x = L.solesX(d, i) - b.minX;
+    return ox + (mirror ? w - 1 - x : x);
+  };
+  const e = Math.round(at(clips.sword, 0, false) - at(clips.idle0, 0, false));
+  const w = Math.round(at(clips.sword, 0, true) - at(clips.idle0, 0, true));
+  Object.keys(SWING).forEach(n => { animShift[n] = e; animShift[n + 'W'] = w; });
+  console.log(`sword: feet ${e}px (east) / ${w}px (west) from where he stands; the hit on frame`, JSON.stringify(strike));
+}
+
+// ---- the dash -------------------------------------------------------------
+// Six frames over the 286ms the dash lasts, same as Eterwolf's, so the clip
+// ends as control comes back.
+// Held, not cycled: frames 4-9 played straight are a running stride and the
+// legs pump through it. One frame of the lean (5), the airborne stretch (7)
+// held, and one coming down (9). The blur trail carries the speed.
+if (K.dash) {
+  add('dash',  [K.dash[5], K.dash[7], K.dash[7], K.dash[7], K.dash[7], K.dash[9]],  21, 0);
+  add('dashW', [K.dashW[5], K.dashW[7], K.dashW[7], K.dashW[7], K.dashW[7], K.dashW[9]], 21, 0);
+}
+
+// ---- low stance -----------------------------------------------------------
+if (K.crouch) {
+  add('crouchin',  K.crouch,          18, 0);
+  add('crouchinW', K.crouchW,         18, 0);
+  add('crouch',    K.crouch.slice(2),  5);
+  add('crouchW',   K.crouchW.slice(2), 5);
+}
+
+// ---- the AK ---------------------------------------------------------------
+// He raises it over the first three frames and his legs repeat on a 10-frame
+// stride after that (measured), so the loop is frames 11-20.
+if (K.ak) {
+  add('akshootin',   K.ak.slice(0, 11),   42, 0);
+  add('akshootinW',  K.akW.slice(0, 11),  42, 0);
+  add('akrunshoot',  K.ak.slice(11),      14);
+  add('akrunshootW', K.akW.slice(11),     14);
+  add('akshoot',     K.ak.slice(11, 13),  10);
+  add('akshootW',    K.akW.slice(11, 13), 10);
+}
+
+// ---- walking with the pistol up ------------------------------------------
+// The draw is two frames at 30fps — the arm has to be out before the first
+// bullet leaves, or the shot appears to come from his hip. Everything after
+// is the stride, which loops.
+if (K.pfire) {
+  // Real walk-and-fire art: the muzzle flashes on frames 7, 15 and 22, so the
+  // barrel is genuinely extended for the whole loop rather than swinging.
+  add('runshootin',  K.pfire.slice(0, 3),   30, 0);
+  add('runshootinW', K.pfireW.slice(0, 3),  30, 0);
+  add('runshoot',    K.pfire.slice(2, 16),  12);
+  add('runshootW',   K.pfireW.slice(2, 16), 12);
+} else if (K.pw) {
+  add('runshootin',  K.pw.slice(0, 3),  30, 0);
+  add('runshootinW', K.pwW.slice(0, 3), 30, 0);
+  add('runshoot',    K.pw.slice(2),  11);
+  add('runshootW',   K.pwW.slice(2), 11);
+}
+
+// ---- the 45-degree shot ---------------------------------------------------
+// Running with the pistol held up and forward. Held on UP, so it needs to
+// reach the raised pose immediately: two frames of draw, then the settled
+// stride on a loop.
+if (K.p45) {
+  add('shoot45in',  K.p45.slice(0, 3),   30, 0);
+  add('shoot45inW', K.p45W.slice(0, 3),  30, 0);
+  add('shoot45',    K.p45.slice(14, 27),  13);
+  add('shoot45W',   K.p45W.slice(14, 27), 13);
+}
+
+// ---- the jump -------------------------------------------------------------
+// The push-off (1) is not played on the way up — physics leaves the floor the
+// instant the key goes down, so a squat drawn in mid-air reads as a glitch —
+// it is the squash on landing instead.
+if (K.jump) {
+  add('jump',      [K.jump[2], K.jump[3]],    16, 0);
+  add('jumpW',     [K.jumpW[2], K.jumpW[3]],  16, 0);
+  add('jumpapex',  [K.jump[4], K.jump[5]],    10, 0);
+  add('jumpapexW', [K.jumpW[4], K.jumpW[5]],  10, 0);
+  add('jumpfall',  [K.jump[6]],     14, 0);
+  add('jumpfallW', [K.jumpW[6]],    14, 0);
+  add('land',      [K.jump[1], K.jump[0]],    16, 0);
+  add('landW',     [K.jumpW[1], K.jumpW[0]],  16, 0);
+}
+
+// ---- going down, and back up ---------------------------------------------
+// falldown: the stagger and the fall, running on into the start of the crawl
+// so it hands straight over to the loop. downcrawl: one whole crawl, looped,
+// while he waits for his brother. death: just the fall, for when it is over.
+// getup: face down to standing, off get up from healing.gif.
+if (K.death) {
+  add('falldown',   K.death.slice(0, 16),   20, 0);
+  add('falldownW',  K.deathW.slice(0, 16),  20, 0);
+  add('downcrawl',  K.death.slice(16, 26),  8);
+  add('downcrawlW', K.deathW.slice(16, 26), 8);
+  add('death',      K.death.slice(0, 12),   16, 0);
+  add('deathW',     K.deathW.slice(0, 12),  16, 0);
+}
+if (K.getup) {
+  add('getup',  K.getup.slice(1),  14, 0);
+  add('getupW', K.getupW.slice(1), 14, 0);
+}
+// ---- hands ------------------------------------------------------------------
+// pickup: reaching down for something and coming back up, once. revive: the
+// same reach held at the bottom, rocking, while he pulls his brother up.
+if (K.pickup) {
+  add('pickup',  K.pickup,  16, 0);
+  add('pickupW', K.pickupW, 16, 0);
+  add('revive',  [4, 5, 6, 5].map(i => K.pickup[i]),  6);
+  add('reviveW', [4, 5, 6, 5].map(i => K.pickupW[i]), 6);
+}
+// ---- grief, and the door ----------------------------------------------------
+if (K.grieve) {
+  add('grieve',  K.grieve,  10, 0);
+  add('grieveW', K.grieveW, 10, 0);
+}
+// The throw, from the first frame he moves (1), at 22fps; the grenade leaves
+// his hand on frame 7 — index 6 here (art.throwAt).
+if (K.throw) {
+  add('throw',  K.throw.slice(1),  22, 0);
+  add('throwW', K.throwW.slice(1), 22, 0);
+}
+if (K.doorwalk) {
+  // 5-16 is one whole stride pair and loops without a seam (0.04 of a step)
+  add('doorwalk',  K.doorwalk.slice(5, 17),  12);
+  add('doorwalkW', K.doorwalkW.slice(5, 17), 12);
+}
+
+// ---- free aim --------------------------------------------------------------
+// The upper body in layers off the gun sweep, and the three leg states it
+// stands on (idle, moving, crouched); see tools/lib/aimrig.js. The layers are
+// not in any animation — the game draws them itself — so the prune below
+// leaves anything 'aim_' alone.
+const AIM = require('./lib/aimrig').heroAim(L, clips, require('./aim_cfg').wf,
+  path.join(ROOT, 'public/assets'), CW, CH, cut);
+Object.assign(frames, AIM.frames);
+Object.assign(anims, AIM.anims);
+
+const mod = {
+  charH: ih,
+  hiRes: true,             // 3D render, not pixel art — scale fractionally
+  directional: true,       // every side has a real key; never flipX
+  // Standing still he works down this list, one step every idleStepMs:
+  // side-on off the end of the walk, then he turns three-quarters on, then
+  // he digs the burger out. The last step is the one-shot flourish, which is
+  // what longIdle names for the scenes that suppress it.
+  idleChain: ['idle0', 'idle', 'burger'].filter(a => anims[a]),
+  idleStepMs: 8000,
+  // Having eaten, he does not just stop doing it forever. He goes back to
+  // standing — the three-quarter pose, not the side-on one he arrived in —
+  // and sixteen seconds later he gets the burger out again.
+  idleLoopFrom: 1,
+  idleLoopMs: 16000,
+  longIdle: 'burger',      // what he does when left alone
+  longIdleMs: 8000,
+  longIdleOnce: true,      // two bites, then back to standing
+  body, muzzle, muzzles,
+  canvasW: CW, canvasH: CH,
+  animShift, strike,
+  throwAt: 6,
+  aim: AIM.aim,
+  pending: ['west art (all mirrored east)',
+            'a front-facing finisher', 'a real standing firing clip'],
+  frames,
+  anims
+};
+
+// Every clip pools all of its frames, but the animations only ever slice parts
+// out — the dash keeps 6 of 21, the crouch 10 of 29, and the replaced sword
+// beats leave whole clips behind. Anything no animation names is dead weight in
+// a page that ships every frame as base64, so it is dropped here instead of
+// each cut having to be hand-trimmed back at the source.
+(function pruneFrames() {
+  const used = new Set();
+  Object.values(mod.anims).forEach(a => (a.keys || []).forEach(k => used.add(k)));
+  let dropped = 0, bytes = 0;
+  for (const k of Object.keys(mod.frames)) {
+    if (used.has(k) || k.startsWith('aim_')) continue;
+    bytes += mod.frames[k].length;
+    delete mod.frames[k];
+    dropped++;
+  }
+  if (dropped) console.log(`pruned ${dropped} unreferenced frames (${Math.round(bytes / 1024)}KB)`);
+})();
+
+fs.mkdirSync(path.dirname(OUT), { recursive: true });
+fs.writeFileSync(OUT, 'window.WF = ' + JSON.stringify(mod) + ';\n');
+console.log(`canvas ${CW}x${CH}  charH ${ih}`);
+console.log('body', JSON.stringify(body), 'muzzle', JSON.stringify(muzzle));
+console.log(`${Object.keys(frames).length} unique frames, ${Object.keys(anims).length} anims:`,
+  Object.keys(anims).join(' '));
+console.log('pending art:', mod.pending.join(', '));
+console.log('wrote', OUT, Math.round(fs.statSync(OUT).size / 1024) + 'KB');

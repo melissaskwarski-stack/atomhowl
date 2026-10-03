@@ -1,3 +1,6 @@
 node_modules/
 dist/
 .DS_Store
+build/.htmltmp/
+build/.uitmp/
+build/hosted/
