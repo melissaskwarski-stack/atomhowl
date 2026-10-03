@@ -7415,6 +7415,12 @@ const ALIEN_FACE_SHEET  = { key: 'scene_alienface', n: 20, cols: 5, cw: 214, ch:
 // squat run backwards (6 to 1) is the landing.
 const ALIEN_JUMP_SHEET  = { key: 'scene_alienjump', n: 17, cols: 17, cw: 247, ch: 247 };
 const AJ_TUCK0 = 6, AJ_TUCK1 = 11;       // frames 7..12, zero-based
+// enemy acid attack.gif: the berserker's attack, cut on the walk's box (see
+// tools/make_alien_acid_sheet.js). It rears back with its claws (0-5) and the
+// acid bursts round it on 6-8.
+const ALIEN_ACID_SHEET  = { key: 'scene_alienacid', n: 9, cols: 9, cw: 247, ch: 247 };
+const ACID_BURST_AT     = 6;     // the frame the acid comes out on
+const ACID_BURST_DMG    = 2;
 
 // Name the frames of a grid sheet on its texture, once.
 function sheetFrames(scene, S, prefix) {
@@ -7442,6 +7448,10 @@ function alienClips(scene) {
   if (jump && !scene.anims.exists('alien-jumpland')) {
     scene.anims.create({ key: 'alien-jumpland', frames: jump.slice(0, 6).reverse(),
                          frameRate: 20, repeat: 0 });
+  }
+  const acid = sheetFrames(scene, ALIEN_ACID_SHEET, 'aa');
+  if (acid && !scene.anims.exists('alien-acid')) {
+    scene.anims.create({ key: 'alien-acid', frames: acid, frameRate: 13, repeat: 0 });
   }
   const face = sheetFrames(scene, ALIEN_FACE_SHEET, 'ae');
   if (face && !scene.anims.exists('alien-face')) {
@@ -7645,6 +7655,13 @@ const WalkCombat = {
       const speed = z._enraged ? z._rage : z._speed;
       // The lunge: close, on the floor, and off cooldown. A calm one on its
       // first approach only if it was sent in hungry.
+      // The berserker does not lunge: close in, it stops, rears back and the
+      // acid bursts round it.
+      if (z._berserk && grounded && Math.abs(dx) < 0.8 * H && now > z._nextLungeAt &&
+          this.anims.exists('alien-acid')) {
+        this._acidAttack(z, now);
+        return;
+      }
       if (grounded && Math.abs(dx) < 1.1 * H && now > z._nextLungeAt &&
           (z._enraged || z._calmLunge)) {
         const which = Math.random() < 0.5 ? 'lungeA' : 'lungeB';
@@ -7666,6 +7683,44 @@ const WalkCombat = {
       }
       z.anims.timeScale = queued ? 0.4 : Phaser.Math.Clamp(speed / (0.3 * H), 0.6, 2.2);
     });
+  },
+
+  _acidAttack(z, now) {
+    z.setVelocityX(0);
+    z.anims.timeScale = 1;
+    z.play('alien-acid');
+    const clip = this.anims.get('alien-acid');
+    z._lungeUntil = now + (clip ? clip.duration : 700) + 120;
+    z._nextLungeAt = now + 1700 + Math.random() * 600;
+    Sfx.ensure(); Sfx.blip(160, 0.3, 'sawtooth', 0.05, 90);
+    const onFrame = (anim, frame) => {
+      if (anim.key !== 'alien-acid' || frame.index - 1 < ACID_BURST_AT) return;
+      z.off('animationupdate', onFrame);
+      if (z.active && z._alive) this._acidBurst(z);
+    };
+    z.off('animationupdate');
+    z.on('animationupdate', onFrame);
+  },
+
+  // The burst: acid thrown out all round it. Anyone in it is burned, and it
+  // splashes the floor.
+  _acidBurst(z) {
+    const H = z._H, now = this.time.now;
+    Sfx.ensure(); Sfx.sizzle(); Sfx.burst(0.2, 0.3, 1400, 1.4);
+    this.cameras.main.shake(140, 0.004);
+    this._acidSpray(z.x, z.y, 16);
+    const ring = this.add.ellipse(z.x, z.y, 0.9 * H, 0.5 * H).setDepth(12)
+      .setStrokeStyle(4, 0xc9f04a, 0.85).setBlendMode(Phaser.BlendModes.ADD);
+    this.tweens.add({ targets: ring, scaleX: 1.7, scaleY: 1.5, alpha: 0, duration: 380, ease: 'Quad.easeOut',
+                      onComplete: () => ring.destroy() });
+    if (this._dead || this._holdInput) return;
+    for (const p of this._fighters()) {
+      const inv = p === this.player ? this._invulnUntil : (p._invulnUntil || 0);
+      if (now < inv || now < (p._dashUntil || 0)) continue;
+      const pb = p.body, zb = z.body;
+      if (Math.abs(p.x - z.x) > 0.62 * H || pb.bottom < zb.top || pb.top > zb.bottom) continue;
+      this.hurtPlayer(ACID_BURST_DMG, z.x, p);
+    }
   },
 
   // Touching it hurts. Not while he is dashing through, and not twice in the
@@ -13289,9 +13344,8 @@ class StoreScene extends WalkScene {
     this.time.delayedCall(1800, go);
   }
 
-  // The berserker: runs rather than walks, comes on enraged, and takes twice
-  // the cutting. (first enemy acid attack.gif is its art when it arrives;
-  // until then it is the alien, red with it.)
+  // The berserker: runs rather than walks, comes on enraged, takes twice the
+  // cutting, and close in it throws acid all round it (enemy acid attack.gif).
   _hordeBerserker(xf) {
     if (this._dead || this._transitioning) return;
     const z = this.spawnAlien({ x: this.fx(xf), speed: 1.25, rage: 1.45, calmLunge: true,
@@ -13299,7 +13353,7 @@ class StoreScene extends WalkScene {
     if (!z) return;
     z._berserk = true;
     z._enraged = true;
-    z.setTint(0xff6a5a);
+    z.setTint(0xffb0a0);
     z.setAlpha(0);
     this.tweens.add({ targets: z, alpha: 1, duration: 300 });
     Sfx.ensure(); Sfx.roar(); Sfx.roar();
