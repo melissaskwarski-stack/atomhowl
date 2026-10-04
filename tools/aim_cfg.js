@@ -47,8 +47,10 @@ module.exports = {
       idle: { frame: 20, cut: { x: 0, y: 106 }, fromBack: 16 },
       // moving: the walk-and-fire clip, already what he does moving with a gun
       run: { clip: 'run', cut: 132, probe: 3, fps: 14, air: 4 },
-      crouch: { clip: 'crouch', frame: 5, cut: { x: 92, y: 138, slope: 0.12 },
-                erase: [[146, 134, 178, 186]], hip: [104, 140] },
+      // wolffel crouch.gif's settled squat: cut at the belt, his fists off
+      // his knees and the trail of him going down cleared
+      crouch: { clip: 'crouch', frame: 7, cut: { x: 0, y: 179 }, skin: true,
+                erase: [[141, 166, 172, 185], [40, 150, 78, 200]], hip: [105, 181] },
       // wolffel jump.gif: 2 off the floor going up, 4 tucked at the top, 6 the
       // legs coming down. Cut at the belt; his gloved hands that hang past it
       // (the back one by the seat, the front fist by the knee) go.

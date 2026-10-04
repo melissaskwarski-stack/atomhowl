@@ -45,7 +45,9 @@ const SRC = {
   // (17-19). He stands at the left of it and the blade reaches the right
   // edge, so the clip is cut off his feet and carries a shift (animShift).
   sword:  A('wf_swing_east.gif'),
-  crouch: A('wf_crouch_east.gif'),
+  // wolffel crouch.gif, 8 frames: down into a deep squat on his heels (0-4),
+  // settled from 5
+  crouch: A('wf_crouch2_east.gif'),
   akwalk: A('wf_akwalk_east.gif'),        // walking and firing the rifle
   pwalk:  A('wf_pistolwalk_east.gif'),    // walking with the pistol up
   // 21 frames of him leaning into a hard run. Only the front of it is a dash:
@@ -330,10 +332,11 @@ if (K.dash) {
 
 // ---- low stance -----------------------------------------------------------
 if (K.crouch) {
-  add('crouchin',  K.crouch,          18, 0);
-  add('crouchinW', K.crouchW,         18, 0);
-  add('crouch',    K.crouch.slice(2),  5);
-  add('crouchW',   K.crouchW.slice(2), 5);
+  add('crouchin',  K.crouch,          16, 0);
+  add('crouchinW', K.crouchW,         16, 0);
+  // down there he holds it, breathing between the last two
+  add('crouch',    K.crouch.slice(6),  3);
+  add('crouchW',   K.crouchW.slice(6), 3);
 }
 
 // ---- the AK ---------------------------------------------------------------
