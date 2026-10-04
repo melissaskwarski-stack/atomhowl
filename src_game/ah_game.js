@@ -430,6 +430,7 @@ function playSample(key, o) {
     src = c.createBufferSource();
     src.buffer = buf;
     src.loop = !!o.loop;
+    if (o.rate) src.playbackRate.value = o.rate;
     src.connect(into);
     // `offset`/`dur`: one sound out of a take that holds several
     if (o.offset != null) src.start(0, o.offset, o.dur); else src.start();
@@ -532,16 +533,17 @@ const RadioSong = {
 // the same one twice running, so a held trigger does not sound like a loop.
 // reloading.mp3 is the magazine coming out, then going in. Until they have
 // decoded, the synthesised shot stands in.
+const BOOM_AT = 0.5;      // s into car_explosion.mp3 where the bang itself starts
 const PISTOL_SHOTS = [[0.233, 0.73], [1.076, 0.775], [1.934, 0.72], [3.347, 0.73]];   // s into the take
 const RELOAD_OUT = [0, 0.21], RELOAD_IN = [0.416, 0.45];
 let _lastShot = -1;
-function gunShotSound() {
+function gunShotSound(rate, vol) {
   Sfx.ensure();
   if (!sampleReady('sfxPistol')) { Sfx.pistol(); return; }
   let i = Math.floor(Math.random() * PISTOL_SHOTS.length);
   if (i === _lastShot) i = (i + 1) % PISTOL_SHOTS.length;
   _lastShot = i;
-  playSample('sfxPistol', { vol: 0.42, offset: PISTOL_SHOTS[i][0], dur: PISTOL_SHOTS[i][1] });
+  playSample('sfxPistol', { vol: vol || 0.42, rate: rate || 1, offset: PISTOL_SHOTS[i][0], dur: PISTOL_SHOTS[i][1] });
 }
 function reloadSound(part) {
   Sfx.ensure();
@@ -1146,6 +1148,9 @@ function waveConfig(n) {
 // (a fall, R, walking back through a door), and without this every one of
 // them replays its set piece each time you step into the room.
 const GameState = { hasWeapon: false, hasSwords: false, hasPistol: false, castId: null, seen: {},
+                    hasRifle: false,  // the AK off the fallen soldier (both brothers)
+                    ammo: {},         // per brother, per gun: { mag, res } (the pistol never runs out)
+                    slots: {},        // per brother: the weapon slot in hand
                     coop: false,     // a second player is in, as Wolffel
                     grenades: { eterwolf: 0, wolffel: 0 } };   // each brother carries his own
 function once(id) {
@@ -1201,6 +1206,9 @@ function resetProgress() {
   GameState.hasWeapon = false;
   GameState.hasSwords = false;
   GameState.hasPistol = false;
+  GameState.hasRifle = false;
+  GameState.ammo = {};
+  GameState.slots = {};
   GameState.grenades = { eterwolf: 0, wolffel: 0 };
   GameState.seen = {};
   try {
@@ -1223,6 +1231,9 @@ function saveCheckpoint(sceneKey, data) {
       scene: sceneKey, data: d,
       state: { hasWeapon: GameState.hasWeapon, hasSwords: GameState.hasSwords,
                hasPistol: GameState.hasPistol, castId: GameState.castId,
+               hasRifle: GameState.hasRifle,
+               ammo: JSON.parse(JSON.stringify(GameState.ammo || {})),
+               slots: Object.assign({}, GameState.slots),
                grenades: Object.assign({}, GameState.grenades),
                seen: Object.assign({}, GameState.seen) }
     }));
@@ -1431,6 +1442,9 @@ const ACTION_FALLBACK = {
   aimrun:      ['aimrun', 'aimidle', 'run', 'idle'],
   aimrunB:     ['aimrunB', 'aimrun', 'aimidle', 'idle'],
   aimair:      ['aimair', 'aimrun', 'aimidle', 'idle'],
+  aimairup:    ['aimairup', 'aimair', 'aimrun', 'aimidle', 'idle'],
+  aimairtop:   ['aimairtop', 'aimair', 'aimrun', 'aimidle', 'idle'],
+  aimairdown:  ['aimairdown', 'aimair', 'aimrun', 'aimidle', 'idle'],
   aimcrouch:   ['aimcrouch', 'crouch', 'idle'],
   // the draws, so a character without one simply skips straight to firing
   shootin:     ['shootin', 'shoot', 'idle'],
@@ -1556,6 +1570,7 @@ const GUNS = {
     // never runs out, but eight to a magazine and a reload between them, so
     // it keeps things off you rather than doing the sword's job
     cd: 250, dmg: 1, spread: 0.012, speed: 7.2, life: 1100, hold: 900,
+    mag: 8, reload: 1500,                 // and no reserve to run out of
     muzzle: [17, -7],
     // The handle goes DOWN THROUGH the fist (only its butt shows under the
     // little finger); the slide rides on top of the hand and the barrel
@@ -1570,21 +1585,30 @@ const GUNS = {
       [[-7, -11], [-5, -11], [-5, -10], [-7, -10]]              // rear sight
     ]
   },
+  // The assault rifle off the fallen soldier: an AK, wood and black steel,
+  // the curved magazine forward of the grip. Strong, but thirty to a
+  // magazine and only what you carry: ammo comes off the dead (`max`).
   rifle: {
-    name: 'RIFLE', tex: 'gun_rifle', sfx: 'pistol',
-    cd: 110, dmg: 1, spread: 0.05, speed: 8.4, life: 1100, hold: 1200,
-    muzzle: [50, -7],
+    name: 'AK-47', tex: 'gun_rifle', sfx: 'pistol', rate: 1.18, vol: 0.34,
+    cd: 120, dmg: 1, spread: 0.045, speed: 8.4, life: 1100, hold: 1200,
+    mag: 30, reload: 2000, start: 30, max: 90,
+    muzzle: [57, -7],
     shape: [
-      [[-12, -9], [32, -9], [32, -4], [-12, -4]],               // receiver
-      [[10, -10], [32, -10], [32, -3], [10, -3]],               // handguard
-      [[32, -8], [50, -8], [50, -6], [32, -6]],                 // barrel
-      [[-26, -10], [-12, -9], [-12, -2], [-24, -1]],            // stock
-      [[4, -3], [10, -3], [12, 9], [6, 9]],                     // magazine
-      [[-8, -4], [-2, -4], [-5, 8], [-11, 8]],                  // grip
-      [[46, -10], [48, -10], [48, -8], [46, -8]]                // front sight
+      { c: 0x6b3a1c, p: [[-34, -11], [-12, -9], [-12, -3], [-32, 0]] },          // stock, wood
+      { p: [[-12, -10], [22, -10], [22, -4], [-12, -4]] },                        // receiver
+      { c: 0x6b3a1c, p: [[10, -9], [34, -9], [34, -4], [12, -3]] },               // handguard, wood
+      { p: [[10, -12], [34, -12], [34, -10], [10, -10]] },                        // gas tube
+      { p: [[34, -8], [54, -8], [54, -6], [34, -6]] },                            // barrel
+      { p: [[52, -9], [57, -9], [57, -5], [52, -5]] },                            // muzzle brake
+      { p: [[44, -12.5], [46, -12.5], [46, -8], [44, -8]] },                      // front sight
+      { p: [[6, -12], [9, -12], [9, -10], [6, -10]] },                            // rear sight
+      { p: [[3, -4], [10, -4], [15, 3], [17, 11], [11, 13], [8, 4]] },            // the curved magazine
+      { p: [[0, -4], [4, -4], [3, 0], [0, 0]] },                                  // trigger guard
+      { p: [[-6, -4], [0, -4], [-3, 8], [-9, 8]] }                                // grip, in the fist
     ]
   }
 };
+Object.keys(GUNS).forEach(k => { GUNS[k].id = k; });
 
 // The gun as a texture: a black shape with a hair of lighter edge along the
 // top, so it still reads against a dark street. Supersampled, because it is
@@ -1593,17 +1617,21 @@ function makeGunTexture(scene, id) {
   const G = GUNS[id];
   if (!G || scene.textures.exists(G.tex)) return;
   let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
-  G.shape.forEach(poly => poly.forEach(pt => {
+  // a polygon is its points, or { p: points, c: colour } for one not in black
+  const pts = poly => poly.p || poly;
+  G.shape.forEach(poly => pts(poly).forEach(pt => {
     x0 = Math.min(x0, pt[0]); x1 = Math.max(x1, pt[0]); y0 = Math.min(y0, pt[1]); y1 = Math.max(y1, pt[1]);
   }));
   const pad = 2, S = AIM_SS, W = Math.ceil(x1 - x0 + pad * 2), H = Math.ceil(y1 - y0 + pad * 2);
   const g = scene.make.graphics({ add: false });
   const draw = (col, dy) => {
-    g.fillStyle(col, 1);
-    G.shape.forEach(poly => g.fillPoints(poly.map(pt => ({ x: (pt[0] - x0 + pad) * S, y: (pt[1] - y0 + pad + dy) * S })), true));
+    G.shape.forEach(poly => {
+      g.fillStyle(col != null ? col : (poly.c != null ? poly.c : 0x0c0d10), 1);
+      g.fillPoints(pts(poly).map(pt => ({ x: (pt[0] - x0 + pad) * S, y: (pt[1] - y0 + pad + dy) * S })), true);
+    });
   };
   draw(0x3b414b, -1);       // the rim, one hero pixel above
-  draw(0x0c0d10, 0);        // the gun
+  draw(null, 0);            // the gun
   g.generateTexture(G.tex, W * S, H * S);
   g.destroy();
   G.pivot = [(pad - x0) * S, (pad - y0) * S];        // the grip, in texture px
@@ -4076,6 +4104,7 @@ const WALK_SPEED   = 300;
 // same pace with a different cycle on top, which is not what holding a key
 // should feel like.
 const RUN_SPEED    = 620;
+const SWING_MOVE   = 0.6;      // of a walk, moving while the sword swings
 const RUN_ART_SPEED = 560;     // the pace the run clips were drawn to: faster than it, they play faster
 const BACK_SPEED   = 230;      // backing off with the gun up, pointed the other way
 // Combat runs by default (X drops it to the walk); the exploration sprint is
@@ -4113,6 +4142,10 @@ const PAD_KEYS = {
   G:     [71, 'KeyG',       'g'],
   ESC:   [27, 'Escape',     'Escape'],
   R:     [82, 'KeyR',       'r'],
+  ONE:   [49, 'Digit1',     '1'],
+  TWO:   [50, 'Digit2',     '2'],
+  THREE: [51, 'Digit3',     '3'],
+  FOUR:  [52, 'Digit4',     '4'],
   UP:    [38, 'ArrowUp',    'ArrowUp'],
   DOWN:  [40, 'ArrowDown',  'ArrowDown'],
   LEFT:  [37, 'ArrowLeft',  'ArrowLeft'],
@@ -4141,6 +4174,20 @@ const PAD_MAP = {
   10: 'SHIFT',   // L3     run (hold)
   12: 'UP', 13: 'DOWN', 14: 'LEFT', 15: 'RIGHT'
 };
+// In a walking stage the d-pad is the weapon cross, as in Gears: left the
+// primary (the rifle), right the secondary, down the pistol, up the grenades.
+// Everywhere else (the menus) it is the arrows it always was. The left stick
+// moves and stick-down crouches.
+const DPAD_SLOT = { 14: 'ONE', 15: 'TWO', 13: 'THREE', 12: 'FOUR' };
+const P2_DPAD_SLOT = { 14: 'S1', 15: 'S2', 13: 'S3', 12: 'S4' };
+const SLOT_OF_KEY = { ONE: 'rifle', TWO: 'second', THREE: 'pistol', FOUR: 'grenade',
+                      S1: 'rifle', S2: 'second', S3: 'pistol', S4: 'grenade' };
+function weaponCrossLive() {
+  const g = window.__game;
+  if (!g || !g.scene) return false;
+  if (g.scene.isActive('PauseScene') || g.scene.isActive('IntroDialogueScene')) return false;
+  return g.scene.getScenes(true).some(sc => sc instanceof WalkScene);
+}
 const PAD_LABEL = {
   0: 'A', 1: 'B', 2: 'X', 3: 'Y', 4: 'LB', 5: 'RB', 6: 'LT', 7: 'RT',
   8: 'Back', 9: 'Start', 10: 'L3', 11: 'R3',
@@ -4233,9 +4280,10 @@ const Pad = {
     this.axes = gp.axes;
 
     const want = {};
+    const cross = weaponCrossLive();
     for (const i in PAD_MAP) {
       const b = gp.buttons[i];
-      if (b && (b.pressed || b.value > 0.5)) want[PAD_MAP[i]] = true;
+      if (b && (b.pressed || b.value > 0.5)) want[(cross && DPAD_SLOT[i]) || PAD_MAP[i]] = true;
     }
 
     // The left stick folds into the same four direction keys the d-pad uses, so
@@ -4371,7 +4419,8 @@ const P2_MAP = {
   8: 'BACK',                             // Back   drop out
   12: 'UP', 13: 'DOWN', 14: 'LEFT', 15: 'RIGHT'
 };
-const P2_KEYS = ['W', 'A', 'S', 'D', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'SPACE', 'SHIFT', 'Q', 'E', 'K', 'F', 'G', 'R', 'BACK'];
+const P2_KEYS = ['W', 'A', 'S', 'D', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'SPACE', 'SHIFT', 'Q', 'E', 'K', 'F', 'G', 'R', 'BACK',
+                 'S1', 'S2', 'S3', 'S4'];
 const P2Pad = {
   connected: false, keys: {}, joinReq: false, leaveReq: false, _lostAt: 0,
   aim: { x: 0, y: 0, mag: 0, on: false, _on: false },   // his right stick, as Pad.aim is player 1's
@@ -4424,9 +4473,10 @@ const P2Pad = {
     }
     this.connected = true;
     const want = {};
+    const cross = weaponCrossLive();
     for (const i in P2_MAP) {
       const b = gp.buttons[i];
-      if (b && (b.pressed || b.value > 0.5)) want[P2_MAP[i]] = true;
+      if (b && (b.pressed || b.value > 0.5)) want[(cross && P2_DPAD_SLOT[i]) || P2_MAP[i]] = true;
     }
     const ax = i => gp.axes[i] || 0;
     const std = gp.mapping === 'standard';
@@ -4638,11 +4688,43 @@ function heroShift(p) {
   p.body.setOffset(p.body.offset.x + d, p.body.offset.y);
 }
 
+// The sandbox's dash, in a walking stage's scale: speed lines behind him at
+// the height of his body, and dust off the floor if he is on it.
+function walkDashLines(scene, p, dir) {
+  if (!scene.textures.exists('speedline')) return;
+  const H = scene.charH || 146, k = H / 146, top = p.body ? p.body.top : p.y - H, h = p.body ? p.body.height : H;
+  for (let i = 0; i < 6; i++) {
+    const ln = scene.add.image(p.x - dir * (30 + Math.random() * 70) * k, top + h * (0.1 + Math.random() * 0.75), 'speedline')
+      .setDepth(p.depth + 0.5).setAlpha(0.6).setFlipX(dir < 0).setScale((0.7 + Math.random() * 0.9) * k, k);
+    scene.tweens.add({ targets: ln, alpha: 0, x: ln.x - dir * 130 * k, duration: 220 + Math.random() * 140,
+                       onComplete: () => ln.destroy() });
+  }
+  if (scene._sortNew) scene._sortNew();
+}
+function walkDashBurst(scene, p, dir, onGround) {
+  p._dashLines2 = false;
+  walkDashLines(scene, p, dir);
+  const H = scene.charH || 146, k = H / 146;
+  if (onGround && scene.textures.exists('puff') && p.body) {
+    for (let i = 0; i < 4; i++) {
+      const d = scene.add.image(p.x - dir * i * 13 * k, p.body.bottom - (6 + Math.random() * 10) * k, 'puff')
+        .setDepth(p.depth - 0.5).setAlpha(0.5).setScale(1.5 * k).setTint(0x9a8b7a);
+      scene.tweens.add({ targets: d, alpha: 0, scale: 3.2 * k, x: d.x - dir * (20 + Math.random() * 26) * k,
+                         duration: 340 + Math.random() * 160, onComplete: () => d.destroy() });
+    }
+  }
+  scene.cameras.main.shake(90, 0.003);
+}
+
 function driveWalker(scene, p, keys, onGround) {
   let move = 0;
-  if (keys.A.isDown || keys.LEFT.isDown)  move -= 1;
-  if (keys.D.isDown || keys.RIGHT.isDown) move += 1;
-  if (move !== 0) p._facing = move;       // crouched, he still turns
+  // The arrow keys are the weapon cross now (WASD moves); an arrow held by
+  // the pad's left stick still moves, and player 2's arrows are his stick.
+  const viaPad = n => keys === P2Pad.keys || !!Pad._held[n];
+  if (keys.A.isDown || (keys.LEFT.isDown && viaPad('LEFT')))  move -= 1;
+  if (keys.D.isDown || (keys.RIGHT.isDown && viaPad('RIGHT'))) move += 1;
+  // crouched, he still turns; mid-swing he does not (the cut keeps its side)
+  if (move !== 0 && scene.time.now >= (p._swingUntil || 0)) p._facing = move;
   // A stage can take the sprint away. The bridge does, and has to: a
   // sprinting single jump carries 452px here and a walking double only 416,
   // so with the sprint available there is no gap width that a double jump can
@@ -4660,7 +4742,7 @@ function driveWalker(scene, p, keys, onGround) {
   // Down (S, or down on the stick) on the floor is a crouch: he ducks where
   // he stands, lower, and does not move, jump, dash or run until he is up.
   const hero0 = p._hero;
-  const wantDown = !!((keys.S && keys.S.isDown) || (keys.DOWN && keys.DOWN.isDown));
+  const wantDown = !!((keys.S && keys.S.isDown) || (keys.DOWN && keys.DOWN.isDown && viaPad('DOWN')));
   const crouch = wantDown && onGround && now >= (p._dashUntil || 0) &&
                  !!(p._real && hero0 && heroHas(hero0, 'crouch'));
   if (crouch !== !!p._crouching) setWalkerCrouch(p, crouch);
@@ -4691,10 +4773,10 @@ function driveWalker(scene, p, keys, onGround) {
     p._dashReadyAt = now + WDASH_MS + WDASH_COOL;
     p._dashGhostAt = 0;
     if (!onGround) p._airDashUsed = true;
-    // No burst sprite here any more (dash effect.png read as a green,
-    // acid-like spike) — the motion-blur ghosts and speed lines below still
-    // sell the dash.
+    // The sandbox's dash: streaks of torn air behind him, dust kicked off the
+    // floor, a small shake, and the blue motion-blur ghosts below.
     Sfx.ensure(); Sfx.dash();
+    walkDashBurst(scene, p, p._dashDir, onGround);
   }
   const dashing = now < (p._dashUntil || 0);
   if (dashing) {
@@ -4706,11 +4788,14 @@ function driveWalker(scene, p, keys, onGround) {
       p._dashGhostAt = now + WDASH_GHOST;
       const gh = scene.add.image(p.x, p.y, p.texture.key, p.frame.name)
         .setOrigin(p.originX, p.originY).setDepth(p.depth - 1)
-        .setFlipX(p.flipX).setAlpha(0.42)
+        .setFlipX(p.flipX).setAlpha(0.42).setTint(0x8fc4ee)
         .setScale(p.scaleX * DASH_STRETCH, p.scaleY * (2 - DASH_STRETCH));
-      scene.tweens.add({ targets: gh, alpha: 0, duration: DASH_GHOST_FADE,
+      scene.tweens.add({ targets: gh, alpha: 0, scaleX: p.scaleX * (DASH_STRETCH + 0.5), duration: DASH_GHOST_FADE,
                          onComplete: () => gh.destroy() });
+      if (scene._sortNew) scene._sortNew();
     }
+    // more torn air half way through it
+    if (!p._dashLines2 && now >= p._dashUntil - WDASH_MS / 2) { p._dashLines2 = true; walkDashLines(scene, p, p._dashDir); }
   } else {
     if (!p.body.allowGravity) p.body.setAllowGravity(true);
     // He gets up to speed and stops rather than switching on and off: about a
@@ -4738,10 +4823,8 @@ function driveWalker(scene, p, keys, onGround) {
   // On a controller only A jumps: the left stick folds into the arrow keys
   // (the menus need its up), and a thumb drifting up on the stick while
   // running was making him jump. The arrow key itself still jumps.
-  const padUp = keys === P2Pad.keys || !!Pad._held.UP;
-  const upJust = Phaser.Input.Keyboard.JustDown(keys.UP) && !padUp;
-  if (Phaser.Input.Keyboard.JustDown(keys.W) || Phaser.Input.Keyboard.JustDown(keys.SPACE) ||
-      upJust) p._jumpPressedAt = now;
+  // (and the up arrow is the grenade slot): W, Space, A on a pad
+  if (Phaser.Input.Keyboard.JustDown(keys.W) || Phaser.Input.Keyboard.JustDown(keys.SPACE)) p._jumpPressedAt = now;
   const wantJump = !dashing && !crouch && now - (p._jumpPressedAt || -1e9) < JUMP_BUFFER_MS;
   // Touching down clears the count, so the second jump is only ever available
   // once he has left the floor. Walking off an edge gives a moment's grace
@@ -4771,7 +4854,7 @@ function driveWalker(scene, p, keys, onGround) {
   // the full jump. Only his own jumps — a blast or a hit that throws him is
   // not his to cut.
   if (p._rising) {
-    const held = keys.SPACE.isDown || keys.W.isDown || (keys.UP.isDown && !padUp);
+    const held = keys.SPACE.isDown || keys.W.isDown;
     if (p.body.velocity.y >= 0) p._rising = false;
     else if (!held && p.body.velocity.y < -JUMP_CUT_V * k) { p.setVelocityY(-JUMP_CUT_V * k); p._rising = false; }
   }
@@ -4830,7 +4913,12 @@ function driveWalker(scene, p, keys, onGround) {
     // walk, saw it differed from the sword clip, and played over it — the
     // swing was cut off a frame after it started, which is why pressing the
     // button looked like it did nothing.
-    if (now < (p._swingUntil || 0)) { if (onGround) p.setVelocityX(0); return move; }
+    // He keeps moving through it, at a little under a walk: a swing should
+    // not plant him to the spot.
+    if (now < (p._swingUntil || 0)) {
+      if (onGround && !dashing) p.setVelocityX(move * SWING_MOVE * WALK_SPEED * k);
+      return move;
+    }
 
     // Off the ground but only just — stepping down a 3px ledge on the bridge's
     // humped road leaves the floor for three frames. That is not a jump, and
@@ -4843,7 +4931,8 @@ function driveWalker(scene, p, keys, onGround) {
     const gunUp = now < (p._gunUntil || 0);
     const want = dashing ? 'dash'
                : aim ? (p._crouching ? 'aimcrouch'
-                        : airborne ? 'aimair'
+                        : airborne ? (p.body.velocity.y < -180 * k ? 'aimairup'
+                                      : p.body.velocity.y > 160 * k ? 'aimairdown' : 'aimairtop')
                         : moving ? (p.body.velocity.x * p._facing < 0 ? 'aimrunB' : 'aimrun')
                         : 'aimidle')
                : p._crouching ? 'crouch'
@@ -6739,6 +6828,16 @@ class WalkScene extends Phaser.Scene {
     // input
     this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,SHIFT,Q,M,E,ENTER,R,K');
     this.input.keyboard.on('keydown-N', () => Sfx.toggleMute());
+    // The weapon cross: the arrow keys (as the pad's d-pad) and 1-4. Only a
+    // real key press: the pad's stick arrives as arrows too, and moves.
+    const slotKey = (slot, e) => {
+      if (e && e.isTrusted === false && /^Arrow/.test(e.key || '')) return;
+      if (this._holdInput || this._inConversation || this._dead || this._transitioning) return;
+      if (this.selectSlot) this.selectSlot(this.player, slot);
+    };
+    [['LEFT', 'rifle'], ['RIGHT', 'second'], ['DOWN', 'pistol'], ['UP', 'grenade'],
+     ['ONE', 'rifle'], ['TWO', 'second'], ['THREE', 'pistol'], ['FOUR', 'grenade']]
+      .forEach(([k, slot]) => this.input.keyboard.on('keydown-' + k, e => slotKey(slot, e)));
     // R (RB on a pad) reloads the pistol, and pressed again on the mark is
     // the active reload. Restarting the stage is in the pause menu (ESC).
     this.input.keyboard.on('keydown-R', () => {
@@ -7028,7 +7127,7 @@ class WalkScene extends Phaser.Scene {
     if (!cfg.noJump) parts.push(pad ? 'A JUMP' : 'W JUMP');
     parts.push(pad ? 'DOWN CROUCH' : 'S CROUCH', pad ? 'Y USE' : 'E USE');
     if (armedWithBlade()) parts.push(pad ? 'X SWORD' : 'F SWORD');
-    if (GameState.hasPistol) parts.push(pad ? 'R STICK AIM   RT SHOOT   RB RELOAD' : 'MOUSE AIM   LMB / K SHOOT   R RELOAD');
+    if (GameState.hasPistol) parts.push(pad ? 'R STICK AIM   RT SHOOT   RB RELOAD   D-PAD WEAPONS' : 'MOUSE AIM   LMB / K SHOOT   R RELOAD   ARROWS WEAPONS');
     if (this.grenadesOf && this.player && this.grenadesOf(this.player) > 0) parts.push(pad ? 'LT GRENADE' : 'G GRENADE');
     if (!pad) parts.push('N MUTE');
     parts.push(pad ? 'START MENU' : 'ESC MENU');
@@ -7669,7 +7768,8 @@ class WalkScene extends Phaser.Scene {
 // ================================================================== //
 const WALK_HP         = 5;
 const WALK_INVULN_MS  = 950;
-const WALK_ALIEN_HP   = 6;       // two cuts, or six rounds
+const WALK_ALIEN_HP   = 6;
+const ALIEN_RUN_AT    = 0.4;     // heights a second: faster than this, it runs       // two cuts, or six rounds
 const SWORD_DMG_WALK  = 3;
 const PISTOL_DMG      = 1;
 const PISTOL_CD       = 250;
@@ -7937,7 +8037,7 @@ const WalkCombat = {
       if (now < z._knockUntil || now < z._lungeUntil) return;
       if (this._dead || this._holdInput) {
         z.setVelocityX(0);
-        if (z.anims.isPlaying && z.anims.getName() === 'alien-walk') z.anims.pause();
+        if (z.anims.isPlaying && /^alien-(walk|run)$/.test(z.anims.getName())) z.anims.pause();
         return;
       }
       if (z.anims.isPaused) z.anims.resume();
@@ -7968,10 +8068,12 @@ const WalkCombat = {
       const queued = alive.some(o => o !== z && (o.x - z.x) * dir > 0 &&
                                      Math.abs(o.x - z.x) < 0.38 * H);
       z.setVelocityX(queued ? 0 : dir * speed);
-      if (grounded && z.anims.getName() !== 'alien-walk' && this.anims.exists('alien-walk')) {
-        z.play('alien-walk');
-      }
-      z.anims.timeScale = queued ? 0.4 : Phaser.Math.Clamp(speed / (0.3 * H), 0.6, 2.2);
+      // closing in at any pace it runs (enemy with better run..gif); held up
+      // behind another, it shuffles on its walk
+      const gait = !queued && speed >= ALIEN_RUN_AT * H && this.anims.exists('alien-run') ? 'alien-run' : 'alien-walk';
+      if (grounded && z.anims.getName() !== gait && this.anims.exists(gait)) z.play(gait);
+      z.anims.timeScale = queued ? 0.4 : gait === 'alien-run' ? Phaser.Math.Clamp(speed / (0.6 * H), 0.75, 1.6)
+                                                               : Phaser.Math.Clamp(speed / (0.3 * H), 0.6, 2.2);
     });
   },
 
@@ -8162,6 +8264,11 @@ const WalkCombat = {
     Sfx.ensure(); Sfx.squelch();
     this.cameras.main.shake(120, 0.005);
     const x = z.x, floorY = z._floorY, H = z._H, faceRight = z.flipX;
+    // rifle rounds off the dead, once there is a rifle: not every time
+    if (GameState.hasRifle) {
+      const n = z._berserk ? 20 : Math.random() < AMMO_DROP_P ? 8 + Math.floor(Math.random() * 5) : 0;
+      if (n) this.time.delayedCall(450, () => { if (this.scene.isActive()) this.dropOrb(x, 'ammo', n); });
+    }
     z.destroy();
     this.enemies = this.enemies.filter(e => e !== z);
     const S = ALIEN_DEATH_SHEET, s = H / S.standH;
@@ -8259,6 +8366,13 @@ const WalkCombat = {
     const ptr = this.input.activePointer;
     const mouse = this._mouseFiring();
     const firing = mouse || (this.keys.K && this.keys.K.isDown);
+    // the grenade slot: fire throws one, a press at a time
+    if (this._slotOf(p) === 'grenade') {
+      if (firing && !p._fireWas) this.throwGrenade(p);
+      p._fireWas = firing;
+      return;
+    }
+    p._fireWas = firing;
     if (!firing) return;
     // Art without the aim rig keeps the old flat shot: never while crouched,
     // and the mouse says which way he stands to it.
@@ -8288,8 +8402,10 @@ const WalkCombat = {
       if (p._reload.jam && now >= (p._dryAt || 0)) { p._dryAt = now + 320; gunDryClick(); }
       return;
     }
-    if (this._ammo(p) <= 0) { this._startReload(p, now); return; }
     const G = this._gunOf(p);
+    if (!G) return;
+    const box = this._box(p);
+    if (box.mag <= 0) { if (box.res > 0) this._startReload(p, now); else this._empty(p, now); return; }
     if (this._aimCapable(p)) {
       const st = p._aim;
       // Only with the gun actually in his hand and on the mark: the arm may
@@ -8299,31 +8415,114 @@ const WalkCombat = {
       p._nextFireAt = now + G.cd * (this.furyActive && this.furyActive() ? 0.5 : 1);
     } else p._nextFireAt = now + PISTOL_CD;
     if (!this.fireBullet(now, p)) return;
-    p._mag--;
-    if (p._hot) p._hot--;
+    box.mag--;
+    box.n = (box.n || 0) + 1;
     this._paintInventory(true);
-    // dry: the reload starts by itself, a beat after the last round
-    if (p._mag <= 0) this.time.delayedCall(140, () => { if (p.active && !p._reload && p._mag <= 0) this._startReload(p, this.time.now); });
+    // dry: the reload starts by itself, a beat after the last round, if
+    // there is anything to load
+    if (box.mag <= 0) this.time.delayedCall(140, () => {
+      if (!p.active || p._reload || this._gunOf(p) !== G) return;
+      if (box.res > 0) this._startReload(p, this.time.now); else this._empty(p, this.time.now);
+    });
+  },
+
+  // What is in a gun: the magazine, and the reserve behind it. The pistol's
+  // reserve never runs out; the rifle's is what has been picked up, and is
+  // kept in GameState so a death or CONTINUE does not hand it back full.
+  _box(p, gid) {
+    gid = gid || (this._gunOf(p) || GUNS.pistol).id;
+    if (gid === 'pistol') return p._pbox || (p._pbox = { mag: GUNS.pistol.mag, res: Infinity, fire: false, n: 0 });
+    const A = GameState.ammo || (GameState.ammo = {}), h = heroKey(p);
+    const a = A[h] || (A[h] = {});
+    return a[gid] || (a[gid] = { mag: GUNS[gid].mag, res: GUNS[gid].start || 0, fire: false, n: 0 });
+  },
+
+  _empty(p, now) {
+    if (now < (p._emptyAt || 0)) return;
+    p._emptyAt = now + 900;
+    gunDryClick();
+    this._reloadWord(p, 'EMPTY', '#e0a040');
+    if (p === this.player) this._showTip(InputMode.p1 === 'pad' ? 'OUT OF AMMO  ·  D-PAD DOWN FOR THE PISTOL' : 'OUT OF AMMO  ·  ↓  FOR THE PISTOL');
+  },
+
+  // Rounds for the rifle, off the dead: into the reserve, up to what he can carry.
+  giveAmmo(p, n) {
+    const box = this._box(p, 'rifle'), max = GUNS.rifle.max;
+    const before = box.res;
+    box.res = Math.min(max, box.res + n);
+    Sfx.ensure(); Sfx.blip(1200, 0.06, 'square', 0.05, 1600); Sfx.blip(900, 0.08, 'square', 0.04, 700);
+    this._reloadWord(p, box.res > before ? '+' + (box.res - before) + ' ' + GUNS.rifle.name : 'FULL', '#d8e0a0');
+    this._paintInventory(true);
+  },
+
+  // The AK, picked up: both brothers have one from here on, thirty in it and
+  // thirty spare, in hand at once.
+  giveRifle(p, noCard) {
+    GameState.hasRifle = true;
+    if (!GameState.slots) GameState.slots = {};
+    ['eterwolf', 'wolffel'].forEach(h => {
+      const A = GameState.ammo || (GameState.ammo = {});
+      A[h] = A[h] || {};
+      if (!A[h].rifle) A[h].rifle = { mag: GUNS.rifle.mag, res: GUNS.rifle.start, fire: false, n: 0 };
+      GameState.slots[h] = 'rifle';
+    });
+    [this.player, this.player2].forEach(q => { if (q) q._reload = null; });
+    Sfx.ensure(); Sfx.select();
+    if (!noCard) { this.cameras.main.flash(240, 255, 226, 170); this._rifleCard(); }
+    this._refreshHint && this._refreshHint();
+    this._paintInventory(true);
+  },
+
+  _rifleCard() {
+    const grp = [];
+    grp.push(this.add.rectangle(640, 350, 640, 230, 0x0d0a08, 0.93)
+      .setScrollFactor(0).setDepth(90).setStrokeStyle(3, 0xf2b13c));
+    makeGunTexture(this, 'rifle');
+    if (this.textures.exists('gun_rifle')) {
+      const im = this.add.image(640, 296, 'gun_rifle').setScrollFactor(0).setDepth(91);
+      im.setScale(300 / im.width);
+      grp.push(im);
+    }
+    grp.push(this.add.text(640, 386, 'OBTAINED  ·  ' + GUNS.rifle.name, {
+      fontFamily: 'Courier New, monospace', fontSize: '24px', color: '#f2b13c', stroke: '#0d0a08', strokeThickness: 5
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(91));
+    const pad = InputMode.p1 === 'pad';
+    grp.push(this.add.text(640, 424, (pad ? 'D-PAD' : 'ARROWS / 1-4') + '  SWITCH WEAPONS   ·   AMMO FROM THE DEAD', {
+      fontFamily: 'Courier New, monospace', fontSize: '15px', color: '#d9c7a8'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(91));
+    grp.forEach(o => o.setAlpha(0));
+    this.tweens.add({ targets: grp, alpha: 1, duration: 250 });
+    this.time.delayedCall(3200, () => this.tweens.add({
+      targets: grp, alpha: 0, duration: 450, onComplete: () => grp.forEach(o => o.destroy())
+    }));
   },
 
   // ---- the magazine ---------------------------------------------------
   _ammo(p) {
-    if (p._mag == null) { p._mag = PISTOL_MAG; loadSample('sfxPistol'); loadSample('sfxReload'); }
-    return p._mag;
+    if (!p._soundsAsked) { p._soundsAsked = true; loadSample('sfxPistol'); loadSample('sfxReload'); }
+    return this._box(p).mag;
   },
 
   reloadPress(p) {
     if (!p || !p.active || p._down || this._dead || !GameState.hasPistol) return;
     const now = this.time.now;
     if (p._reload) { this._activeReload(p, p._reload, now); return; }
-    if (this._ammo(p) >= PISTOL_MAG) return;
+    const G = this._gunOf(p);
+    if (!G) return;
+    const box = this._box(p);
+    if (box.mag >= G.mag) return;
+    if (box.res <= 0) { this._empty(p, now); return; }
     this._startReload(p, now);
   },
 
   _startReload(p, now) {
-    if (p._reload || !GameState.hasPistol) return;
-    p._reload = { at: now, end: now + RELOAD_MS, tried: false, jam: false, hitAt: 0 };
-    p._hot = 0;
+    const G = this._gunOf(p);
+    if (p._reload || !GameState.hasPistol || !G) return;
+    const box = this._box(p);
+    if (box.res <= 0) return;
+    p._reload = { at: now, dur: G.reload || RELOAD_MS, end: now + (G.reload || RELOAD_MS), gid: G.id,
+                  tried: false, jam: false, hitAt: 0 };
+    box.fire = false;
     reloadSound('out');                                          // the magazine out
     this._paintInventory(true);
   },
@@ -8331,13 +8530,13 @@ const WalkCombat = {
   _activeReload(p, r, now) {
     if (r.tried) return;
     r.tried = true;
-    const t = (now - r.at) / RELOAD_MS;
+    const t = (now - r.at) / (r.dur || RELOAD_MS);
     r.hitAt = t;
     if (t >= RELOAD_PERFECT[0] && t <= RELOAD_PERFECT[1]) this._endReload(p, 'perfect');
     else if (t >= RELOAD_GOOD[0] && t <= RELOAD_GOOD[1]) this._endReload(p, 'good');
     else {
       r.jam = true;
-      r.end = r.at + RELOAD_JAM_MS;
+      r.end = r.at + (r.dur || RELOAD_MS) * RELOAD_JAM_MS / RELOAD_MS;
       gunJamSound();
       this._jamSmoke(p);
       this._reloadWord(p, 'JAMMED', '#e0523a');
@@ -8345,12 +8544,19 @@ const WalkCombat = {
   },
 
   _endReload(p, how) {
-    if (!p._reload) return;
+    const r = p._reload;
+    if (!r) return;
     p._reload = null;
-    p._mag = PISTOL_MAG;
-    p._hot = how === 'perfect' ? PISTOL_MAG : 0;
+    // what goes in comes out of the reserve
+    const G = GUNS[r.gid] || GUNS.pistol, box = this._box(p, G.id);
+    const take = Math.min(G.mag - box.mag, box.res);
+    box.mag += take;
+    if (isFinite(box.res)) box.res -= take;
+    // a perfect one: every fourth round of this magazine is a fire round
+    box.fire = how === 'perfect';
+    box.n = 0;
     reloadSound('in');                                           // in, and the slide
-    if (how === 'perfect') { Sfx.blip(1760, 0.22, 'triangle', 0.05, 2640); this._reloadWord(p, 'PERFECT', '#f2b13c'); }
+    if (how === 'perfect') { Sfx.blip(1760, 0.22, 'triangle', 0.05, 2640); this._reloadWord(p, 'PERFECT  ·  FIRE ROUNDS', '#f2b13c'); }
     else if (how === 'good') this._reloadWord(p, 'QUICK', '#f0e6d4');
     this._paintInventory(true);
   },
@@ -8369,10 +8575,9 @@ const WalkCombat = {
   // and the bar over his head shows the sweep, the light part and the gold.
   _reloadTick(p, now) {
     const r = p._reload;
-    if (r && (now >= r.end || p._down || !GameState.hasPistol)) {
-      if (p._down) { p._reload = null; this._paintInventory(true); }
-      else this._endReload(p, 'slow');
-    }
+    const G = this._gunOf(p);
+    if (r && (p._down || !G || G.id !== r.gid)) { p._reload = null; this._paintInventory(true); }
+    else if (r && now >= r.end) this._endReload(p, 'slow');
     const g = p._rbar;
     if (!p._reload) { if (g && g.visible) g.setVisible(false); return; }
     if (!g || !g.scene) { p._rbar = this.add.graphics().setDepth(63); this._sortNew(); }
@@ -8381,7 +8586,7 @@ const WalkCombat = {
     // in a fraction of a second
     const k = 1 / (this.cameras.main.zoom || 1), w = 120 * k, h = 10 * k;
     const x0 = p.x - w / 2, y0 = p.body.top - 26 * k;
-    const R = p._reload, t = Phaser.Math.Clamp(R.jam ? R.hitAt : (now - R.at) / RELOAD_MS, 0, 1);
+    const R = p._reload, t = Phaser.Math.Clamp(R.jam ? R.hitAt : (now - R.at) / (R.dur || RELOAD_MS), 0, 1);
     bar.fillStyle(0x070605, 0.85).fillRect(x0 - 2, y0 - 2, w + 4, h + 4);
     bar.fillStyle(R.jam ? 0x6a1c12 : 0x3a2f24, 1).fillRect(x0, y0, w, h);
     if (!R.jam && !R.tried) {
@@ -8390,7 +8595,7 @@ const WalkCombat = {
     }
     if (R.jam) {
       // the jam runs out as a red fill to the end of its longer wait
-      const jt = Phaser.Math.Clamp((now - R.at) / RELOAD_JAM_MS, 0, 1);
+      const jt = Phaser.Math.Clamp((now - R.at) / ((R.dur || RELOAD_MS) * RELOAD_JAM_MS / RELOAD_MS), 0, 1);
       bar.fillStyle(0xe0523a, 0.6).fillRect(x0, y0, w * jt, h);
     }
     bar.fillStyle(0xffffff, 1).fillRect(x0 + w * t - 1.5 * k, y0 - 3 * k, 3 * k, h + 6 * k);
@@ -8408,12 +8613,15 @@ const WalkCombat = {
       const f = rig.face, dx = f * Math.cos(a), dy = -Math.sin(a);
       const k = this.charH / 146;
       const rot = Math.atan2(dy, dx);
-      if ((G.sfx || 'pistol') === 'pistol') gunShotSound(); else { Sfx.ensure(); Sfx[G.sfx](); }
+      if ((G.sfx || 'pistol') === 'pistol') gunShotSound(G.rate, G.vol); else { Sfx.ensure(); Sfx[G.sfx](); }
       const b = this._round(mz.x, mz.y, k, rot, false);
       b._vx = dx * G.speed * this.charH; b._vy = dy * G.speed * this.charH;
       b._born = now; b._life = G.life;
-      // fury, or a perfect reload: twice as hard (the two do not stack)
-      b._dmg = G.dmg * ((this.furyActive && this.furyActive()) || p._hot > 0 ? 2 : 1);
+      // fury: twice as hard. After a perfect reload every fourth round is a
+      // fire round: half as hard again, and it sets them burning.
+      const box = this._box(p), fire = box.fire && (box.n || 0) % 4 === 3;
+      b._dmg = G.dmg * ((this.furyActive && this.furyActive()) ? 2 : 1) * (fire ? 1.5 : 1);
+      b._fire = fire;
       if (b._dmg > G.dmg) this._hotRound(b);
       // The first step is tested from his shoulder, not from the muzzle, or an
       // alien already on top of him sits between the two and every round misses.
@@ -8474,6 +8682,16 @@ const WalkCombat = {
   _hotRound(b) {
     if (b._trail) { b._trail.setTint(0xff9a30).setAlpha(0.9); b.setScale(b.scaleX * 1.25); }
     else b.setTint(0xffb040).setScale(b.scaleX * 1.3);
+  },
+
+  // A fire round sets an alien burning: two licks of fire, a little each.
+  _burnEnemy(z, dir) {
+    [380, 760].forEach(ms => this.time.delayedCall(ms, () => {
+      if (!z.active || !z._alive) return;
+      z.setTint(0xff8a30);
+      this.time.delayedCall(90, () => { if (z.active && z._alive) z.clearTint(); });
+      this.hitEnemy(z, 0.5, dir, false);
+    }));
   },
 
   // A puff of grey out of the barrel when it jams.
@@ -8542,7 +8760,7 @@ const WalkCombat = {
       const dmg = b._dmg || PISTOL_DMG, dir = b._vx >= 0 ? 1 : -1;
       const hx = px + dx * best.t, hy = py + dy * best.t;
       b.destroy();
-      if (best.kind === 'enemy') this.hitEnemy(best.o, dmg, dir, false);
+      if (best.kind === 'enemy') { this.hitEnemy(best.o, dmg, dir, false); if (b._fire) this._burnEnemy(best.o, dir); }
       else if (best.kind === 'flyer') this.hitFlyer(best.o, dmg, dir, 'bullet');
       else {
         this._bulletSpark(hx, hy);
@@ -8679,7 +8897,33 @@ function segBox(x0, y0, dx, dy, l, t, r, b) {
 const WalkAim = {
   // The weapon he is carrying. Only the pistol is found in the walking stages,
   // but everything downstream reads this descriptor and nothing else.
-  _gunOf(p) { return GameState.hasPistol ? (GUNS[p._gun || 'pistol'] || GUNS.pistol) : null; },
+  // The gun in his hand: whatever the slot holds (the grenade slot and an
+  // empty one hold no gun).
+  _gunOf(p) {
+    if (!GameState.hasPistol || !p) return null;
+    const s = this._slotOf(p);
+    return s === 'rifle' && GameState.hasRifle ? GUNS.rifle : s === 'pistol' ? GUNS.pistol : null;
+  },
+  _slotOf(p) {
+    const s = GameState.slots && GameState.slots[heroKey(p)];
+    return s || (GameState.hasRifle ? 'rifle' : 'pistol');
+  },
+  // Gears' cross: left the rifle, right the secondary (nothing yet), down the
+  // pistol, which can be put away but never lost, up the grenades.
+  selectSlot(p, slot) {
+    if (!p || !p.active || p._down || !GameState.hasPistol) return;
+    if (slot === 'rifle' && !GameState.hasRifle) { this._reloadWord(p, 'NO RIFLE', '#8a7a66'); return; }
+    if (slot === 'second') { this._reloadWord(p, 'EMPTY SLOT', '#8a7a66'); return; }
+    if (this._slotOf(p) === slot) return;
+    if (!GameState.slots) GameState.slots = {};
+    GameState.slots[heroKey(p)] = slot;
+    if (p._reload) { p._reload = null; }            // switching drops a reload, as it does in Gears
+    p._nextFireAt = this.time.now + 260;           // the draw
+    Sfx.ensure(); Sfx.blip(slot === 'rifle' ? 520 : 760, 0.05, 'square', 0.05, slot === 'rifle' ? 380 : 980);
+    this._reloadWord(p, slot === 'rifle' ? GUNS.rifle.name : slot === 'pistol' ? 'PISTOL' : 'GRENADES', '#f0e6d4');
+    this._paintInventory(true);
+    this._refreshHint && this._refreshHint();
+  },
 
   // Does this hero have the aim art at all? One without keeps the old flat shot.
   _aimCapable(p) {
@@ -8801,7 +9045,7 @@ const WalkAim = {
       st.face = p._facing || st.face || 1; st.tgt = 0; st.src = 'key';       // straight ahead
     } else if (move) st.face = p._facing || st.face;                      // K held, he turns with the keys
     // ---- the arm follows ----
-    const goal = st.up ? (crouch ? 0 : Phaser.Math.Clamp(st.tgt, AIM_MIN, AIM_MAX)) : AIM_MIN;   // crouched: level, and nothing else
+    const goal = st.up ? Phaser.Math.Clamp(st.tgt, AIM_MIN, AIM_MAX) : AIM_MIN;   // on a knee too, the whole range
     const step = AIM_SLEW * dt;
     st.cur += Math.max(-step, Math.min(step, goal - st.cur));
     st.active = st.up || st.cur > AIM_DOWN;
@@ -8904,6 +9148,11 @@ const FLYER_SHEET = { key: 'scene_flyerfly', n: 16, cols: 8, cw: 225, ch: 180, c
 // skull, which it draws at the spit clip's size and nearly its place, so going
 // from flying to spitting does not move the body.
 const FLYER_SIDE_SHEET = { key: 'scene_flyerside', n: 8, cols: 8, cw: 231, ch: 164, cx: 124, cy: 86 };
+// explode death.gif: killed in the air, it bursts (21 frames, cut whole by
+// make_flyer_sheets.js; cx/cy is the skull in frame 0). front view flying.gif:
+// face on, the big one's own flight; mouth is where its fire leaves it.
+const FLYER_EXPLODE_SHEET = { key: 'scene_flyerexplode', n: 21, cols: 7, cw: 256, ch: 256, cx: 118, cy: 112 };
+const FLYER_FRONT_SHEET   = { key: 'scene_flyerfront', n: 8, cols: 8, cw: 252, ch: 117, cx: 125, cy: 55, mouth: [125, 60] };
 const FLYER_DEATH_SHEET = { key: 'scene_flyerdeath', n: 17, cols: 9, cw: 95,  ch: 192, cx: 47,  foot: 162, standH: 161 };
 const FLYER_SIZE       = 1.0;     // standing, as tall as a brother; its wings twice that
 const FLYER_HP         = 9;       // three cuts once it is down, or nine rounds
@@ -8925,8 +9174,11 @@ const ORB_TYPES = {
   mend:     { label: 'MEND', text: '#ff9a9a',
               rings: [[32, 0x3a0c0c], [28, 0x8a1c1c], [24, 0xd23c3c], [17, 0xff8a8a], [9, 0xffe0e0]] },
   fury:     { label: 'FURY', text: '#ffd36a',
-              rings: [[32, 0x3a2400], [28, 0x8a5a10], [24, 0xd8962a], [17, 0xffcf6a], [9, 0xfff2cc]] }
-};   // the anti-acid ball: this long walking through acid unburned
+              rings: [[32, 0x3a2400], [28, 0x8a5a10], [24, 0xd8962a], [17, 0xffcf6a], [9, 0xfff2cc]] },
+  // rifle rounds off the dead: an ammo tin, not a ball
+  ammo:     { label: 'AMMO', text: '#d8e0a0', rings: [] }
+};
+const AMMO_DROP_P = 0.35;          // the chance an alien leaves rifle rounds (a berserker always does)   // the anti-acid ball: this long walking through acid unburned
 
 function flyerClips(scene) {
   const fly = sheetFrames(scene, FLYER_SHEET, 'ff');
@@ -8938,14 +9190,23 @@ function flyerClips(scene) {
   const melt = sheetFrames(scene, FLYER_DEATH_SHEET, 'fd');
   if (melt && !scene.anims.exists('flyer-melt'))
     scene.anims.create({ key: 'flyer-melt', frames: melt, frameRate: 11, repeat: 0 });
+  const boom = sheetFrames(scene, FLYER_EXPLODE_SHEET, 'fx');
+  if (boom && !scene.anims.exists('flyer-explode'))
+    scene.anims.create({ key: 'flyer-explode', frames: boom, frameRate: 22, repeat: 0 });
+  const front = sheetFrames(scene, FLYER_FRONT_SHEET, 'fr');
+  if (front && !scene.anims.exists('flyer-front'))
+    scene.anims.create({ key: 'flyer-front', frames: front, frameRate: 10, repeat: -1 });
   return !!(fly && side && melt);
 }
 
 // The one pose-to-origin rule: in the air (gliding, spitting) it is held by
 // the body's centre, standing (knocked down, melting) by its feet.
 function flyerPose(f, pose) {
-  f._pose = pose;
-  if (pose === 'hover') f.setOrigin(FLYER_SIDE_SHEET.cx / FLYER_SIDE_SHEET.cw, FLYER_SIDE_SHEET.cy / FLYER_SIDE_SHEET.ch);
+  f._pose = pose === 'fall' ? 'hover' : pose;
+  // the big one flies face on (front view flying.gif); falling, every one of
+  // them is side on
+  if (pose === 'hover' && f._front) f.setOrigin(FLYER_FRONT_SHEET.cx / FLYER_FRONT_SHEET.cw, FLYER_FRONT_SHEET.cy / FLYER_FRONT_SHEET.ch);
+  else if (pose === 'hover' || pose === 'fall') f.setOrigin(FLYER_SIDE_SHEET.cx / FLYER_SIDE_SHEET.cw, FLYER_SIDE_SHEET.cy / FLYER_SIDE_SHEET.ch);
   else if (pose === 'spit') f.setOrigin(FLYER_SHEET.cx / FLYER_SHEET.cw, FLYER_SHEET.cy / FLYER_SHEET.ch);
   else f.setOrigin(FLYER_DEATH_SHEET.cx / FLYER_DEATH_SHEET.cw, (FLYER_DEATH_SHEET.foot + 1) / FLYER_DEATH_SHEET.ch);
 }
@@ -8969,9 +9230,13 @@ const WalkFlyers = {
     // its own spike does sent back), stunMs, spitGap, range (heights).
     const size = o.size || FLYER_SIZE;
     const H = this.charH, s = size * H / FLYER_DEATH_SHEET.standH;
-    const f = this.add.sprite(o.x, o.y, FLYER_SIDE_SHEET.key, 'fv0').setDepth(12).setScale(s);
+    const front = !!o.front && this.anims.exists('flyer-front');
+    const f = this.add.sprite(o.x, o.y, front ? FLYER_FRONT_SHEET.key : FLYER_SIDE_SHEET.key, front ? 'fr0' : 'fv0')
+      .setDepth(12).setScale(s);
+    f._front = front;
+    f._fireSpikes = !!o.fire;
     flyerPose(f, 'hover');
-    f.play('flyer-hover');
+    f.play(front ? 'flyer-front' : 'flyer-hover');
     f._s = s;
     f._k = size / FLYER_SIZE;
     f._hp = f._hpMax = o.hp || FLYER_HP;
@@ -8989,6 +9254,7 @@ const WalkFlyers = {
     f._bob = Math.random() * Math.PI * 2;
     f._nextSpitAt = this.time.now + (o.spitDelay || 2600);
     f._tx = o.tx; f._ty = o.ty;
+    f._enterV = o.enterV || 0;
     this.flyers.push(f);
     this.startCombat();
     Sfx.ensure(); Sfx.swoop(); Sfx.blip(880, 0.35, 'sawtooth', 0.04, 1320);
@@ -9015,7 +9281,7 @@ const WalkFlyers = {
       if (st === 'enter') {
         const tx = f._tx != null ? f._tx : this._flyerAim(f, now)[0];
         const ty = f._ty != null ? f._ty : this._flyerAim(f, now)[1];
-        const dx = tx - f.x, dy = ty - f.y, d = Math.hypot(dx, dy), v = 1.7 * H * dt;
+        const dx = tx - f.x, dy = ty - f.y, d = Math.hypot(dx, dy), v = (f._enterV || 1.7) * H * dt;
         flyerFace(f, tx, H);
         if (d <= v) { f.setPosition(tx, ty); f._state = 'hover'; f._tx = f._ty = null; }
         else f.setPosition(f.x + dx / d * v, f.y + dy / d * v);
@@ -9054,6 +9320,26 @@ const WalkFlyers = {
     f.off('animationupdate');           // one volley per spit, never two
     f._state = 'spit';
     const face = p.x >= f.x ? 1 : -1;
+    if (f._front) {
+      // face on there is no spit clip: the fire gathers in her mouth, then goes
+      const H = this.charH, S = FLYER_FRONT_SHEET, s = f._s;
+      const mx = () => f.x + (S.mouth[0] - S.cx) * s, my = () => f.y + (S.mouth[1] - S.cy) * s;
+      const glow = this.add.circle(mx(), my(), 0.06 * H * f._k, 0xff7a20, 0.9).setDepth(13).setBlendMode(Phaser.BlendModes.ADD);
+      this._sortNew && this._sortNew();
+      Sfx.ensure(); Sfx.blip(160, 0.5, 'sawtooth', 0.06, 420);
+      this.tweens.add({ targets: glow, scale: 2.6, duration: 520, ease: 'Quad.easeIn',
+        onUpdate: () => glow.setPosition(mx(), my()),
+        onComplete: () => {
+          glow.destroy();
+          if (f.active && f._alive && f._state === 'spit') this._spikeVolley(f, face);
+          this.time.delayedCall(260, () => {
+            if (!f.active || !f._alive || f._state !== 'spit') return;
+            f._state = 'hover';
+            f._nextSpitAt = this.time.now + Phaser.Math.Between((f._spitGap || FLYER_SPIT_GAP)[0], (f._spitGap || FLYER_SPIT_GAP)[1]);
+          });
+        } });
+      return;
+    }
     f.setFlipX(face < 0);
     flyerPose(f, 'spit');
     f.play('flyer-spit');
@@ -9075,8 +9361,8 @@ const WalkFlyers = {
   },
 
   _spikeVolley(f, face) {
-    const H = this.charH, S = FLYER_SHEET, s = f._s;
-    const mx = f.x + face * (S.mouth[0] - S.cx) * s, my = f.y + (S.mouth[1] - S.cy) * s;
+    const H = this.charH, S = f._front ? FLYER_FRONT_SHEET : FLYER_SHEET, s = f._s;
+    const mx = f.x + (f._front ? 1 : face) * (S.mouth[0] - S.cx) * s, my = f.y + (S.mouth[1] - S.cy) * s;
     const p = this._nearestFighter(f.x) || this.player;
     const base = Math.atan2(p.body.center.y - my, p.x - mx);
     const k = SPIKE_LEN * H / 300;
@@ -9088,6 +9374,8 @@ const WalkFlyers = {
       sp._vy = Math.sin(a) * SPIKE_SPEED * H;
       sp._from = f;
       sp._born = this.time.now;
+      // hers are on fire
+      if (f._fireSpikes) { sp._fire = true; sp.setTint(0xff9a40); }
       this.spikes.push(sp);
     });
     // the spit itself: a wet burst at the mouth, flecks thrown after the spikes
@@ -9150,7 +9438,13 @@ const WalkFlyers = {
         if (!along((x, y) => x > b.left - m && x < b.right + m && y > b.top + 4 && y < b.bottom)) continue;
         this._spikeBurst(sp.x, sp.y, 0xa01818);
         sp.destroy();
-        this.hurtPlayer(FLYER_SPIKE_DMG, sp._from ? sp._from.x : sp.x - sp._vx, p);
+        this.hurtPlayer(sp._fire ? 2 : FLYER_SPIKE_DMG, sp._from ? sp._from.x : sp.x - sp._vx, p);
+        // fire: it keeps burning a moment after
+        if (sp._fire) this.time.delayedCall(1300, () => {
+          if (!p.active || p._down || this._dead) return;
+          p.setTint(0xff8a30); this.time.delayedCall(120, () => p.active && p.clearTint());
+          this.hurtPlayer(1, p.x - (p._facing || 1), p);
+        });
         return false;
       }
       // into the street, where it stands a moment before it rots away
@@ -9219,6 +9513,8 @@ const WalkFlyers = {
     // the rest catch it on the way down or on the ground, and sting. What
     // finishes it is the blade once it is down.
     if (how === 'return') dmg = (f._state === 'fall' || f._state === 'stunned') ? 1 : (f._retDmg || dmg);
+    // the boss on the ground barely feels it
+    else if (f._boss && (f._state === 'fall' || f._state === 'stunned')) dmg *= (typeof EMB_DOWN_DMG !== 'undefined' ? EMB_DOWN_DMG : 0.35);
     f._hp -= dmg;
     if (this.onFlyerHurt) this.onFlyerHurt(f, dmg, how);
     Sfx.ensure(); Sfx.hit();
@@ -9237,9 +9533,10 @@ const WalkFlyers = {
     this.tweens.killTweensOf(f);        // brought down mid-rise, it falls: the rise is over
     f.setAlpha(1);
     // it falls wings out, still facing the way it was, and lands so
-    flyerPose(f, 'hover');
+    flyerPose(f, 'fall');
     f.setTexture(FLYER_SIDE_SHEET.key, 'fv0');
     f._state = state;
+    if (f._boss && state === 'fall' && this.onBossDown) this.onBossDown(f);
     f._vy = -0.6 * this.charH;
     f._spin = dir * 5;
     f.setDepth(9);
@@ -9267,7 +9564,7 @@ const WalkFlyers = {
     const H = this.charH;
     f._state = 'rising';
     flyerPose(f, 'hover');
-    f.play('flyer-hover');
+    f.play(f._front ? 'flyer-front' : 'flyer-hover');
     f.setDepth(12);
     f.y = this.groundY - 0.45 * H * (f._k || 1);
     Sfx.ensure(); Sfx.swoop();
@@ -9281,9 +9578,59 @@ const WalkFlyers = {
     f.setAlpha(1);
     Sfx.ensure(); Sfx.squelch(); Sfx.roar();
     this.cameras.main.shake(160, 0.006);
-    if (f._pose === 'stand') this._flyerMelt(f);
+    // It bursts: in mid-air where it was hit, or, knocked down, where it lies.
+    if (this.anims.exists('flyer-explode')) this._flyerBurst(f, f._pose === 'stand');
+    else if (f._pose === 'stand') this._flyerMelt(f);
     else this._flyerDown(f, dir || 1, 'dying');
+    if (GameState.hasRifle && Math.random() < 0.5) {
+      const fx = f.x;
+      this.time.delayedCall(700, () => { if (this.scene.isActive()) this.dropOrb(fx, 'ammo', 12); });
+    }
     if (this.onFlyerKilled) this.onFlyerKilled(f.x, f);
+  },
+
+  // explode death.gif in its place, at its size and facing, and a rain of
+  // its blood coming down onto the street, pooling where it lands.
+  _flyerBurst(f, grounded) {
+    f._state = 'burst';
+    f.off('animationupdate'); f.off('animationcomplete');
+    f.anims.stop();
+    const H = this.charH, k = f._k || 1, S = FLYER_EXPLODE_SHEET;
+    const x = f.x, y = grounded ? this.groundY - 0.45 * H * k : f.y;
+    f.setVisible(false);
+    const b = this.add.sprite(x, y, S.key, 'fx0').setDepth(13).setScale(f._s || 1).setFlipX(f.flipX)
+      .setOrigin((f.flipX ? S.cw - S.cx : S.cx) / S.cw, S.cy / S.ch);
+    b.play('flyer-explode');
+    this._sortNew && this._sortNew();
+    Sfx.ensure(); Sfx.burst(0.35, 0.4, 900, 1.2); Sfx.squelch();
+    this.cameras.main.shake(220, 0.007);
+    b.once('animationcomplete', () => this.tweens.add({ targets: b, alpha: 0, duration: 260, onComplete: () => b.destroy() }));
+    this.time.delayedCall(600, () => f.destroy());
+    // the rain: drops thrown out of the burst that fall to the floor
+    const drops = Math.round(14 + 8 * k);
+    for (let i = 0; i < drops; i++) {
+      const d = this.add.circle(x, y, (2 + Math.random() * 3.5) * Math.max(0.8, H / 200), 0xb3161a, 0.95).setDepth(12);
+      const vx = (Math.random() - 0.5) * 1.6 * H * k, vy0 = -(0.2 + Math.random() * 0.9) * H;
+      const g = this.physics.world.gravity.y * 1.1, t0 = this.time.now + 180 + Math.random() * 160;
+      d.setVisible(false);
+      const ev = this.time.addEvent({ delay: 16, loop: true, callback: () => {
+        const t = (this.time.now - t0) / 1000;
+        if (t < 0) return;
+        d.setVisible(true);
+        d.setPosition(x + vx * t, y + vy0 * t + 0.5 * g * t * t);
+        if (d.y >= this.groundY - 2 || t > 3) {
+          ev.remove();
+          if (d.y >= this.groundY - 2 && d.x > 0 && d.x < this.worldW) {
+            const pool = this.add.ellipse(d.x, this.groundY - 1, 0.05 * H, 0.012 * H, 0x7a0b0b, 0.9).setDepth(8);
+            this.tweens.add({ targets: pool, scaleX: 1.8, duration: 400 });
+            this.tweens.add({ targets: pool, alpha: 0, delay: 6000, duration: 1500, onComplete: () => pool.destroy() });
+            this._sortNew && this._sortNew();
+          }
+          d.destroy();
+        }
+      } });
+    }
+    this._sortNew && this._sortNew();
   },
 
   // The melt, and no more of the clip than that: the body runs to red, then
@@ -9315,8 +9662,20 @@ const WalkFlyers = {
 
   // A power out of what is left of one of them, on the street where it fell:
   // walk over it to take it. ORB_TYPES says what each one is and does.
-  dropOrb(x, type) {
+  dropOrb(x, type, n) {
     const T = ORB_TYPES[type] || ORB_TYPES.antiacid, H = this.charH, key = 'orb_' + type;
+    if (type === 'ammo' && !this.textures.exists(key)) {
+      // an olive tin with brass showing over the lip
+      const g = this.make.graphics({ x: 0, y: 0, add: false });
+      g.fillStyle(0x1c1f12, 1); g.fillRect(8, 22, 48, 34);
+      g.fillStyle(0x4f5a2a, 1); g.fillRect(10, 24, 44, 30);
+      g.fillStyle(0x6b7a3a, 1); g.fillRect(10, 24, 44, 6);
+      g.fillStyle(0xc8962e, 1); for (let i = 0; i < 6; i++) g.fillRect(14 + i * 6, 12, 4, 12);
+      g.fillStyle(0x8a5a1a, 1); for (let i = 0; i < 6; i++) g.fillRect(14 + i * 6, 10, 4, 3);
+      g.fillStyle(0xe8e0b0, 1); g.fillRect(20, 36, 24, 3);
+      g.generateTexture(key, 64, 64);
+      g.destroy();
+    }
     if (!this.textures.exists(key)) {
       const g = this.make.graphics({ x: 0, y: 0, add: false });
       T.rings.forEach(([r, c]) => { g.fillStyle(c, 1); g.fillCircle(32, 32, r); });
@@ -9331,14 +9690,14 @@ const WalkFlyers = {
     const glow = this.add.image(x, y, key).setDepth(10).setScale(k * 2.2).setAlpha(0.35)
       .setBlendMode(Phaser.BlendModes.ADD);
     const orb = this.add.image(x, y - 0.5 * H, key).setDepth(11).setScale(k);
-    const label = this.add.text(x, y - 0.28 * H, T.label, { fontFamily: F_UI, fontSize: '13px', fontStyle: '700',
+    const label = this.add.text(x, y - 0.28 * H, type === 'ammo' ? T.label + ' +' + n : T.label, { fontFamily: F_UI, fontSize: '13px', fontStyle: '700',
       color: T.text, stroke: '#06140d', strokeThickness: 4 }).setOrigin(0.5, 1).setDepth(11).setAlpha(0);
     this.tweens.add({ targets: orb, y, duration: 520, ease: 'Bounce.easeOut' });
     this.tweens.add({ targets: label, alpha: 1, delay: 400, duration: 300 });
     this.tweens.add({ targets: [orb], y: y - 0.06 * H, duration: 700, delay: 600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
     this.tweens.add({ targets: glow, scale: k * 2.8, alpha: 0.15, duration: 700, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
     Sfx.ensure(); Sfx.blip(990, 0.3, 'sine', 0.05, 1480);
-    this.orbs.push({ orb, glow, label, x, type, born: this.time.now });
+    this.orbs.push({ orb, glow, label, x, type, n, born: this.time.now });
     if (this._sortNew) this._sortNew();
   },
 
@@ -9353,7 +9712,8 @@ const WalkFlyers = {
       [o.orb, o.glow, o.label].forEach(g => g.destroy());
       // walked through and taken: no bend-down, that is only for opening boxes
       const t = o.type || 'antiacid';
-      if (t === 'mend') this._mendOn(p);
+      if (t === 'ammo') this.giveAmmo(p, o.n || 10);
+      else if (t === 'mend') this._mendOn(p);
       else if (t === 'fury') this._furyOn(now);
       else this._wardOn(now);
       return false;
@@ -9589,7 +9949,7 @@ const WalkGrenades = {
     }
     this.cameras.main.shake(380, 0.012);
     Sfx.ensure();
-    if (!playSample('sfxBoom', { vol: 0.8 })) Sfx.explosion();
+    if (!playSample('sfxBoom', { vol: 0.8, offset: BOOM_AT })) Sfx.explosion();
     this.enemies.forEach(z => {
       if (z.active && z._alive && Math.hypot(z.x - x, z.y - y) < R + 0.3 * z._H) this.hitEnemy(z, 99, z.x >= x ? 1 : -1, false);
     });
@@ -9608,11 +9968,53 @@ const WalkGrenades = {
   _itemsOf(p) {
     const out = [];
     if (armedWithBlade()) out.push('sword');
-    if (GameState.hasPistol) out.push('pistol:' + this._ammo(p) + ':' + (p._reload ? 'r' : '') + (p._hot ? 'h' : ''));
+    if (GameState.hasPistol) {
+      const slot = this._slotOf(p), G = this._gunOf(p), box = G ? this._box(p) : null;
+      this._ammo(p);
+      out.push('gun:' + slot + ':' + (box ? box.mag : 0) + ':' + (box ? (isFinite(box.res) ? box.res : 'inf') : 0) + ':' +
+               (p._reload ? 'r' : '') + (box && box.fire ? 'f' : '') + (GameState.hasRifle ? 'R' : '') + ':' + this.grenadesOf(p));
+    }
     const n = this.grenadesOf(p);
     if (n > 0 || this._grenadeStage) out.push('grenade:' + n);
     if (this._hasKey && !this._keyUsed) out.push('key');
     return out;
+  },
+
+  // The gun in hand and Gears' cross beside it: up the grenades, left the
+  // rifle, right the secondary, down the pistol; the one in hand lit.
+  _paintGunSlot(add, it, cx, cy, SLOT) {
+    const [, slot, mag, res, flags, gren] = it.split(':');
+    const lx = cx - 22, ix = lx, iy = cy - 8;
+    if (slot === 'rifle') {
+      makeGunTexture(this, 'rifle');
+      const im = add(this.add.image(ix, iy, 'gun_rifle'));
+      im.setScale(62 / im.width);
+    } else if (slot === 'pistol' && this.textures.exists('scene_pistolsprite')) {
+      const im = add(this.add.image(ix, iy, 'scene_pistolsprite'));
+      const art = paintedBox(this, 'scene_pistolsprite'), pw = art ? art.pw : im.width;
+      if (art) im.setOrigin((art.x0 + pw / 2) / art.w, (art.y0 + art.ph / 2) / art.h);
+      im.setScale(42 / pw);
+    } else if (slot === 'grenade' && this.textures.exists('scene_grenade')) {
+      const im = add(this.add.image(ix, iy, 'scene_grenade'));
+      im.setScale(30 / im.height);
+    }
+    const fire = flags.indexOf('f') >= 0, rel = flags.indexOf('r') >= 0;
+    const txt = slot === 'grenade' ? '×' + gren
+              : rel ? 'RELOAD'
+              : mag + ' | ' + (res === 'inf' ? '∞' : res);
+    add(this.add.text(lx, cy + 26, txt, { fontFamily: F_UI, fontSize: rel ? '11px' : '14px', fontStyle: '700',
+      color: rel ? '#e0a040' : fire ? '#ffb040' : (+mag === 0 && slot !== 'grenade') ? '#e0523a' : '#f0e6d4',
+      stroke: '#070605', strokeThickness: 3 }).setOrigin(0.5, 1));
+    // the cross
+    const g = add(this.add.graphics()), X = cx + 36, Y = cy, d = 13, s = 10;
+    const cell = (x, y, on, have) => {
+      g.fillStyle(on ? 0xf2b13c : have ? 0x4a3b2a : 0x1c1510, 1).fillRect(x - s / 2, y - s / 2, s, s);
+      g.lineStyle(1, have ? 0xf2b13c : 0x3a2f24, have ? 0.8 : 0.6).strokeRect(x - s / 2, y - s / 2, s, s);
+    };
+    cell(X, Y - d, slot === 'grenade', +gren > 0);
+    cell(X - d, Y, slot === 'rifle', flags.indexOf('R') >= 0);
+    cell(X + d, Y, slot === 'second', false);
+    cell(X, Y + d, slot === 'pistol', true);
   },
 
   // Rebuilt when what they carry changes, not every frame.
@@ -9629,7 +10031,8 @@ const WalkGrenades = {
       const items = this._itemsOf(p);
       if (!items.length) return;
       const right = i === 1, H = 70, PW = 62, SLOT = 58;
-      const W = 12 + PW + 10 + items.length * SLOT + 4;
+      const wOf = it => it.indexOf('gun:') === 0 ? SLOT * 2 + 8 : SLOT;
+      const W = 12 + PW + 10 + items.reduce((a, it) => a + wOf(it), 0) + 4;
       const x0 = right ? 1264 - W : 16, y0 = 704 - H;
       const add = o => { o.setScrollFactor(0).setDepth(60); this._inv.push(o); return o; };
       const bg = add(this.add.graphics());
@@ -9648,8 +10051,10 @@ const WalkGrenades = {
       }
       add(this.add.text(x0 + 8, y0 - 3, id.toUpperCase(), { fontFamily: F_UI, fontSize: '11px', fontStyle: '700',
         color: '#f2b13c', stroke: '#070605', strokeThickness: 3 }).setOrigin(0, 1));
+      let along = x0 + 12 + PW + 10;
       items.forEach((it, j) => {
-        const cx = x0 + 12 + PW + 10 + j * SLOT + SLOT / 2, cy = y0 + H / 2;
+        const cx = along + wOf(it) / 2, cy = y0 + H / 2;
+        along += wOf(it);
         if (it === 'sword' && swordArtKey(this)) {
           const key = swordArtKey(this), im = add(this.add.image(cx, cy, key));
           if (key === 'scene_swordpair') im.setScale(52 / im.height);
@@ -9659,6 +10064,8 @@ const WalkGrenades = {
           g.lineStyle(4, 0xd9d4c8, 1); g.lineBetween(cx - 14, cy + 14, cx + 16, cy - 16);
           g.lineStyle(5, 0x8a6a3a, 1); g.lineBetween(cx - 8, cy + 2, cx + 2, cy + 12);
           g.lineStyle(5, 0x3a2a1c, 1); g.lineBetween(cx - 20, cy + 20, cx - 12, cy + 12);
+        } else if (it.indexOf('gun:') === 0) {
+          this._paintGunSlot(add, it, cx, cy, SLOT);
         } else if (it.indexOf('pistol') === 0 && this.textures.exists('scene_pistolsprite')) {
           const im = add(this.add.image(cx, cy - 5, 'scene_pistolsprite'));
           const art = paintedBox(this, 'scene_pistolsprite');
@@ -9917,6 +10324,9 @@ const Coop = {
     if (Phaser.Input.Keyboard.JustDown(k.F)) this.swingBlade(p2);
     if (Phaser.Input.Keyboard.JustDown(k.G)) this.throwGrenade(p2);
     if (Phaser.Input.Keyboard.JustDown(k.R)) this.reloadPress(p2);
+    ['S1', 'S2', 'S3', 'S4'].forEach(n => { if (Phaser.Input.Keyboard.JustDown(k[n])) this.selectSlot(p2, SLOT_OF_KEY[n]); });
+    if (this._slotOf(p2) === 'grenade') { if (Phaser.Input.Keyboard.JustDown(k.K)) this.throwGrenade(p2); }
+    else
     if (GameState.hasPistol && k.K.isDown && !this._inConversation &&
         (this._aimCapable(p2) || !p2._crouching)) {
       if (!this._aimCapable(p2)) p2._gunUntil = now + 520;
@@ -11576,7 +11986,9 @@ class JumpScene extends WalkScene {
     }
     cam.flash(200, 255, 214, 150);
     cam.shake(480, 0.014);
-    if (!playSample('sfxBoom', { vol: 1 })) Sfx.explosion();
+    // car_explosion.mp3 opens on half a second of lead-in before the bang: start
+    // on the bang, so it lands with the flash
+    if (!playSample('sfxBoom', { vol: 1, offset: BOOM_AT })) Sfx.explosion();
     // a beat where everything stops, then it all comes down
     this.physics.world.pause();
     this.time.delayedCall(70, () => this.physics.world.resume());
@@ -13084,19 +13496,29 @@ const EMB_LIFT    = { x0: 0.300, x1: 0.346 };
 const EMB_SLAB    = { x0: 0.712, x1: 0.790, y: 0.443 };
 // The stone that rides up to it on its own, like the tienda's (no switch).
 const EMB_RISER   = { x0: 0.668, x1: 0.709 };
-const EMB_GIRDER  = { x: 0.800, hM: 4.6, wM: 0.55 };
-const EMB_CHEST_X = 0.762;
+// The girder wall fills the whole opening, walkway to the top of the window:
+// two lengths of it, one on the other, and as solid as it looks.
+const EMB_GIRDER  = { x: 0.800, hM: 4.6, wM: 1.5, top: 0.20 };
+const EMB_CHEST_X = 0.748;
+// the dead soldier at the start of the walkway, with his rifle
+const EMB_SOLDIER_X = 0.10;
 // Where the horde comes from: out of the canal over the fallen bank, out of
 // the dark doorway, off the left roof, and along the road behind them. Never
 // from behind the girder — nothing would stop them walking through it.
 const EMB_CANAL   = [0.555, 0.625];
 const EMB_DOOR_X  = 0.647;
 const EMB_ROOFJ   = [0.205, 0.285];
-const EMB_ALIVE   = 5;          // at once (one more with a brother)
-// The one with the key: bigger than the others, harder to bring down, and it
-// calls the horde when it is left alone.
-const EMB_CARRIER = { size: 1.7, hp: 40, alt: 3.1, returnDmg: 6, stunMs: 2200, range: 7,
-                      spitGap: [1800, 2800], fan: [-0.3, -0.15, 0, 0.15, 0.3] };
+const EMB_ALIVE   = 7;          // at once (one more with a brother)
+const EMB_WAVE    = 6;          // all at once: the first of them, and again when she comes
+// LA MADRE, the mother of the swarm, with the key: face on (front view
+// flying.gif), much bigger and much harder than the others, spitting fire.
+// Knocked down, she barely feels it and calls her young; left alone she
+// screams the horde in.
+const EMB_MADRE_NAME = 'LA MADRE';
+const EMB_CARRIER = { size: 1.9, hp: 110, alt: 3.1, returnDmg: 6, stunMs: 2200, range: 8, front: true, fire: true,
+                      spitGap: [1700, 2600], fan: [-0.3, -0.15, 0, 0.15, 0.3] };
+const EMB_DOWN_DMG = 0.35;      // what a hit does to her while she is down
+const EMB_YOUNG    = { size: 0.7, hp: 4 };   // the small ones she calls when she is brought down
 const EMB_CALL_IDLE  = 7000;    // not hurt for this long, it screams for help
 const EMB_CALL_EVERY = 18000;   // and every so often anyway
 // what drops, by how many have been killed
@@ -13120,6 +13542,8 @@ class EmbankmentScene extends WalkScene {
     this._chestTaken = !!seen['emb-lockbox'];
     this._keyUsed = this._chestTaken;
     const fight = !wallDown && !this._carrierDead;
+    // she came down once already this game: after a death she is simply up
+    this._madreUp = !!seen['emb-madre'];
     this.buildWalk({
       bgKey: 'scene_aftertienda',
       worldW: 'auto', worldH: Math.round(720 * EMB_ZOOM), bgZoom: EMB_ZOOM,
@@ -13150,6 +13574,7 @@ class EmbankmentScene extends WalkScene {
 
     this._buildGirder();
     this._buildLift();
+    this._buildSoldier();
     StoreScene.prototype._buildChest.call(this, EMB_CHEST_X, EMB_SLAB.y);
     if (this._chestTaken && this.chestAnim) { this.chest.setVisible(false); this.chestAnim.setVisible(true).setFrame('co11'); }
     else this._buildPadlock();
@@ -13163,12 +13588,132 @@ class EmbankmentScene extends WalkScene {
     if (this._carrierDead && !this._hasKey && !wallDown) this._dropKey(this.fx(0.55), true);
 
     this.onBlast = (x, y, R) => this._blast(x, y, R);
+    this.onBossDown = f => this._madreDown(f);
     this.input.keyboard.on('keydown-E', () => this._useE(this.player));
+    this._hordeArmed = false;
     if (fight) {
-      // the first time it arrives on camera; after a death it is just there
-      if (firstCinematic('emb-carrier')) this.time.delayedCall(700, () => this._carrierIntro());
-      else this.time.delayedCall(500, () => this._startFight());
+      // she wakes at the chest; until then the walkway's own horde, set off
+      // by taking the rifle or by walking on in
+      if (this._madreUp) this.time.delayedCall(500, () => this._startFight());
+      else this._hordeArmed = true;
     }
+  }
+
+  // ---- the fallen soldier -------------------------------------------------
+  _buildSoldier() {
+    const x0 = this.fx(EMB_SOLDIER_X), m0 = this.pxPerM;
+    // the rifle taken, he is gone: a scorch on the stone where he sat
+    if (GameState.hasRifle) { this._scorch(x0); return; }
+    const key = 'scene_soldier';
+    if (!this.textures.exists(key)) return;
+    const x = x0, m = m0;
+    const im = this.add.image(x, this.groundY + 0.05 * m, key).setOrigin(0.5, 1).setDepth(4);
+    im.setScale(2.7 * m / im.width);
+    this.soldier = im;
+    this.soldierX = x;
+    this.soldierLabel = this.add.text(x, this.groundY - im.displayHeight - 14, 'E  ·  TAKE HIS RIFLE', {
+      fontFamily: 'Courier New, monospace', fontSize: '15px', color: '#d9c7a8', stroke: '#0d0a08', strokeThickness: 4
+    }).setOrigin(0.5, 1).setDepth(8).setAlpha(0);
+  }
+
+  _atSoldier(p) {
+    return !!this.soldier && !GameState.hasRifle && !!p && Math.abs(p.x - this.soldierX) < 1.3 * this.pxPerM &&
+           Math.abs(p.body.bottom - this.groundY) < 0.5 * this.pxPerM;
+  }
+
+  _scorch(x) {
+    const m = this.pxPerM, g = this.add.graphics().setDepth(3);
+    g.fillStyle(0x0c0806, 0.75); g.fillEllipse(x, this.groundY + 2, 2.2 * m, 0.22 * m);
+    g.fillStyle(0x1e1410, 0.6); g.fillEllipse(x - 0.2 * m, this.groundY + 1, 1.3 * m, 0.12 * m);
+  }
+
+  // The moment the rifle leaves his hands he catches: fire runs over him, he
+  // blackens, and he comes apart into ash on the wind. The brothers recoil.
+  _takeRifle(p) {
+    if (GameState.hasRifle || this._burning || !this.soldier) return;
+    this._burning = true;
+    if (this.soldierLabel) this.soldierLabel.setAlpha(0);
+    if (this.textures.exists('scene_soldiernorifle')) this.soldier.setTexture('scene_soldiernorifle');
+    this.giveRifle(p, true);
+    persistSeen('emb-rifle');
+    const cine = firstCinematic('emb-soldier');
+    if (cine) { this._holdInput = true; this._calmIdle = true; }
+    const sol = this.soldier, m = this.pxPerM, H = this.charH, x = sol.x, top = sol.y - sol.displayHeight, w = sol.displayWidth;
+    const at = (ms, fn) => this.time.delayedCall(ms, () => { if (this.scene.isActive()) fn(); });
+    // it catches
+    Sfx.ensure(); Sfx.burst(0.5, 0.35, 700, 0.9); Sfx.sizzle && Sfx.sizzle();
+    torchTexture(this);
+    const glow = this.add.image(x, sol.y - sol.displayHeight * 0.4, TORCH_KEY).setDepth(4.5).setTint(0xff7a20)
+      .setBlendMode(Phaser.BlendModes.ADD).setAlpha(0).setScale(2.2 * m / 512);
+    this.tweens.add({ targets: glow, alpha: 0.85, duration: 300 });
+    this.tweens.add({ targets: glow, scale: 2.6 * m / 512, duration: 160, yoyo: true, repeat: 10 });
+    let flicker = 0;
+    const tint = this.time.addEvent({ delay: 70, loop: true, callback: () => {
+      flicker++;
+      sol.setTint(flicker % 2 ? 0xff9a50 : 0xffc070);
+    } });
+    const flames = this.time.addEvent({ delay: 45, repeat: 40, callback: () => {
+      const fx = x + (Math.random() - 0.5) * w * 0.85, fy = sol.y - Math.random() * sol.displayHeight * 0.7;
+      const fl = this.add.circle(fx, fy, (3 + Math.random() * 6) * m / 55, Math.random() < 0.5 ? 0xff7a20 : 0xffd060, 0.9)
+        .setDepth(5).setBlendMode(Phaser.BlendModes.ADD);
+      this.tweens.add({ targets: fl, y: fy - (0.4 + Math.random() * 0.6) * m, scale: 0.2, alpha: 0, duration: 420 + Math.random() * 300,
+                        onComplete: () => fl.destroy() });
+      this._sortNew && this._sortNew();
+    } });
+    // the brothers: back off it, shocked
+    [this.player, this.player2].forEach(q => {
+      if (!q || !q.active || q._down) return;
+      const away = q.x >= x ? 1 : -1;
+      q._facing = -away;
+      q.setVelocityX(away * 2.2 * m);
+      if (q._hero && heroHas(q._hero, 'land')) playOnce(q, 'land', -away);
+      const mark = this.add.text(q.x, q.body.top - 0.25 * H, '!', { fontFamily: F_UI, fontSize: '34px', fontStyle: '700',
+        color: '#ffd36a', stroke: '#140c02', strokeThickness: 5 }).setOrigin(0.5, 1).setDepth(64);
+      this._sortNew && this._sortNew();
+      this.tweens.add({ targets: mark, y: mark.y - 18, scale: 1.25, duration: 220, yoyo: true, hold: 700,
+                        onComplete: () => this.tweens.add({ targets: mark, alpha: 0, duration: 300, onComplete: () => mark.destroy() }) });
+    });
+    this.cameras.main.shake(260, 0.004);
+    // blackened, then gone to ash on the wind, from the top down
+    at(1400, () => { tint.remove(); sol.setTint(0x2a1a12); Sfx.burst(0.4, 0.25, 1400, 1.6); });
+    at(1700, () => {
+      const N = 90;
+      for (let i = 0; i < N; i++) {
+        const ax = x + (Math.random() - 0.5) * w * 0.9, ay = top + Math.random() * sol.displayHeight;
+        const ash = this.add.rectangle(ax, ay, (2 + Math.random() * 4) * m / 55, (2 + Math.random() * 4) * m / 55,
+                                       i % 5 ? 0x2a2420 : 0xff8a30, 1).setDepth(5);
+        this.tweens.add({ targets: ash, x: ax - (0.6 + Math.random() * 2.2) * m, y: ay - (0.3 + Math.random() * 1.4) * m,
+                          angle: Math.random() * 360, alpha: 0, duration: 900 + Math.random() * 900, delay: (1 - (ay - top) / sol.displayHeight) * 500,
+                          onComplete: () => ash.destroy() });
+      }
+      this._sortNew && this._sortNew();
+      this.tweens.add({ targets: sol, alpha: 0, scaleY: sol.scaleY * 0.25, scaleX: sol.scaleX * 1.08, duration: 900, ease: 'Quad.easeIn',
+                        onComplete: () => { sol.destroy(); this.soldier = null; } });
+      this.tweens.add({ targets: glow, alpha: 0, duration: 900, onComplete: () => glow.destroy() });
+      this._scorch(x);
+    });
+    // and then what they make of it, and the rifle's card
+    at(3000, () => {
+      if (cine) { this._holdInput = false; this._calmIdle = false; }
+      this._say([['ETERWOLF', 'What the hell...?!'], ['WOLFFEL', 'He just... burned away. Like he was never there.']]);
+    });
+    // the card once they have had their say, and the horde when it has gone
+    at(this._duo() ? 6000 : 4000, () => this._rifleCard());
+    if (this._hordeArmed) at(this._duo() ? 9600 : 7600, () => this._openingHorde());
+  }
+
+  // The first of them, all at once, out of the doorway, the canal and off
+  // the road behind: a horde, not a queue.
+  _openingHorde() {
+    if (!this._hordeArmed || this._dead || this._transitioning) return;
+    this._hordeArmed = false;
+    this._preFight = true;
+    playTrack('fightMusic');
+    this.startCombat();
+    this.onEnemyKilled = x => this._embKill(x);
+    const from = ['door', 'canal', 'road', 'door', 'canal', 'roof'];
+    for (let i = 0; i < EMB_WAVE; i++) this.time.delayedCall(i * 220, () => this._embSpawn(from[i % from.length], true));
+    this._say([['PLAYER', 'Here they come!']]);
   }
 
   // ---- the girder ------------------------------------------------------
@@ -13179,20 +13724,26 @@ class EmbankmentScene extends WalkScene {
     this.girderBox = null;
     this.girderCap = null;
     if (this._wallDown) { this._girderRubble(x, y); return; }
+    // from the walkway to the top of the opening, two lengths of it stood
+    // one on the other (the upper one turned about), so it fills the gap
+    const topY = this.fy(EMB_GIRDER.top), full = y - topY;
     if (this.textures.exists('scene_girderwall')) {
-      this.girder = this.add.image(x, y + 4, 'scene_girderwall').setOrigin(0.5, 1).setDepth(8);
-      this.girder.setScale((h + 4) / this.girder.height);
+      // broader than it is drawn: a wall of it, not a post
+      const k = (full / 2 + 6) / this.textures.get('scene_girderwall').getSourceImage().height;
+      this.girder = this.add.image(x, y + 4, 'scene_girderwall').setOrigin(0.5, 1).setDepth(8).setScale(k * 1.7, k);
+      this.girderTop = this.add.image(x + 0.1 * m, y - full / 2 + 10, 'scene_girderwall').setOrigin(0.5, 1).setDepth(7.9)
+        .setScale(k * 1.6, k).setFlipX(true).setTint(0xd8d0c8);
     }
-    // solid all round: it is the thing that is in the way
-    const box = this.add.rectangle(x, y - h / 2, w, h, 0x000000, 0).setDepth(-1);
+    // solid all round, the whole height: it is the thing that is in the way
+    const box = this.add.rectangle(x, y - full / 2, w, full, 0x000000, 0).setDepth(-1);
     this.physics.add.existing(box, true);
     this.solidsW.push(box);
     this.physics.add.collider(this.player, box);
     this.girderBox = box;
     this._girderSparked = 0;
-    // From the slab beside it a jump would clear its top: the wall of the
-    // building goes on up behind it, so they do not. (Not a solid to bullets.)
-    const top = this.fy(0.18), bh = (y - h) - top;
+    // and above the opening the wall of the building goes on up: nothing
+    // gets over the top of it either. (Not a solid to bullets.)
+    const top = 0, bh = topY - top + 4;
     const cap = this.add.rectangle(x, top + bh / 2, w, bh, 0x000000, 0).setDepth(-1);
     this.physics.add.existing(cap, true);
     this.physics.add.collider(this.player, cap);
@@ -13248,6 +13799,11 @@ class EmbankmentScene extends WalkScene {
     this.solidsW = this.solidsW.filter(o => o !== b);
     this.girderBox = null;
     const gx = this.fx(EMB_GIRDER.x), gy = this.groundY;
+    if (this.girderTop) {
+      const t = this.girderTop; this.girderTop = null;
+      this.tweens.add({ targets: t, angle: (x <= gx ? 1 : -1) * 70, y: gy + 4, alpha: 0, duration: 900, ease: 'Quad.easeIn',
+                        onComplete: () => t.destroy() });
+    }
     if (this.girder) {
       // it goes over, away from the blast, and breaks up where it lands
       const away = x <= gx ? 1 : -1;
@@ -13271,20 +13827,19 @@ class EmbankmentScene extends WalkScene {
   // chains up the building face to the left roof. It runs by itself now, as
   // does the second one by the window that carries them up to the chest.
   _buildLift() {
-    const m = StoreScene.prototype._mover.call(this, {
-      x0: EMB_LIFT.x0, x1: EMB_LIFT.x1, y: EMB_GROUND, yTo: EMB_ROOF.y, ms: 3200, pause: 1800, live: true });
-    this.lift = m;
+    // (the lift up the left building is gone: the roof is theirs, the
+    // horde's way down, not the brothers' way up)
+    this.lift = null;
     const r = StoreScene.prototype._mover.call(this, {
       x0: EMB_RISER.x0, x1: EMB_RISER.x1, y: EMB_GROUND, yTo: EMB_SLAB.y, ms: 2400, pause: 1400, live: true });
     this.riser = r;
-    this.movers = [m, r];
-    this.liftChains = this.add.graphics().setDepth(3.5);
-    this._drawChains();
+    this.movers = [r];
+    this.liftChains = null;
   }
 
   _drawChains() {
     const m = this.lift, g = this.liftChains;
-    if (!m || !g) return;
+    if (!m || !g) return;   // (no lift any more)
     g.clear();
     const top = this.fy(0.2), left = m.im.x - m.w * 0.42, right = m.im.x + m.w * 0.42;
     g.lineStyle(3, 0x2c2622, 1);
@@ -13373,43 +13928,88 @@ class EmbankmentScene extends WalkScene {
     return Object.assign({ x, y, tx, ty, side: -1, spitDelay: 2600, boss: true }, EMB_CARRIER);
   }
 
-  // Its arrival, the first time this game: the picture goes to the window,
-  // it drops in with the key in its claws and screams, and back to them.
-  _carrierIntro() {
+  // Trying the chest wakes her. The first time this game, on camera; after
+  // that she is just up (and the brothers are on the walkway, as the
+  // cinematic would have left them).
+  _madreWake() {
+    if (this._fightOn || this._dead || this._carrierDead || this._waking) return;
+    this._waking = true;
+    if (firstCinematic('emb-madre')) this._madreIntro();
+    else { this._toFloor(); this._startFight(); }
+  }
+
+  // Both brothers down on the walkway, short of the riser, as if thrown there.
+  _toFloor() {
+    [this.player, this.player2].forEach((q, i) => {
+      if (!q || !q.active || !q.body) return;
+      q.setVelocity(0, 0);
+      q.x = this.fx(0.6 - i * 0.03);
+      q.y += this.groundY - q.body.bottom;
+      q.body.updateFromGameObject && q.body.updateFromGameObject();
+      q._facing = 1;
+    });
+  }
+
+  // She comes down over the window, face on, and screams; one beat of those
+  // wings throws them off the slab; and then they are down on the walkway,
+  // getting up, and the fight is on.
+  _madreIntro() {
     if (this._dead || this._transitioning) return;
-    const cam = this.cameras.main, p = this.player, H = this.charH;
+    const cam = this.cameras.main, H = this.charH;
     this._holdInput = true;
     this._calmIdle = true;
+    this._inConversation = true;
     cam.stopFollow();
-    cam.pan(this.fx(0.62), this.fy(0.42), 1100, 'Sine.easeInOut', true);
-    const tx = this.fx(0.72), ty = this.groundY - EMB_CARRIER.alt * H;
-    this.time.delayedCall(700, () => {
-      this._carrier = this.spawnFlyer(this._carrierOpts(this.fx(1.06), this.fy(0.02), tx, ty));
-      this._keyOnCarrier();
+    this._hudCamOn && this._hudCamOn();
+    const bars = [0, 1].map(i => this.add.rectangle(640, i ? 720 : 0, 1280, 110, 0x000000, 1)
+      .setOrigin(0.5, i ? 0 : 1).setScrollFactor(0).setDepth(92));
+    this._sortNew();
+    this.tweens.add({ targets: bars[0], y: 55, duration: 400, ease: 'Sine.easeOut' });
+    this.tweens.add({ targets: bars[1], y: 665, duration: 400, ease: 'Sine.easeOut' });
+    cam.pan(this.fx(0.72), this.fy(0.36), 1000, 'Sine.easeInOut', true);
+    const at = (ms, fn) => this.time.delayedCall(ms, () => { if (!this._dead && this.scene.isActive()) fn(); });
+    const tx = this.fx(0.74), ty = this.groundY - EMB_CARRIER.alt * H;
+    // down out of the dark over the window, fast, into the picture
+    at(400, () => { this._carrier = this.spawnFlyer(Object.assign(this._carrierOpts(this.fx(0.74), this.fy(0.02), tx, ty), { enterV: 3.2 })); this._keyOnCarrier(); });
+    at(2100, () => {
+      const f = this._carrier; if (!f || !f.active) return;
+      Sfx.ensure(); Sfx.roar(); Sfx.roar(); cam.shake(700, 0.008);
+      this._screamLines(f.x, f.y + 0.1 * H * f._k, 1300, f._k);
     });
-    this.time.delayedCall(2500, () => {
-      const f = this._carrier;
-      if (!f || !f.active) return;
-      Sfx.ensure(); Sfx.roar(); Sfx.roar(); cam.shake(600, 0.007);
-      this._screamLines(f.x, f.y, 1300, f._k);
+    // the wingbeat
+    at(3500, () => {
+      Sfx.ensure(); Sfx.swoop(); Sfx.burst(0.4, 0.5, 300, 0.8); cam.shake(400, 0.012);
+      cam.flash(160, 255, 240, 220);
+      cam.fadeOut(260, 0, 0, 0);
     });
-    this.time.delayedCall(3500, () => this._say([['PLAYER', "That one's got a key in its claws."]]));
-    this.time.delayedCall(4700, () => {
-      if (!p.active) return;
-      cam.pan(p.x, p.y, 900, 'Sine.easeInOut', true, (c, t) => {
-        if (t < 1 || !p.active) return;
-        cam.startFollow(p, false, 0.1, 0.1);
-        this._look = 0;
-        this._holdInput = false;
-        this._calmIdle = false;
-        this._startFight();
-      });
+    // cut: on the walkway, getting up
+    at(3800, () => {
+      this._toFloor();
+      const p = this.player;
+      cam.centerOn(p.x + 0.2 * this.bgGeom.w * 0.1, p.y - 0.4 * H);
+      cam.fadeIn(300, 0, 0, 0);
+      [this.player, this.player2].forEach(q => { if (q && q.active && q._hero) playOnce(q, heroHas(q._hero, 'getup') ? 'getup' : 'land', 1); });
+      Sfx.land();
+    });
+    at(4600, () => this._say([['PLAYER', "She's got the key."]]));
+    at(5400, () => {
+      const p = this.player;
+      cam.startFollow(p, false, 0.1, 0.1);
+      this._look = 0;
+      this.tweens.add({ targets: bars[0], y: 0, duration: 380, ease: 'Sine.easeIn' });
+      this.tweens.add({ targets: bars[1], y: 720, duration: 380, ease: 'Sine.easeIn', onComplete: () => bars.forEach(b => b.destroy()) });
+      this._holdInput = false;
+      this._calmIdle = false;
+      this._inConversation = false;
+      this._startFight();
     });
   }
 
   _startFight() {
     if (this._fightOn || this._dead || this._carrierDead) return;
     this._fightOn = true;
+    this._hordeArmed = false;
+    this._madreUp = true;
     const H = this.charH;
     if (!this._carrier || !this._carrier.active) {
       this._carrier = this.spawnFlyer(this._carrierOpts(this.fx(1.06), this.fy(0.02),
@@ -13427,10 +14027,28 @@ class EmbankmentScene extends WalkScene {
     this.onFlyerKilled = (x, f) => this._embFlyerDown(x, f);
     this.onFlyerHurt = (f) => { if (f === this._carrier) { this._lastHurtAt = this.time.now; this._paintBossBar(); this._halfCall(); } };
     this._callTimer = this.time.addEvent({ delay: 500, loop: true, callback: () => this._carrierTick() });
-    // two of them to begin with, out of the doorway and the canal
-    this.time.delayedCall(900, () => this._embSpawn('door'));
-    this.time.delayedCall(1700, () => this._embSpawn('canal'));
-    this._showTip('IT HAS THE KEY  —  SHOOT IT, OR SWING INTO ITS SPIKES TO SEND THEM BACK');
+    // and her horde with her, all at once
+    const from = ['door', 'canal', 'road', 'roof', 'door', 'canal'];
+    for (let i = 0; i < EMB_WAVE; i++) this.time.delayedCall(700 + i * 200, () => this._embSpawn(from[i], true));
+    this._showTip(EMB_MADRE_NAME + ' HAS THE KEY  ·  SHOOT HER, OR SWING INTO HER FIRE TO SEND IT BACK');
+  }
+
+  // Brought down: she barely feels it on the ground, and screams her young
+  // out of the sky.
+  _madreDown(f) {
+    if (f !== this._carrier || this._dead) return;
+    this.time.delayedCall(300, () => {
+      if (!f.active || !f._alive) return;
+      this._carrierScream(f);
+      const young = this.flyers.filter(q => q._alive && q._young).length;
+      for (let i = 0; i < Math.min(2, 4 - young); i++) this.time.delayedCall(500 + i * 400, () => {
+        if (this._dead || this._carrierDead) return;
+        const q = this.spawnFlyer(Object.assign({ x: this.fx(i ? 1.04 : -0.04), y: this.fy(0.05), side: i ? -1 : 1,
+                                                  spitDelay: 2600 }, EMB_YOUNG));
+        if (q) q._young = true;
+      });
+      if (once('emb-young')) this._showTip('ON THE GROUND SHE BARELY FEELS IT  ·  HER YOUNG ARE COMING');
+    });
   }
 
   // The key, hanging from its claws, glinting.
@@ -13445,7 +14063,7 @@ class EmbankmentScene extends WalkScene {
   _syncCarrierKey() {
     const k = this._carrierKey, f = this._carrier;
     if (!k) return;
-    if (!f || !f.active || f._state === 'melt') { k.destroy(); this._carrierKey = null; return; }
+    if (!f || !f.active || f._state === 'melt' || f._state === 'burst') { k.destroy(); this._carrierKey = null; return; }
     const H = this.charH * (f._k || 1), face = f.flipX ? -1 : 1, t = this.time.now;
     if (f._pose === 'stand') k.setPosition(f.x + face * 0.12 * H, f.y - 0.25 * H).setAngle(60);
     else k.setPosition(f.x - face * 0.05 * H, f.y + 0.3 * H).setAngle(80 + Math.sin(t / 260) * 12);
@@ -13456,7 +14074,7 @@ class EmbankmentScene extends WalkScene {
   _buildBossBar() {
     (this._bossBar || []).forEach(o => o.destroy());
     const W = 420, x = 640 - W / 2, y = 96;      // under the stage's title
-    const lab = this.add.text(640, y - 12, 'THE CARRIER', { fontFamily: F_UI, fontSize: '13px', fontStyle: '700',
+    const lab = this.add.text(640, y - 12, EMB_MADRE_NAME, { fontFamily: F_UI, fontSize: '13px', fontStyle: '700',
       color: '#ff8a7a', stroke: '#140404', strokeThickness: 4 }).setOrigin(0.5, 1);
     const bg = this.add.rectangle(x - 3, y, W + 6, 14, 0x140404, 0.9).setOrigin(0, 0.5).setStrokeStyle(2, 0x5a1010, 1);
     const lag = this.add.rectangle(x, y, W, 8, 0xf2d0a0, 0.9).setOrigin(0, 0.5);
@@ -13482,6 +14100,9 @@ class EmbankmentScene extends WalkScene {
     const f = this._carrier;
     if (this._calledFlyer || !f || !f._alive || f._hp > f._hpMax / 2) return;
     this._calledFlyer = true;
+    // half gone, she is angrier: quicker, wider fire
+    f._spitGap = [1200, 1900];
+    f._fan = [-0.45, -0.3, -0.15, 0, 0.15, 0.3, 0.45];
     this._carrierScream(f);
     this.time.delayedCall(900, () => {
       if (this._dead || this._carrierDead) return;
@@ -13515,8 +14136,8 @@ class EmbankmentScene extends WalkScene {
 
   // One of the horde, out of one of the places they come from. Not the one
   // the brothers are standing at.
-  _embSpawn(where) {
-    if (this._dead || this._transitioning || this._holdInput) return null;
+  _embSpawn(where, wave) {
+    if (this._dead || this._transitioning || (this._holdInput && !wave)) return null;
     const cap = EMB_ALIVE + (this.player2 && this.player2.active ? 1 : 0);
     if (this.enemiesAlive() >= cap) return null;
     const W = this.bgGeom.w;
@@ -13590,7 +14211,7 @@ class EmbankmentScene extends WalkScene {
     // the key comes away when it hits the walkway
     const wait = () => {
       if (this._dead) return;
-      if (f.active && f._state !== 'melt') { this.time.delayedCall(120, wait); return; }
+      if (f.active && f._state !== 'melt' && f._state !== 'burst') { this.time.delayedCall(120, wait); return; }
       this._dropKey(f.x, false);
     };
     wait();
@@ -13598,6 +14219,13 @@ class EmbankmentScene extends WalkScene {
   }
 
   _embCheck() {
+    // the opening horde down: on to the chest
+    if (this._preFight && !this._fightOn && this.enemiesAlive() === 0) {
+      this._preFight = false;
+      stopTrack(2500);
+      this.time.delayedCall(900, () => { if (!this._dead && !this._fightOn) this._showTip('THE CHEST  ·  UP ON THE SLAB BY THE GIRDER'); });
+      return;
+    }
     if (!this._carrierDead || this.enemiesAlive() > 0 || this.flyersAlive() > 0 || !this._fightOn) return;
     this._fightOn = false;
     stopTrack(3000);
@@ -13646,12 +14274,15 @@ class EmbankmentScene extends WalkScene {
   // ---- E -----------------------------------------------------------------
   _useE(p) {
     if (!p || this._holdInput || this._inConversation || this._transitioning || this._dead) return;
+    if (this._atSoldier(p)) { this._takeRifle(p); return; }
     if (!this._atChestP(p)) return;
     if (this._chestReady()) this._takeGrenades(p);
     else if (!this._hasKey && !this._chestTaken) {
       Sfx.ensure(); Sfx.blip(180, 0.15, 'square', 0.05, 140);
-      this._showTip(this._carrierDead ? 'LOCKED  —  THE KEY IS SOMEWHERE ON THE WALKWAY'
-                                      : 'LOCKED  —  THE BIG ONE HAS THE KEY');
+      // the lock rattles, and something above the window hears it
+      if (!this._fightOn && !this._carrierDead && !this._wallDown) { this._madreWake(); return; }
+      this._showTip(this._carrierDead ? 'LOCKED  ·  THE KEY IS SOMEWHERE ON THE WALKWAY'
+                                      : 'LOCKED  ·  ' + EMB_MADRE_NAME + ' HAS THE KEY');
     }
   }
 
@@ -13672,6 +14303,7 @@ class EmbankmentScene extends WalkScene {
     // Wolffel's E (his pad's Y) works the same things
     const p2 = this.player2;
     if (p2 && p2.active && Phaser.Input.Keyboard.JustDown(P2Pad.key('E'))) this._useE(p2);
+    if (this.girderTop && this.girder) this.girderTop.setVisible(this.girder.visible);
     // a blade on the girder only sparks (rounds: onBulletHitSolid)
     if (this.girderBox) {
       const b = this.girderBox;
@@ -13684,11 +14316,15 @@ class EmbankmentScene extends WalkScene {
     this._carryLift(delta);
     this._syncCarrierKey();
     this._updateKey();
+    // the opening horde: on the rifle, or on walking in past the soldier
+    if (this._hordeArmed && !this._holdInput && !this._burning && this.player.x > this.fx(0.24)) this._openingHorde();
+    if (this.soldierLabel) this.soldierLabel.setAlpha([this.player, p2].some(q => q && q.active && this._atSoldier(q)) ? 1 : 0);
     // the prompt over the chest
     if (this.chestLabel) {
       const near = [this.player, p2].some(q => q && q.active && this._atChestP(q));
       const locked = !this._hasKey && !this._chestTaken;
-      this.chestLabel.setText(locked ? 'LOCKED' : this._chestTaken ? 'E  —  TAKE THE GRENADES' : 'E  —  UNLOCK THE CHEST');
+      const asleep = locked && !this._fightOn && !this._carrierDead;
+      this.chestLabel.setText(asleep ? 'E  ·  OPEN THE CHEST' : locked ? 'LOCKED' : this._chestTaken ? 'E  ·  TAKE THE GRENADES' : 'E  ·  UNLOCK THE CHEST');
       this.chestLabel.setAlpha(near && (locked || this._chestReady()) ? 1 : 0);
     }
   }

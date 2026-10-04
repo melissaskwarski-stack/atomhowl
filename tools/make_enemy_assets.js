@@ -26,10 +26,14 @@ const ENEMIES = {
     clips: {
       walk:   'alien_walk_west.gif',
       lungeA: 'alien_lunge_a_west.gif',
-      lungeB: 'alien_lunge_b_west.gif'
+      lungeB: 'alien_lunge_b_west.gif',
+      // enemy with better run..gif: closing in at speed. Frames 0-2 are it
+      // standing and gathering; 3-24 are the run itself, looped.
+      run:    'alien_run_west.gif'
     },
-    fps: { walk: 9, lungeA: 14, lungeB: 13 },
-    loop: { walk: true, lungeA: false, lungeB: false }
+    range: { run: [3, 24] },
+    fps: { walk: 9, lungeA: 14, lungeB: 13, run: 18 },
+    loop: { walk: true, lungeA: false, lungeB: false, run: true }
   },
 
   // A thorny thing that lives on walls. It does not walk anywhere — it clings,
@@ -81,6 +85,8 @@ for (const [name, cfg] of Object.entries(ENEMIES)) {
   for (const [key, file] of Object.entries(cfg.clips)) {
     if (!fs.existsSync(A(file))) { console.log('MISSING', file); continue; }
     const d = decodeGif(A(file));
+    const r = cfg.range && cfg.range[key];
+    if (r) d.frames = d.frames.slice(r[0], r[1] + 1);
     d.boxes = d.frames.map(f => box(f, d.W, d.H));
     clips[key] = d;
     console.log(`${name}.${key}: ${d.W}x${d.H} ${d.frames.length}f`);

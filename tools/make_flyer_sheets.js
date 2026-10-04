@@ -11,6 +11,9 @@
 //   fly side.gif             8 frames, side on, facing east: one whole beat
 //                            of the wings. This is it flying; the glide at
 //                            the head of the spit clip is only its wind-up.
+//   explode death.gif        21 frames, side on: the burst when it is killed
+//                            in the air (the body, then a red spray out of it)
+//   front view flying.gif    8 frames, face on: the boss's own flight
 //   death of enemy 2.gif     25 frames: it melts to red (0-16), then its
 //                            head drops and splashes (17-24). Only the melt
 //                            is kept: the game dissolves the body after it
@@ -30,6 +33,10 @@ const CLIPS = [
   { name: 'fly',   src: 'flyer_flyspit.gif', out: 'flyer_flyspit_sheet.png', frames: null, cols: 8 },
   { name: 'side',  src: 'flyer_side.gif',    out: 'flyer_side_sheet.png',    frames: null, cols: 8 },
   { name: 'death', src: 'flyer_death.gif',   out: 'flyer_death_sheet.png',   frames: [0, 16], cols: 9 },
+  // explode death.gif: killed in the air it bursts, a red spray out of it
+  { name: 'explode', src: 'flyer_explode.gif', out: 'flyer_explode_sheet.png', frames: null, cols: 7 },
+  // front view flying.gif: the big one, face on, wings beating
+  { name: 'front', src: 'flyer_front.gif',   out: 'flyer_front_sheet.png',   frames: null, cols: 8 },
 ];
 const PAD = 2;
 
@@ -85,6 +92,14 @@ for (const c of CLIPS) {
 {
   const m = meta.death, bx = L.bbox(m.frames[0], 256, 256);
   console.log(`death feet (cell px): x ${Math.round((bx.minX + bx.maxX) / 2) - m.ox}, y ${bx.maxY - m.oy}, standing height ${bx.maxY - bx.minY + 1}`);
+}
+
+{
+  for (const n of ['explode', 'front']) {
+    const m = meta[n], bx = L.bbox(m.frames[0], 256, 256);
+    console.log(`${n} body centre (cell px): x ${Math.round((bx.minX + bx.maxX) / 2) - m.ox}, y ${Math.round((bx.minY + bx.maxY) / 2) - m.oy}` +
+                ` (gif ${Math.round((bx.minX + bx.maxX) / 2)}, ${Math.round((bx.minY + bx.maxY) / 2)}), frame-0 size ${bx.maxX - bx.minX + 1}x${bx.maxY - bx.minY + 1}`);
+  }
 }
 
 // The spike: trimmed to its drawing and box-filtered down to 300px long.

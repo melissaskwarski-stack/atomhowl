@@ -481,13 +481,30 @@ function heroAim(L, clips, cfg, dir, CW, CH, cut) {
     emit('aimrun', d, hs, false);
     emit('aimrunW', d, hs, true);
   }
-  // crouched
+  // crouched: down on a knee, from the end of his own crouch clip
   {
     const src = clips[lg.crouch.clip], i = lg.crouch.frame;
-    const f = legs(src.frames[i], src.W, src.H, { cut: lg.crouch.cut, erase: lg.crouch.erase });
+    const f = legs(src.frames[i], src.W, src.H, { cut: lg.crouch.cut, erase: lg.crouch.erase, skin: !!lg.crouch.skin });
     const d = { W: src.W, H: src.H, frames: [f], boxes: [src.boxes[i]], _groundRow: src._groundRow };
     emit('aimcrouch', d, [lg.crouch.hip], false);
     emit('aimcrouchW', d, [lg.crouch.hip], true);
+  }
+  // in the air: his own jump clip's legs — going up, at the top, coming down —
+  // each cut at the belt, the hands that hang past it cleared, and the hip
+  // found on the pelvis the way the run's is
+  if (lg.air && clips[lg.air.clip]) {
+    const src = clips[lg.air.clip], A2 = lg.air, out = [], hs = [], boxes = [];
+    const ic = lg.idle.cut.y, idleLegs = legs(sw.frames[lg.idle.frame], sw.W, sw.H, { cut: lg.idle.cut });
+    const calib = cfg.hip[0] - pelvisX(idleLegs, sw.W, ic + (A2.probe || 3), 2);
+    A2.frames.forEach((fi, n) => {
+      const cy = A2.cuts[n];
+      const im = legs(src.frames[fi], src.W, src.H, { cut: { x: 0, y: cy }, erase: A2.erase || [], skin: true });
+      out.push(im); boxes.push(src.boxes[fi]);
+      hs.push([pelvisX(im, src.W, cy + (A2.probe || 3), 2) + calib + ((A2.dx || [])[n] || 0), cy + (cfg.hip[1] - ic)]);
+    });
+    const d = { W: src.W, H: src.H, frames: out, boxes, _groundRow: src._groundRow, _pinEach: src._pinEach };
+    emit('aimairs', d, hs, false);
+    emit('aimairsW', d, hs, true);
   }
   const A = (k, fps, rep) => ({ fps, repeat: rep === undefined ? -1 : rep, keys: k });
   const rev = a => a.slice().reverse();
@@ -498,10 +515,16 @@ function heroAim(L, clips, cfg, dir, CW, CH, cut) {
     // he keeps the gun on what he is facing) plays the same strides backwards.
     aimrun: A(keys.aimrun, lg.run.fps || 14), aimrunW: A(keys.aimrunW, lg.run.fps || 14),
     aimrunB: A(rev(keys.aimrun), lg.run.fps || 14), aimrunBW: A(rev(keys.aimrunW), lg.run.fps || 14),
-    // off the ground he keeps aiming, on the stride with the legs most apart
-    aimair: A([keys.aimrun[air]], 4), aimairW: A([keys.aimrunW[air]], 4),
+    // off the ground he keeps aiming: on his jump's legs (up, top, down) if
+    // they were cut, else on the stride with the legs most apart
+    aimair: A([keys.aimairs ? keys.aimairs[1] : keys.aimrun[air]], 4),
+    aimairW: A([keys.aimairsW ? keys.aimairsW[1] : keys.aimrunW[air]], 4),
     aimcrouch: A(keys.aimcrouch, 4), aimcrouchW: A(keys.aimcrouchW, 4)
   };
+  if (keys.aimairs) ['up', 'top', 'down'].forEach((ph, n) => {
+    anims['aimair' + ph] = A([keys.aimairs[n]], 4);
+    anims['aimair' + ph + 'W'] = A([keys.aimairsW[n]], 4);
+  });
   packed.meta.hips = hips;
   return { frames, anims, aim: packed.meta };
 }

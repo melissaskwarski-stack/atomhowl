@@ -48,7 +48,12 @@ module.exports = {
       // moving: the walk-and-fire clip, already what he does moving with a gun
       run: { clip: 'run', cut: 132, probe: 3, fps: 14, air: 4 },
       crouch: { clip: 'crouch', frame: 5, cut: { x: 92, y: 138, slope: 0.12 },
-                erase: [[146, 134, 178, 186]], hip: [104, 140] }
+                erase: [[146, 134, 178, 186]], hip: [104, 140] },
+      // wolffel jump.gif: 2 off the floor going up, 4 tucked at the top, 6 the
+      // legs coming down. Cut at the belt; his gloved hands that hang past it
+      // (the back one by the seat, the front fist by the knee) go.
+      air: { clip: 'jump', frames: [2, 4, 6], cuts: [123, 119, 119], probe: 3,
+             erase: [[30, 115, 89, 165], [138, 112, 205, 134]] }
     }
   },
   ew: {
@@ -74,8 +79,14 @@ module.exports = {
       idle: { frame: 20, cut: { x: 0, y: 106 }, fromBack: 16 },
       // the run-and-fire clip is drawn facing west (east is its mirror)
       run: { clip: 'sprint', cut: 110, probe: 3, fps: 14, air: 4 },
-      crouch: { clip: 'crouch', frame: 9, cut: { x: 60, y: 176, slope: 0.3 },
-                erase: [[102, 200, 124, 228]], hip: [84, 184] }
+      // down on one knee, the end of his crouch clip. Cut level just under the
+      // belt so the front thigh stays whole, the trail of him going down (the
+      // ghosts behind him) and his hands on the knee cleared.
+      crouch: { clip: 'crouch', frame: 9, cut: { x: 0, y: 182 }, skin: true,
+                erase: [[0, 150, 62, 199], [96, 150, 120, 186]], hip: [82, 184] },
+      // the jump: 4 lifting off, 6 tucked at the top, 7 coming down
+      air: { clip: 'jump', frames: [4, 6, 7], cuts: [109, 113, 113], probe: 3,
+             erase: [[40, 105, 106, 160], [150, 105, 205, 132]] }
     }
   }
 };

@@ -102,6 +102,10 @@ const SCENE_SRC = {
   swordone:  ['public/assets/sword_single.png'],
   swordpair: ['public/assets/sword_pair.png'],
   pistolbullet: ['public/assets/pistol_bullet.png'],
+  // the dead soldier on the embankment, with his rifle and after it is taken
+  // (tools/make_soldier.js)
+  soldier:        ['public/assets/soldier.png'],
+  soldiernorifle: ['public/assets/soldier_norifle.png'],
   leveroff:  ['public/assets/lever_off.png'],
   leveron:   ['public/assets/lever_on.png'],
   // ---- THE STORAGE ROOMS -----------------------------------------------
@@ -170,6 +174,8 @@ const SCENE_SRC = {
   flyerfly:     ['public/assets/flyer_flyspit_sheet.png'],
   flyerside:    ['public/assets/flyer_side_sheet.png'],
   flyerdeath:   ['public/assets/flyer_death_sheet.png'],
+  flyerexplode: ['public/assets/flyer_explode_sheet.png'],
+  flyerfront:   ['public/assets/flyer_front_sheet.png'],
   flyerspike:   ['public/assets/flyer_spike.png'],
   // the embankment past the tienda: the painting, and its props
   // (tools/make_puzzle_assets.js)
