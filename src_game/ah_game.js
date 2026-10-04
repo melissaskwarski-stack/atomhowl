@@ -4382,6 +4382,35 @@ function makeGlyph(scene, x, y, label, depth) {
   }
   return c;
 }
+// ---- the use key on a controller ----------------------------------------
+// The stages' prompts are written with the keyboard's use key: "E  ·  OPEN
+// THE CHEST", "... ON THE BENCH  —  E". On a controller that button is Y, so
+// while the pad is what is being played a stage's text shows Y instead: a
+// line that starts with the key gets the pad's own button in front of it (a
+// ring of Y's yellow, makeGlyph) and loses the letter; a key inside a line
+// becomes the circled letter. Switching between keyboard and pad switches
+// what is already on screen (WalkScene._syncPadPrompts).
+const PROMPT_LEAD = /^E\s+(?:[—·]\s+)?/;
+const PROMPT_ANY  = /(^|\s)E(?=\s|$|[.,!?])/;
+const PROMPT_MID  = /(^|\s)E(?=\s|$|[.,!?])/g;
+if (typeof Phaser !== 'undefined') {
+  const _setText = Phaser.GameObjects.Text.prototype.setText;
+  Phaser.GameObjects.Text.prototype.setText = function (value) {
+    let v = value;
+    this._leadY = false;
+    let stage = false;
+    try { stage = !!this.scene && this.scene instanceof WalkScene; } catch (e) { /* (before the stages exist) */ }
+    if (typeof v === 'string' && stage) {
+      this._rawText = v;
+      if (InputMode.p1 === 'pad' && PROMPT_ANY.test(v)) {
+        if (PROMPT_LEAD.test(v)) { v = v.replace(PROMPT_LEAD, ''); this._leadY = true; }
+        v = v.replace(PROMPT_MID, '$1Ⓨ');
+      }
+    }
+    return _setText.call(this, v);
+  };
+}
+
 // A row of prompts: [[glyph label or null, text], ...], laid out from x.
 // align 'left' | 'center' | 'right' about x. Returns the container.
 function makePrompts(scene, x, y, items, align, depth) {
@@ -5573,17 +5602,25 @@ class ModeSelectScene extends Phaser.Scene {
     if (this._going) return;
     this._going = true;
     Sfx.ensure(); Sfx.select();
+    // No flash: the one chosen warms and comes forward a little, the other
+    // falls back into the dark, and then the whole screen eases out.
     const k = this._cards[this._cur];
-    this.tweens.add({ targets: k.c, scale: 1.09, duration: 120, yoyo: true });
-    this.cameras.main.flash(160, 255, 210, 140);
+    this.tweens.killTweensOf([k.c, k.glow]);
+    this.tweens.add({ targets: k.c, scale: 1.06, duration: 520, ease: 'Sine.easeOut' });
+    if (k.glow) this.tweens.add({ targets: k.glow, alpha: 0.6, duration: 520, ease: 'Sine.easeOut' });
+    this._cards.forEach((o, i) => {
+      if (i === this._cur) return;
+      this.tweens.killTweensOf(o.c);
+      this.tweens.add({ targets: o.c, alpha: 0.18, y: o.y + 18, scale: 0.94, duration: 480, ease: 'Sine.easeOut' });
+    });
     resetProgress();
     GameState.castId = 'eterwolf';
     const multi = this._cur === 1;
     GameState.coop = false;
     P2Pad.assigned = null;
     // the song carries on into the character select; into the game, it goes
-    if (!multi) stopMusic(700);
-    this.cameras.main.fadeOut(600, 0, 0, 0);
+    if (!multi) stopMusic(1300);
+    this.time.delayedCall(380, () => this.cameras.main.fadeOut(950, 0, 0, 0));
     this.cameras.main.once('camerafadeoutcomplete',
       () => this.scene.start(multi ? 'CoopSelectScene' : 'IntroDialogueScene'));
   }
@@ -5750,12 +5787,13 @@ class CoopSelectScene extends Phaser.Scene {
     this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('ModeSelectScene'));
   }
 
+  // a warm lift of light over him, not a white flash
   _flash(img) {
-    img.setTintFill(0xffffff);
-    this.time.delayedCall(90, () => img.clearTint());
+    img.setTint(0xffe2b8);
+    this.time.delayedCall(220, () => img.active && img.clearTint());
   }
 
-  // The pick: a flash and a punch, he draws into his stance, light off the
+  // The pick: a warm glow and a punch, he draws into his stance, light off the
   // pedestal, and he is ready.
   _select(sd) {
     sd.ready = true;
@@ -7059,6 +7097,30 @@ class WalkScene extends Phaser.Scene {
     [this._sayText, this._sayName].forEach(t => t && t.setScale(1));
   }
 
+  // The pad's Y in front of each prompt that leads with the use key, kept on
+  // its line (where it is, whether it shows, how see-through), and every
+  // prompt redone when the player goes from keyboard to pad or back.
+  _syncPadPrompts() {
+    const pad = InputMode.p1 === 'pad', T = Phaser.GameObjects.Text;
+    if (pad !== this._promptPad) {
+      this._promptPad = pad;
+      this.children.list.forEach(o => { if (o instanceof T && o._rawText != null && PROMPT_ANY.test(o._rawText)) o.setText(o._rawText); });
+    }
+    this.children.list.forEach(o => {
+      if (!(o instanceof T)) return;
+      let g = o._yGlyph;
+      if (!o._leadY || !o.active) { if (g) { g.destroy(); o._yGlyph = null; } return; }
+      if (!g || !g.scene) {
+        g = o._yGlyph = makeGlyph(this, 0, 0, 'Y', o.depth);
+        g.setScrollFactor(o.scrollFactorX, o.scrollFactorY);
+        o.once('destroy', () => { if (g.scene) g.destroy(); });
+      }
+      const k = o.scaleX * 0.8, b = o.getBounds();
+      g.setScale(k).setDepth(o.depth).setAlpha(o.alpha).setVisible(o.visible)
+        .setPosition(b.x - (g._w + 7) * k, b.centerY);
+    });
+  }
+
   _sortCams() {
     if (!this.hudCam) return;
     const main = this.cameras.main;
@@ -7486,6 +7548,7 @@ class WalkScene extends Phaser.Scene {
     this._updateInspects();
     this._paintInventory();
     this._updateCamera(onGround);
+    this._syncPadPrompts();
     this._sortCams();
     if (this._hintMode !== InputMode.p1) { this._hintMode = InputMode.p1; this._refreshHint(); }
 
@@ -8623,6 +8686,7 @@ const WalkCombat = {
       b._dmg = G.dmg * ((this.furyActive && this.furyActive()) ? 2 : 1) * (fire ? 1.5 : 1);
       b._fire = fire;
       if (b._dmg > G.dmg) this._hotRound(b);
+      else if (box.fire) this._goldRound(b);
       // The first step is tested from his shoulder, not from the muzzle, or an
       // alien already on top of him sits between the two and every round misses.
       b._x0 = mz.X + f * rig.m.shoulder[0] * rig.sx; b._y0 = mz.Y + rig.m.shoulder[1] * rig.sy;
@@ -8682,6 +8746,11 @@ const WalkCombat = {
   _hotRound(b) {
     if (b._trail) { b._trail.setTint(0xff9a30).setAlpha(0.9); b.setScale(b.scaleX * 1.25); }
     else b.setTint(0xffb040).setScale(b.scaleX * 1.3);
+  },
+  // a magazine loaded on the gold: every round of it goes out lit gold
+  _goldRound(b) {
+    b.setTint(0xffe08a);
+    if (b._trail) b._trail.setTint(0xffd36a).setAlpha(0.8);
   },
 
   // A fire round sets an alien burning: two licks of fire, a little each.
@@ -9972,7 +10041,8 @@ const WalkGrenades = {
       const slot = this._slotOf(p), G = this._gunOf(p), box = G ? this._box(p) : null;
       this._ammo(p);
       out.push('gun:' + slot + ':' + (box ? box.mag : 0) + ':' + (box ? (isFinite(box.res) ? box.res : 'inf') : 0) + ':' +
-               (p._reload ? 'r' : '') + (box && box.fire ? 'f' : '') + (GameState.hasRifle ? 'R' : '') + ':' + this.grenadesOf(p));
+               (p._reload ? 'r' : '') + (box && box.fire ? 'f' : '') + (GameState.hasRifle ? 'R' : '') + ':' + this.grenadesOf(p) +
+               ':' + (box && box.fire ? (box.n || 0) : 0));
     }
     const n = this.grenadesOf(p);
     if (n > 0 || this._grenadeStage) out.push('grenade:' + n);
@@ -9983,27 +10053,57 @@ const WalkGrenades = {
   // The gun in hand and Gears' cross beside it: up the grenades, left the
   // rifle, right the secondary, down the pistol; the one in hand lit.
   _paintGunSlot(add, it, cx, cy, SLOT) {
-    const [, slot, mag, res, flags, gren] = it.split(':');
-    const lx = cx - 22, ix = lx, iy = cy - 8;
+    const [, slot, mag, res, flags, gren, nShot] = it.split(':');
+    const lx = cx - 22, ix = lx, iy = cy - 15;
     if (slot === 'rifle') {
       makeGunTexture(this, 'rifle');
       const im = add(this.add.image(ix, iy, 'gun_rifle'));
-      im.setScale(62 / im.width);
+      im.setScale(60 / im.width);
     } else if (slot === 'pistol' && this.textures.exists('scene_pistolsprite')) {
       const im = add(this.add.image(ix, iy, 'scene_pistolsprite'));
       const art = paintedBox(this, 'scene_pistolsprite'), pw = art ? art.pw : im.width;
       if (art) im.setOrigin((art.x0 + pw / 2) / art.w, (art.y0 + art.ph / 2) / art.h);
-      im.setScale(42 / pw);
+      im.setScale(38 / pw);
     } else if (slot === 'grenade' && this.textures.exists('scene_grenade')) {
-      const im = add(this.add.image(ix, iy, 'scene_grenade'));
+      const im = add(this.add.image(ix, iy + 4, 'scene_grenade'));
       im.setScale(30 / im.height);
     }
     const fire = flags.indexOf('f') >= 0, rel = flags.indexOf('r') >= 0;
+    // The magazine, round by round: the pistol's eight as bullets standing in a
+    // row, the rifle's thirty as a strip. Loaded on the gold, what is left of it
+    // is lit gold, and the fire rounds in it (every fourth) brighter still.
+    const G = GUNS[slot];
+    if (G && !rel) {
+      const left = +mag, max = G.mag, n = +(nShot || 0), y = cy + 8;
+      const isFire = j => fire && (n + j) % 4 === 3;
+      // lit: a gold glow behind the row while the magazine is a perfect one
+      if (fire && left > 0) {
+        const glow = add(this.add.graphics()).setBlendMode(Phaser.BlendModes.ADD);
+        const gw = slot === 'pistol' ? max * 6 + 8 : max * 2.6 + 8;
+        glow.fillStyle(0xffc040, 0.22).fillRoundedRect(lx - gw / 2, y - 10, gw, 20, 6);
+        glow.fillStyle(0xffe08a, 0.25).fillRoundedRect(lx - gw / 2 + 3, y - 6, gw - 6, 12, 4);
+      }
+      if (slot === 'pistol' && this.textures.exists('scene_pistolbullet')) {
+        const w = 6, x1 = lx - (max * w) / 2 + w / 2;
+        for (let j = 0; j < max; j++) {
+          const b = add(this.add.image(x1 + j * w, y, 'scene_pistolbullet').setAngle(-90));
+          b.setScale(13 / b.width).setAlpha(j < left ? 1 : 0.16);
+          if (j < left && fire) b.setTintFill(isFire(j) ? 0xff9a30 : 0xffd84a);
+        }
+      } else {
+        const g2 = add(this.add.graphics()), w = 2, gap = 0.6, x1 = lx - (max * (w + gap)) / 2;
+        for (let j = 0; j < max; j++) {
+          const live = j < left;
+          g2.fillStyle(!live ? 0x3a3029 : isFire(j) ? 0xff9a30 : fire ? 0xffd36a : 0xe8dcc0, 1);
+          g2.fillRect(x1 + j * (w + gap), y - (isFire(j) && live ? 6 : 5), w, isFire(j) && live ? 12 : 10);
+        }
+      }
+    }
     const txt = slot === 'grenade' ? '×' + gren
               : rel ? 'RELOAD'
-              : mag + ' | ' + (res === 'inf' ? '∞' : res);
-    add(this.add.text(lx, cy + 26, txt, { fontFamily: F_UI, fontSize: rel ? '11px' : '14px', fontStyle: '700',
-      color: rel ? '#e0a040' : fire ? '#ffb040' : (+mag === 0 && slot !== 'grenade') ? '#e0523a' : '#f0e6d4',
+              : (res === 'inf' ? '∞' : res + ' SPARE');
+    add(this.add.text(lx, cy + (rel ? 14 : 30), txt, { fontFamily: F_UI, fontSize: rel ? '11px' : '11px', fontStyle: '700',
+      color: rel ? '#e0a040' : fire ? '#ffd36a' : (+mag === 0 && slot !== 'grenade') ? '#e0523a' : '#cbbba1',
       stroke: '#070605', strokeThickness: 3 }).setOrigin(0.5, 1));
     // the cross
     const g = add(this.add.graphics()), X = cx + 36, Y = cy, d = 13, s = 10;
