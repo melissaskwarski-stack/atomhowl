@@ -4390,7 +4390,7 @@ function makeGlyph(scene, x, y, label, depth) {
 // ring of Y's yellow, makeGlyph) and loses the letter; a key inside a line
 // becomes the circled letter. Switching between keyboard and pad switches
 // what is already on screen (WalkScene._syncPadPrompts).
-const PROMPT_LEAD = /^E\s+(?:[—·]\s+)?/;
+const PROMPT_LEAD = /^E\s+[—·]\s+/;
 const PROMPT_ANY  = /(^|\s)E(?=\s|$|[.,!?])/;
 const PROMPT_MID  = /(^|\s)E(?=\s|$|[.,!?])/g;
 if (typeof Phaser !== 'undefined') {
@@ -5606,6 +5606,8 @@ class ModeSelectScene extends Phaser.Scene {
     // falls back into the dark, and then the whole screen eases out.
     const k = this._cards[this._cur];
     this.tweens.killTweensOf([k.c, k.glow]);
+    // (a quick pick may cut its entrance short: settle it where it belongs)
+    k.c.setAlpha(1).setY(k.y);
     this.tweens.add({ targets: k.c, scale: 1.06, duration: 520, ease: 'Sine.easeOut' });
     if (k.glow) this.tweens.add({ targets: k.glow, alpha: 0.6, duration: 520, ease: 'Sine.easeOut' });
     this._cards.forEach((o, i) => {
@@ -5787,10 +5789,14 @@ class CoopSelectScene extends Phaser.Scene {
     this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('ModeSelectScene'));
   }
 
-  // a warm lift of light over him, not a white flash
+  // a warm lift of light over him, not a white flash: a glowing copy laid
+  // on top that fades, so his own tint (grey while not joined) is untouched
   _flash(img) {
-    img.setTint(0xffe2b8);
-    this.time.delayedCall(220, () => img.active && img.clearTint());
+    if (!img || !img.active) return;
+    const g = this.add.image(img.x, img.y, img.texture.key, img.frame.name)
+      .setOrigin(img.originX, img.originY).setScale(img.scaleX, img.scaleY).setFlipX(img.flipX)
+      .setDepth(img.depth + 0.1).setBlendMode(Phaser.BlendModes.ADD).setTint(0xffd8a0).setAlpha(0.5);
+    this.tweens.add({ targets: g, alpha: 0, duration: 420, ease: 'Sine.easeOut', onComplete: () => g.destroy() });
   }
 
   // The pick: a warm glow and a punch, he draws into his stance, light off the
@@ -7845,6 +7851,7 @@ const RELOAD_MS       = 1500;
 const RELOAD_JAM_MS   = 2500;            // from the start of a reload that jammed
 const RELOAD_GOOD     = [0.38, 0.68];    // of the sweep
 const RELOAD_PERFECT  = [0.47, 0.56];
+const RELOAD_ART_IN   = [0.068, 0.932];  // the channel of reload bar.png, inside its end caps
 // What a kill leaves: the clip runs the body down into a pool of acid, and the
 // pool stays this long before it dries up.
 const ACID_HOLD_MS    = 7000;
@@ -8619,7 +8626,7 @@ const WalkCombat = {
     box.fire = how === 'perfect';
     box.n = 0;
     reloadSound('in');                                           // in, and the slide
-    if (how === 'perfect') { Sfx.blip(1760, 0.22, 'triangle', 0.05, 2640); this._reloadWord(p, 'PERFECT  ·  FIRE ROUNDS', '#f2b13c'); }
+    if (how === 'perfect') { Sfx.blip(1760, 0.22, 'triangle', 0.05, 2640); this._reloadPop(p); this._reloadWord(p, 'PERFECT  ·  FIRE ROUNDS', '#f2b13c'); }
     else if (how === 'good') this._reloadWord(p, 'QUICK', '#f0e6d4');
     this._paintInventory(true);
   },
@@ -8641,6 +8648,7 @@ const WalkCombat = {
     const G = this._gunOf(p);
     if (r && (p._down || !G || G.id !== r.gid)) { p._reload = null; this._paintInventory(true); }
     else if (r && now >= r.end) this._endReload(p, 'slow');
+    if (this.textures.exists('scene_reloadbar')) { this._reloadArt(p, now); return; }
     const g = p._rbar;
     if (!p._reload) { if (g && g.visible) g.setVisible(false); return; }
     if (!g || !g.scene) { p._rbar = this.add.graphics().setDepth(63); this._sortNew(); }
@@ -8662,6 +8670,68 @@ const WalkCombat = {
       bar.fillStyle(0xe0523a, 0.6).fillRect(x0, y0, w * jt, h);
     }
     bar.fillStyle(0xffffff, 1).fillRect(x0 + w * t - 1.5 * k, y0 - 3 * k, 3 * k, h + 6 * k);
+  },
+
+  // Where the bar sits over him: its size is fixed on screen (it has to be
+  // read in a fraction of a second, whatever the stage's zoom), and the
+  // channel inside its end caps is what the sweep runs along.
+  _reloadGeom(p) {
+    const k = 1 / (this.cameras.main.zoom || 1), W = 150 * k, H = W * 37 / 400;
+    const cx = p.x, cy = p.body.top - 26 * k;
+    return { k, W, H, cx, cy, x0: cx - W / 2 + RELOAD_ART_IN[0] * W, w: (RELOAD_ART_IN[1] - RELOAD_ART_IN[0]) * W };
+  },
+
+  // The bar from the art: reload bar.png held a little dim, the light window
+  // a paler band on it, perfect reload.png on the gold window, and moving
+  // reload line.png sweeping across it, lighter than the bar so it reads as
+  // the thing moving. Jammed, the bar goes red and fills out its long wait.
+  _reloadArt(p, now) {
+    let A = p._rart;
+    if (!p._reload) { if (A && A.bar.visible) A.all.forEach(o => o.setVisible(false)); return; }
+    if (!A || !A.bar.scene) {
+      const ADD = Phaser.BlendModes.ADD;
+      A = p._rart = {
+        bar:  this.add.image(0, 0, 'scene_reloadbar').setDepth(63),
+        good: this.add.graphics().setDepth(63.1).setBlendMode(ADD),
+        jam:  this.add.graphics().setDepth(63.15),
+        perf: this.add.image(0, 0, 'scene_reloadperfect').setDepth(63.2),
+        glow: this.add.image(0, 0, 'scene_reloadline').setDepth(63.3).setBlendMode(ADD).setTint(0xfff0c8),
+        line: this.add.image(0, 0, 'scene_reloadline').setDepth(63.4).setTint(0xfffdf2)
+      };
+      A.all = [A.bar, A.good, A.jam, A.perf, A.glow, A.line];
+      this._sortNew();
+    }
+    const R = p._reload, g = this._reloadGeom(p), dur = R.dur || RELOAD_MS;
+    const t = Phaser.Math.Clamp(R.jam ? R.hitAt : (now - R.at) / dur, 0, 1);
+    A.all.forEach(o => o.setVisible(true));
+    A.bar.setDisplaySize(g.W, g.H).setPosition(g.cx, g.cy).setTint(R.jam ? 0xd04a34 : 0xa88a5c);
+    const live = !R.jam && !R.tried, ch = g.H * 0.42;
+    A.good.clear();
+    if (live) A.good.fillStyle(0xfff2c8, 0.38).fillRect(g.x0 + g.w * RELOAD_GOOD[0], g.cy - ch / 2, g.w * (RELOAD_GOOD[1] - RELOAD_GOOD[0]), ch);
+    A.perf.setVisible(live);
+    if (live) {
+      const pw = g.w * (RELOAD_PERFECT[1] - RELOAD_PERFECT[0]);
+      A.perf.setDisplaySize(pw * 1.35, g.H * 1.25).setPosition(g.x0 + g.w * (RELOAD_PERFECT[0] + RELOAD_PERFECT[1]) / 2, g.cy);
+    }
+    A.jam.clear();
+    if (R.jam) {
+      const jt = Phaser.Math.Clamp((now - R.at) / (dur * RELOAD_JAM_MS / RELOAD_MS), 0, 1);
+      A.jam.fillStyle(0xff5a3a, 0.55).fillRect(g.x0, g.cy - ch / 2, g.w * jt, ch);
+    }
+    const lx = g.x0 + g.w * t, lh = g.H * 2.3, lw = lh * 20 / 104;
+    A.line.setDisplaySize(lw, lh).setPosition(lx, g.cy).setTint(R.jam ? 0xffb0a0 : 0xfffdf2);
+    A.glow.setDisplaySize(lw * 2.4, lh * 1.15).setPosition(lx, g.cy).setAlpha(R.jam ? 0.2 : 0.55 + 0.15 * Math.sin(now / 60));
+  },
+
+  // The gold window flies off the bar when it is hit.
+  _reloadPop(p) {
+    if (!this.textures.exists('scene_reloadperfect')) return;
+    const g = this._reloadGeom(p), pw = g.w * (RELOAD_PERFECT[1] - RELOAD_PERFECT[0]) * 1.35;
+    const im = this.add.image(g.x0 + g.w * (RELOAD_PERFECT[0] + RELOAD_PERFECT[1]) / 2, g.cy, 'scene_reloadperfect')
+      .setDepth(64).setDisplaySize(pw, g.H * 1.25).setBlendMode(Phaser.BlendModes.ADD);
+    const sx = im.scaleX, sy = im.scaleY;
+    this.tweens.add({ targets: im, scaleX: sx * 2.6, scaleY: sy * 1.8, alpha: 0, duration: 420, ease: 'Quad.easeOut', onComplete: () => im.destroy() });
+    this._sortNew();
   },
 
   fireBullet(now, who) {
@@ -10075,7 +10145,9 @@ const WalkGrenades = {
     const G = GUNS[slot];
     if (G && !rel) {
       const left = +mag, max = G.mag, n = +(nShot || 0), y = cy + 8;
-      const isFire = j => fire && (n + j) % 4 === 3;
+      // the round that goes next is the rightmost live one (they empty from
+      // the right): count the fire rounds from there
+      const isFire = j => fire && (n + (left - 1 - j)) % 4 === 3;
       // lit: a gold glow behind the row while the magazine is a perfect one
       if (fire && left > 0) {
         const glow = add(this.add.graphics()).setBlendMode(Phaser.BlendModes.ADD);
@@ -10472,7 +10544,7 @@ const Coop = {
     p.setTint(0xffa090);             // a red wash, light enough that he still reads on a dark floor
     if (p._lie) p._lie.setTint(0xffa090);
     const other = p === this.player ? 'WOLFFEL' : 'ETERWOLF';
-    const lbl = this.add.text(p.x, p.y - 0.75 * this.charH, 'HOLD  ' + (p === this.player ? 'Y' : 'E / Y') + '  —  PICK HIM UP', {
+    const lbl = this.add.text(p.x, p.y - 0.75 * this.charH, 'HOLD  ' + (p === this.player ? 'Y' : 'E') + '  —  PICK HIM UP', {
       fontFamily: 'Courier New, monospace', fontSize: '14px', color: '#f2b13c',
       stroke: '#0d0a08', strokeThickness: 4
     }).setOrigin(0.5, 1).setDepth(31);
@@ -10647,7 +10719,7 @@ const Coop = {
       const secs = Math.ceil(Math.max(0, down._bleedAt - now) / 1000);
       if (down._secs !== secs) {
         down._secs = secs;
-        lbl.setText('HOLD  ' + (down === this.player ? 'Y' : 'E / Y') + '  —  PICK HIM UP   ' + secs + 's');
+        lbl.setText('HOLD  ' + (down === this.player ? 'Y' : 'E') + '  —  PICK HIM UP   ' + secs + 's');
         lbl.setColor(secs <= 5 ? '#ff5a3a' : '#f2b13c');
       }
       bar.clear();
@@ -10816,7 +10888,7 @@ const Inspect = {
         fontFamily: F_UI, fontSize: '11px', fontStyle: '700', color: '#f5c169'
       }).setOrigin(0.5, 1).setScrollFactor(0).setDepth(97));
     }
-    grp.push(this.add.text(1250, 24, 'E  /  SPACE  —  CLOSE', {
+    grp.push(this.add.text(1250, 24, InputMode.p1 === 'pad' ? 'E  —  CLOSE' : 'E  /  SPACE  —  CLOSE', {
       fontFamily: F_UI, fontSize: '11px', fontStyle: '700', color: '#a08d72'
     }).setOrigin(1, 0).setScrollFactor(0).setDepth(97));
     grp.forEach(g => g.setAlpha(0));
@@ -13596,6 +13668,9 @@ const EMB_LIFT    = { x0: 0.300, x1: 0.346 };
 const EMB_SLAB    = { x0: 0.712, x1: 0.790, y: 0.443 };
 // The stone that rides up to it on its own, like the tienda's (no switch).
 const EMB_RISER   = { x0: 0.668, x1: 0.709 };
+// A broken slab hung across the middle of the walkway, a double jump up
+// (2.4m): somewhere to get above the horde and shoot from.
+const EMB_PERCH   = { x0: 0.418, x1: 0.492, y: 0.531 };
 // The girder wall fills the whole opening, walkway to the top of the window:
 // two lengths of it, one on the other, and as solid as it looks.
 const EMB_GIRDER  = { x: 0.800, hM: 4.6, wM: 1.5, top: 0.20 };
@@ -13642,8 +13717,13 @@ class EmbankmentScene extends WalkScene {
     this._chestTaken = !!seen['emb-lockbox'];
     this._keyUsed = this._chestTaken;
     const fight = !wallDown && !this._carrierDead;
-    // she came down once already this game: after a death she is simply up
-    this._madreUp = !!seen['emb-madre'];
+    // she came down once already this game (firstCinematic keeps its flag as
+    // 'cine:emb-madre'): after a death she is simply up
+    this._madreUp = !!(seen['cine:emb-madre'] || seen['emb-madre']);
+    // A death restarts the stage on the same scene object: nothing of the
+    // last attempt may carry over into this one, or the fight never comes back.
+    this._waking = false; this._preFight = false; this._burning = false;
+    this._carrier = null; this._carrierKey = null; this._bossBar = null; this._callTimer = null;
     this.buildWalk({
       bgKey: 'scene_aftertienda',
       worldW: 'auto', worldH: Math.round(720 * EMB_ZOOM), bgZoom: EMB_ZOOM,
@@ -13652,7 +13732,7 @@ class EmbankmentScene extends WalkScene {
       title: 'THE EMBANKMENT',
       castSwitch: true, canReset: true,
       doubleJump: true, dash: true,
-      ledges: [EMB_ROOF, EMB_SLAB],
+      ledges: [EMB_ROOF, EMB_SLAB, EMB_PERCH],
       beats: wallDown ? [] : [
         ...(fight ? [] : [{ at: 0.02, say: [['PLAYER', 'The canal road. It should take us out of town.']] }]),
         { at: 0.62, say: [['PLAYER', "Blocked. That girder isn't going anywhere."]] }
@@ -13674,6 +13754,7 @@ class EmbankmentScene extends WalkScene {
 
     this._buildGirder();
     this._buildLift();
+    this._buildPerch();
     this._buildSoldier();
     StoreScene.prototype._buildChest.call(this, EMB_CHEST_X, EMB_SLAB.y);
     if (this._chestTaken && this.chestAnim) { this.chest.setVisible(false); this.chestAnim.setVisible(true).setFrame('co11'); }
@@ -13694,9 +13775,19 @@ class EmbankmentScene extends WalkScene {
     if (fight) {
       // she wakes at the chest; until then the walkway's own horde, set off
       // by taking the rifle or by walking on in
-      if (this._madreUp) this.time.delayedCall(500, () => this._startFight());
+      // after a death in her fight: straight back down on the walkway, in it
+      if (this._madreUp) this.time.delayedCall(450, () => { this._toFloor(); this._startFight(); });
       else this._hordeArmed = true;
     }
+  }
+
+  // ledge prop.png, its top laid along the perch's line
+  _buildPerch() {
+    if (!this.textures.exists('scene_ledgeprop')) return;
+    const x0 = this.fx(EMB_PERCH.x0), x1 = this.fx(EMB_PERCH.x1), y = this.fy(EMB_PERCH.y);
+    const im = this.add.image((x0 + x1) / 2, y, 'scene_ledgeprop').setDepth(3).setOrigin(0.5, 118 / 358);
+    im.setScale((x1 - x0) * 1.1 / im.width);
+    this.perch = im;
   }
 
   // ---- the fallen soldier -------------------------------------------------
@@ -13811,9 +13902,10 @@ class EmbankmentScene extends WalkScene {
     playTrack('fightMusic');
     this.startCombat();
     this.onEnemyKilled = x => this._embKill(x);
-    const from = ['door', 'canal', 'road', 'door', 'canal', 'roof'];
-    for (let i = 0; i < EMB_WAVE; i++) this.time.delayedCall(i * 220, () => this._embSpawn(from[i % from.length], true));
-    this._say([['PLAYER', 'Here they come!']]);
+    // all of them from the left, off the road behind, running: a pack, close
+    // together, not one at a time and not out of thin air
+    for (let i = 0; i < EMB_WAVE; i++) this.time.delayedCall(i * 340, () => this._embSpawn('road', true));
+    this.time.delayedCall(700, () => this._say([['PLAYER', 'Behind us! Here they come!']]));
   }
 
   // ---- the girder ------------------------------------------------------
@@ -14064,45 +14156,69 @@ class EmbankmentScene extends WalkScene {
     const bars = [0, 1].map(i => this.add.rectangle(640, i ? 720 : 0, 1280, 110, 0x000000, 1)
       .setOrigin(0.5, i ? 0 : 1).setScrollFactor(0).setDepth(92));
     this._sortNew();
-    this.tweens.add({ targets: bars[0], y: 55, duration: 400, ease: 'Sine.easeOut' });
-    this.tweens.add({ targets: bars[1], y: 665, duration: 400, ease: 'Sine.easeOut' });
-    cam.pan(this.fx(0.72), this.fy(0.36), 1000, 'Sine.easeInOut', true);
+    this.tweens.add({ targets: bars[0], y: 55, duration: 600, ease: 'Sine.easeInOut' });
+    this.tweens.add({ targets: bars[1], y: 665, duration: 600, ease: 'Sine.easeInOut' });
+    cam.pan(this.fx(0.72), this.fy(0.36), 1400, 'Sine.easeInOut', true);
     const at = (ms, fn) => this.time.delayedCall(ms, () => { if (!this._dead && this.scene.isActive()) fn(); });
     const tx = this.fx(0.74), ty = this.groundY - EMB_CARRIER.alt * H;
     // down out of the dark over the window, fast, into the picture
-    at(400, () => { this._carrier = this.spawnFlyer(Object.assign(this._carrierOpts(this.fx(0.74), this.fy(0.02), tx, ty), { enterV: 3.2 })); this._keyOnCarrier(); });
-    at(2100, () => {
+    at(300, () => { this._carrier = this.spawnFlyer(Object.assign(this._carrierOpts(this.fx(0.74), this.fy(0.02), tx, ty), { enterV: 3.2 })); this._keyOnCarrier(); });
+    at(1900, () => {
       const f = this._carrier; if (!f || !f.active) return;
-      Sfx.ensure(); Sfx.roar(); Sfx.roar(); cam.shake(700, 0.008);
+      Sfx.ensure(); Sfx.roar(); Sfx.roar(); cam.shake(700, 0.006);
       this._screamLines(f.x, f.y + 0.1 * H * f._k, 1300, f._k);
     });
-    // the wingbeat
-    at(3500, () => {
-      Sfx.ensure(); Sfx.swoop(); Sfx.burst(0.4, 0.5, 300, 0.8); cam.shake(400, 0.012);
-      cam.flash(160, 255, 240, 220);
-      cam.fadeOut(260, 0, 0, 0);
+    // the wingbeat: no cut and no flash. It blows them off the slab in an
+    // arc, the picture follows them down, and they land on the walkway.
+    at(3300, () => {
+      Sfx.ensure(); Sfx.swoop(); Sfx.burst(0.45, 0.4, 260, 0.7); cam.shake(380, 0.005);
+      this._gust(this.fx(0.74), this.fy(0.44));
+      cam.pan(this.fx(0.62), this.groundY - 1.6 * H, 1500, 'Sine.easeInOut', true);
+      [this.player, this.player2].forEach((q, i) => {
+        if (!q || !q.active || !q.body) return;
+        const tx = this.fx(0.6 - i * 0.03), ty = q.y + (this.groundY - q.body.bottom), up = 0.6 * this.pxPerM;
+        q.body.enable = false;
+        q.setVelocity(0, 0);
+        q._facing = 1;
+        if (q._hero && heroHas(q._hero, 'jumpfall')) playOnce(q, 'jumpfall', 1);
+        this.tweens.add({ targets: q, x: tx, duration: 900, ease: 'Sine.easeOut' });
+        this.tweens.add({ targets: q, y: q.y - up, duration: 280, ease: 'Quad.easeOut',
+          onComplete: () => this.tweens.add({ targets: q, y: ty, duration: 620, ease: 'Quad.easeIn',
+            onComplete: () => {
+              q.body.enable = true;
+              q.y += this.groundY - q.body.bottom;
+              q.body.updateFromGameObject && q.body.updateFromGameObject();
+              if (q._hero) playOnce(q, heroHas(q._hero, 'getup') ? 'getup' : 'land', 1);
+              Sfx.land(); cam.shake(160, 0.004);
+              this._dust && this._dust(q.x, this.groundY);
+            } }) });
+      });
     });
-    // cut: on the walkway, getting up
-    at(3800, () => {
-      this._toFloor();
+    at(5000, () => this._say([['PLAYER', "She's got the key."]]));
+    at(5900, () => {
       const p = this.player;
-      cam.centerOn(p.x + 0.2 * this.bgGeom.w * 0.1, p.y - 0.4 * H);
-      cam.fadeIn(300, 0, 0, 0);
-      [this.player, this.player2].forEach(q => { if (q && q.active && q._hero) playOnce(q, heroHas(q._hero, 'getup') ? 'getup' : 'land', 1); });
-      Sfx.land();
-    });
-    at(4600, () => this._say([['PLAYER', "She's got the key."]]));
-    at(5400, () => {
-      const p = this.player;
-      cam.startFollow(p, false, 0.1, 0.1);
+      cam.startFollow(p, false, 0.06, 0.06);
+      this.time.delayedCall(900, () => cam.setLerp && cam.setLerp(0.1, 0.1));
       this._look = 0;
-      this.tweens.add({ targets: bars[0], y: 0, duration: 380, ease: 'Sine.easeIn' });
-      this.tweens.add({ targets: bars[1], y: 720, duration: 380, ease: 'Sine.easeIn', onComplete: () => bars.forEach(b => b.destroy()) });
+      this.tweens.add({ targets: bars[0], y: 0, duration: 600, ease: 'Sine.easeInOut' });
+      this.tweens.add({ targets: bars[1], y: 720, duration: 600, ease: 'Sine.easeInOut', onComplete: () => bars.forEach(b => b.destroy()) });
       this._holdInput = false;
       this._calmIdle = false;
       this._inConversation = false;
       this._startFight();
     });
+  }
+
+  // the air off her wings: dust and grit thrown off the slab
+  _gust(x, y) {
+    const m = this.pxPerM;
+    for (let i = 0; i < 26; i++) {
+      const d = this.add.circle(x + (Math.random() - 0.5) * 2 * m, y - Math.random() * 0.6 * m, (2 + Math.random() * 4) * m / 55,
+                                i % 3 ? 0x8a7e72 : 0xc8bca8, 0.7).setDepth(12);
+      this.tweens.add({ targets: d, x: d.x - (1.5 + Math.random() * 3) * m, y: d.y + (Math.random() - 0.2) * m, alpha: 0,
+                        duration: 600 + Math.random() * 500, ease: 'Quad.easeOut', onComplete: () => d.destroy() });
+    }
+    this._sortNew();
   }
 
   _startFight() {
@@ -14245,7 +14361,8 @@ class EmbankmentScene extends WalkScene {
       canal: () => this.fx(EMB_CANAL[0] + Math.random() * (EMB_CANAL[1] - EMB_CANAL[0])),
       door:  () => this.fx(EMB_DOOR_X),
       roof:  () => this.fx(EMB_ROOFJ[0] + Math.random() * (EMB_ROOFJ[1] - EMB_ROOFJ[0])),
-      road:  () => this.fx(0.012)
+      // off the left edge of the world: they run in, they do not appear
+      road:  () => -0.5 * this.alienH()
     };
     if (!where) {
       const far = Object.keys(spots).filter(k => {
@@ -14270,6 +14387,13 @@ class EmbankmentScene extends WalkScene {
       z = this.spawnAlien({ x, speed: 0.55, rage: 0.9, calmLunge: true, lungeDelay: 1300,
                             vx: dir * 0.25 * H, vy: -0.75 * H, jumpClip: true });
       this._splash(x);
+    } else if (where === 'road') {
+      // running in off the left: past the world's edge until it is in it
+      z = this.spawnAlien({ x, speed: 0.75 + Math.random() * 0.15, rage: 0.95, calmLunge: true, lungeDelay: 1500 });
+      z.setCollideWorldBounds(false);
+      z.x = x;
+      this.time.delayedCall(2500, () => { if (z.active) z.setCollideWorldBounds(true); });
+      return z;
     } else {
       z = this.spawnAlien({ x, speed: 0.5 + Math.random() * 0.12, rage: 0.9, calmLunge: true, lungeDelay: 1500 });
       if (where === 'door') { z.setTint(0x202020); this.time.delayedCall(700, () => z.active && z._alive && z.clearTint()); }

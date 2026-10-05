@@ -102,6 +102,9 @@ const SCENE_SRC = {
   swordone:  ['public/assets/sword_single.png'],
   swordpair: ['public/assets/sword_pair.png'],
   pistolbullet: ['public/assets/pistol_bullet.png'],
+  reloadbar:     ['public/assets/reload_bar.png'],
+  reloadperfect: ['public/assets/reload_perfect.png'],
+  reloadline:    ['public/assets/reload_line.png'],
   // the dead soldier on the embankment, with his rifle and after it is taken
   // (tools/make_soldier.js)
   soldier:        ['public/assets/soldier.png'],

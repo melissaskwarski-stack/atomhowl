@@ -11,7 +11,12 @@ const JOBS = [
   { src: 'public/assets/signal_sword_src.png', out: 'public/assets/sword_single.png', w: 560 },
   { src: 'public/assets/both_swords_src.png',  out: 'public/assets/sword_pair.png',   w: 440 },
   // pistol bullet.png: the round in flight, and the magazine in the item box
-  { src: 'public/assets/pistol_bullet_src.png', out: 'public/assets/pistol_bullet.png', w: 128 }
+  { src: 'public/assets/pistol_bullet_src.png', out: 'public/assets/pistol_bullet.png', w: 128 },
+  // the reload bar over his head: reload bar.png (the bar), perfect reload.png
+  // (the gold window on it) and moving reload line.png (the sweeping mark)
+  { src: 'public/assets/reload_bar_src.png',     out: 'public/assets/reload_bar.png',     w: 400 },
+  { src: 'public/assets/reload_perfect_src.png', out: 'public/assets/reload_perfect.png', w: 180 },
+  { src: 'public/assets/reload_line_src.png',    out: 'public/assets/reload_line.png',    w: 20 }
 ];
 
 function trim(p) {
